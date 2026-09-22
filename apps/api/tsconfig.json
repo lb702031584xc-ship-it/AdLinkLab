@@ -1,0 +1,20 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "composite": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["src/**/*.test.ts"],
+  "references": [
+    { "path": "../../packages/shared" },
+    { "path": "../../packages/domain" },
+    { "path": "../../packages/database" },
+    { "path": "../../packages/google-ads" },
+    { "path": "../../packages/tracking" },
+    { "path": "../../packages/offers" },
+    { "path": "../../packages/conversions" },
+    { "path": "../../packages/traffic" }
+  ]
+}

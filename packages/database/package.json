@@ -1,0 +1,56 @@
+{
+  "name": "@adlinklab/database",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "prisma generate && tsc -p tsconfig.json",
+    "generate": "prisma generate",
+    "migrate": "prisma migrate dev",
+    "migrate:deploy": "prisma migrate deploy",
+    "seed": "tsx prisma/seed.ts",
+    "push": "prisma db push",
+    "lint": "eslint src --max-warnings 0",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:pg": "vitest run src/phase6.1.pg.test.ts src/phase7.1.pg.test.ts src/url-version-active.pg.test.ts",
+    "phase61:start": "tsx scripts/phase61-pg-harness.mts start",
+    "phase61:stop": "tsx scripts/phase61-pg-harness.mts stop",
+    "phase61:status": "tsx scripts/phase61-pg-harness.mts status",
+    "phase61:migrate": "tsx scripts/phase61-migrate-deploy.mts",
+    "phase61:reset": "tsx scripts/phase61-reset-db.mts",
+    "phase61:verify-lifecycle": "tsx scripts/phase61-failure-cleanup.mts",
+    "phase71:catalog": "tsx scripts/phase71-catalog.mts",
+    "backup:create": "tsx scripts/backup.mts create",
+    "backup:verify": "tsx scripts/backup.mts verify",
+    "backup:restore-test": "tsx scripts/backup.mts restore-test",
+    "backup:cleanup": "tsx scripts/backup.mts cleanup",
+    "backup:depth-gate": "tsx scripts/backup-depth-gate.mts",
+    "postinstall": "prisma generate || echo Prisma generate skipped (engine download unavailable)"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@adlinklab/domain": "workspace:*",
+    "@adlinklab/shared": "workspace:*",
+    "@prisma/client": "^6.1.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1",
+    "embedded-postgres": "18.4.0-beta.17",
+    "pg": "^8.23.0",
+    "prisma": "^6.1.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

@@ -1,0 +1,212 @@
+# Phase 9.1 — Production deployment foundation
+# Secrets come from `.env` (see `.env.example`). Do not commit real secrets.
+name: adlinklab
+
+services:
+  traefik:
+    image: traefik:v3.2
+    container_name: adlinklab-traefik
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
+      # Dashboard + insecure API: off by default. Lab only: TRAEFIK_DASHBOARD=true
+      - --api.dashboard=${TRAEFIK_DASHBOARD:-false}
+      - --api.insecure=${TRAEFIK_DASHBOARD:-false}
+    ports:
+      - "80:80"
+      # Dashboard port bound to loopback only (lab). Useless unless TRAEFIK_DASHBOARD=true.
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./infra/traefik/dynamic.yml:/etc/traefik/dynamic/dynamic.yml:ro
+    networks:
+      - adlinklab
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: adlinklab-postgres
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-adlinklab}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-adlinklab}
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - adlinklab
+
+  redis:
+    image: redis:7-alpine
+    container_name: adlinklab-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - adlinklab
+
+  # One-shot: prisma migrate deploy (never db push). API/Worker wait for success.
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: adlinklab-migrate
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
+    working_dir: /app
+    command:
+      ["pnpm", "--filter", "@adlinklab/database", "migrate:deploy"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - adlinklab
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: adlinklab-api
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      API_PORT: 3001
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
+      REDIS_URL: ${REDIS_URL:?Set REDIS_URL in .env}
+      PERSISTENCE: prisma
+      AUTH_MODE: api_key
+      ADLINKLAB_API_KEYS: ${ADLINKLAB_API_KEYS:?Set ADLINKLAB_API_KEYS in .env}
+      INTEGRATION_TOKEN_PEPPER: ${INTEGRATION_TOKEN_PEPPER:?Set INTEGRATION_TOKEN_PEPPER in .env}
+      CORS_ORIGINS: ${CORS_ORIGINS:?Set CORS_ORIGINS allowlist in .env}
+      QUEUE_MODE: redis
+      GOOGLE_ADS_PROVIDER: ${GOOGLE_ADS_PROVIDER:-mock}
+      TRAFFIC_PROVIDER: ${TRAFFIC_PROVIDER:-mock}
+      SCRIPT_API_BASE_URL: ${SCRIPT_API_BASE_URL:-}
+      RATE_LIMIT_API_MAX: ${RATE_LIMIT_API_MAX:-120}
+      RATE_LIMIT_SCRIPT_MAX: ${RATE_LIMIT_SCRIPT_MAX:-60}
+      RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-1 minute}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:3001/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.api.rule=Host(`api.localhost`) || PathPrefix(`/api`) || PathPrefix(`/health`)
+      - traefik.http.routers.api.entrypoints=web
+      - traefik.http.services.api.loadbalancer.server.port=3001
+    networks:
+      - adlinklab
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: adlinklab-worker
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
+      REDIS_URL: ${REDIS_URL:?Set REDIS_URL in .env}
+      PERSISTENCE: prisma
+      AUTH_MODE: api_key
+      ADLINKLAB_API_KEYS: ${ADLINKLAB_API_KEYS:?Set ADLINKLAB_API_KEYS in .env}
+      INTEGRATION_TOKEN_PEPPER: ${INTEGRATION_TOKEN_PEPPER:?Set INTEGRATION_TOKEN_PEPPER in .env}
+      QUEUE_MODE: redis
+      GOOGLE_ADS_PROVIDER: ${GOOGLE_ADS_PROVIDER:-mock}
+      TRAFFIC_PROVIDER: ${TRAFFIC_PROVIDER:-mock}
+    working_dir: /app/apps/api
+    command: ["node", "dist/worker.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"const fs=require('fs'); process.exit(fs.existsSync('dist/worker.js')?0:1)\"",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - adlinklab
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://api:3001}
+    container_name: adlinklab-web
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      # Server Components / Server Actions only — tokens must never use NEXT_PUBLIC_*
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://api:3001}
+      ADLINKLAB_INTEGRATION_TOKEN: ${ADLINKLAB_INTEGRATION_TOKEN:-}
+      ADLINKLAB_API_KEY: ${ADLINKLAB_API_KEY:-}
+    depends_on:
+      api:
+        condition: service_healthy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.web.rule=Host(`localhost`) || Host(`web.localhost`)
+      - traefik.http.routers.web.entrypoints=web
+      - traefik.http.services.web.loadbalancer.server.port=3000
+    networks:
+      - adlinklab
+
+networks:
+  adlinklab:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:

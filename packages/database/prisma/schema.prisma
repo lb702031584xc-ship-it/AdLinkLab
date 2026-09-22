@@ -1,0 +1,758 @@
+// AdLinkLab Phase 1.1 — Database Foundation
+// Money strategy: Decimal(19, 4) — never float
+// Time strategy: all DateTime stored/interpreted as UTC (timestamptz)
+// Deletion strategy: soft-delete via status + archivedAt/deletedAt; no cascade on attribution
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum AccountStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+  DISABLED
+}
+
+enum CampaignStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+  REMOVED
+}
+
+enum AdGroupStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+  REMOVED
+}
+
+enum AdStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+  REMOVED
+}
+
+enum CriterionStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+  REMOVED
+}
+
+enum OfferStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+  DRAFT
+}
+
+enum LandingPageStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+  DRAFT
+}
+
+enum TrackingLinkStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+  DRAFT
+}
+
+enum ConversionStatus {
+  PENDING
+  ATTRIBUTED
+  UPLOADED
+  FAILED
+  ARCHIVED
+}
+
+enum GoogleUploadStatus {
+  NOT_UPLOADED
+  QUEUED
+  UPLOADED
+  FAILED
+  SKIPPED
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  REFUNDED
+  ARCHIVED
+}
+
+enum UrlVersionStatus {
+  DRAFT
+  ACTIVE
+  SUPERSEDED
+  ROLLED_BACK
+}
+
+enum UrlChangeRequestStatus {
+  DRAFT
+  VALIDATED
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum SyncJobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum UrlEntityType {
+  CUSTOMER
+  CAMPAIGN
+  AD_GROUP
+  AD
+  AD_GROUP_CRITERION
+}
+
+enum UserStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+  DISABLED
+}
+
+enum ScriptIntegrationStatus {
+  ACTIVE
+  DISABLED
+  REVOKED
+}
+
+enum ScriptSyncState {
+  SYNCED
+  OUT_OF_SYNC
+  NEVER_APPLIED
+}
+
+enum ScriptConnectionHealth {
+  CONNECTED
+  STALE
+  DISABLED
+}
+
+enum ScriptExecutionResult {
+  SUCCESS
+  FAILED
+  PARTIAL
+  NO_CHANGE
+}
+
+// ---------------------------------------------------------------------------
+// Tenant boundary
+// ---------------------------------------------------------------------------
+
+model Tenant {
+  id        String    @id @db.Uuid
+  name      String
+  slug      String    @unique
+  status    UserStatus @default(ACTIVE)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  archivedAt DateTime? @map("archived_at") @db.Timestamptz(3)
+  deletedAt  DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  users          User[]
+  googleAccounts GoogleAccount[]
+  offers         Offer[]
+  orders         Order[]
+  scriptIntegrations GoogleAdsScriptIntegration[]
+
+  @@map("tenants")
+}
+
+model User {
+  id        String     @id @db.Uuid
+  tenantId  String     @map("tenant_id") @db.Uuid
+  email     String
+  name      String
+  status    UserStatus @default(ACTIVE)
+  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+  archivedAt DateTime? @map("archived_at") @db.Timestamptz(3)
+  deletedAt  DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  tenant         Tenant          @relation(fields: [tenantId], references: [id])
+  googleAccounts GoogleAccount[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@map("users")
+}
+
+/// Google Ads customer account. OAuth secrets are NEVER stored here —
+/// only an opaque credential reference (vault/KMS key id).
+model GoogleAccount {
+  id                 String        @id @db.Uuid
+  tenantId           String        @map("tenant_id") @db.Uuid
+  userId             String        @map("user_id") @db.Uuid
+  customerId         String        @map("customer_id")
+  managerCustomerId  String?       @map("manager_customer_id")
+  name               String
+  currency           String
+  timezone           String
+  /// Opaque reference to encrypted OAuth credential storage (never plaintext secret)
+  oauthCredentialRef String?       @map("oauth_credential_ref")
+  status             AccountStatus @default(ACTIVE)
+  createdAt          DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+  archivedAt         DateTime?     @map("archived_at") @db.Timestamptz(3)
+  deletedAt          DateTime?     @map("deleted_at") @db.Timestamptz(3)
+
+  tenant    Tenant     @relation(fields: [tenantId], references: [id])
+  user      User       @relation(fields: [userId], references: [id])
+  campaigns Campaign[]
+  scriptIntegrations GoogleAdsScriptIntegration[]
+
+  @@unique([customerId])
+  @@index([tenantId])
+  @@index([userId])
+  @@map("google_accounts")
+}
+
+model Campaign {
+  id               String         @id @db.Uuid
+  tenantId         String         @map("tenant_id") @db.Uuid
+  googleAccountId  String         @map("google_account_id") @db.Uuid
+  googleCampaignId String         @map("google_campaign_id")
+  name             String
+  status           CampaignStatus @default(ACTIVE)
+  createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+  archivedAt       DateTime?      @map("archived_at") @db.Timestamptz(3)
+  deletedAt        DateTime?      @map("deleted_at") @db.Timestamptz(3)
+
+  /// Restrict — never cascade-delete attribution history
+  googleAccount GoogleAccount  @relation(fields: [googleAccountId], references: [id], onDelete: Restrict)
+  adGroups      AdGroup[]
+  trackingLinks TrackingLink[]
+
+  @@unique([googleAccountId, googleCampaignId])
+  @@index([googleAccountId])
+  @@index([tenantId])
+  @@index([status])
+  @@map("campaigns")
+}
+
+model AdGroup {
+  id              String        @id @db.Uuid
+  tenantId        String        @map("tenant_id") @db.Uuid
+  campaignId      String        @map("campaign_id") @db.Uuid
+  googleAdGroupId String        @map("google_ad_group_id")
+  name            String
+  status          AdGroupStatus @default(ACTIVE)
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+  archivedAt      DateTime?     @map("archived_at") @db.Timestamptz(3)
+  deletedAt       DateTime?     @map("deleted_at") @db.Timestamptz(3)
+
+  campaign Campaign           @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  ads      Ad[]
+  criteria AdGroupCriterion[]
+  trackingLinks TrackingLink[]
+
+  @@unique([campaignId, googleAdGroupId])
+  @@index([campaignId])
+  @@index([tenantId])
+  @@map("ad_groups")
+}
+
+model Ad {
+  id         String   @id @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  adGroupId  String   @map("ad_group_id") @db.Uuid
+  googleAdId String   @map("google_ad_id")
+  name       String
+  status     AdStatus @default(ACTIVE)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  archivedAt DateTime? @map("archived_at") @db.Timestamptz(3)
+  deletedAt  DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  adGroup       AdGroup        @relation(fields: [adGroupId], references: [id], onDelete: Restrict)
+  trackingLinks TrackingLink[]
+
+  @@unique([adGroupId, googleAdId])
+  @@index([adGroupId])
+  @@index([tenantId])
+  @@map("ads")
+}
+
+model AdGroupCriterion {
+  id                String          @id @db.Uuid
+  tenantId          String          @map("tenant_id") @db.Uuid
+  adGroupId         String          @map("ad_group_id") @db.Uuid
+  googleCriterionId String          @map("google_criterion_id")
+  keyword           String?
+  matchType         String?         @map("match_type")
+  status            CriterionStatus @default(ACTIVE)
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  archivedAt        DateTime?       @map("archived_at") @db.Timestamptz(3)
+  deletedAt         DateTime?       @map("deleted_at") @db.Timestamptz(3)
+
+  adGroup AdGroup @relation(fields: [adGroupId], references: [id], onDelete: Restrict)
+  trackingLinks TrackingLink[]
+
+  @@unique([adGroupId, googleCriterionId])
+  @@index([adGroupId])
+  @@index([tenantId])
+  @@map("ad_group_criteria")
+}
+
+model Offer {
+  id               String      @id @db.Uuid
+  tenantId         String      @map("tenant_id") @db.Uuid
+  name             String
+  network          String
+  destinationUrl   String      @map("destination_url")
+  status           OfferStatus @default(ACTIVE)
+  /// Lower number = higher priority (Phase 5)
+  priority         Int         @default(100)
+  startsAt         DateTime?   @map("starts_at") @db.Timestamptz(3)
+  endsAt           DateTime?   @map("ends_at") @db.Timestamptz(3)
+  idempotencyScope String?     @map("idempotency_scope")
+  idempotencyKey   String?     @map("idempotency_key")
+  createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+  archivedAt       DateTime?   @map("archived_at") @db.Timestamptz(3)
+  deletedAt        DateTime?   @map("deleted_at") @db.Timestamptz(3)
+
+  tenant              Tenant             @relation(fields: [tenantId], references: [id])
+  landingPages        LandingPage[]
+  trackingLinks       TrackingLink[]
+  trackingLinkOffers  TrackingLinkOffer[]
+
+  @@unique([tenantId, idempotencyScope, idempotencyKey])
+  @@index([tenantId])
+  @@index([status])
+  @@index([priority])
+  @@map("offers")
+}
+
+/// Phase 5 — TrackingLink ↔ Offer bindings (priority / fallback)
+model TrackingLinkOffer {
+  id             String   @id @db.Uuid
+  tenantId       String   @map("tenant_id") @db.Uuid
+  trackingLinkId String   @map("tracking_link_id") @db.Uuid
+  offerId        String   @map("offer_id") @db.Uuid
+  /// Lower = higher priority
+  priority       Int      @default(100)
+  isFallback     Boolean  @default(false) @map("is_fallback")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  trackingLink TrackingLink @relation(fields: [trackingLinkId], references: [id], onDelete: Restrict)
+  offer        Offer        @relation(fields: [offerId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, trackingLinkId, offerId])
+  @@index([tenantId])
+  @@index([trackingLinkId])
+  @@index([offerId])
+  @@map("tracking_link_offers")
+}
+
+model LandingPage {
+  id         String            @id @db.Uuid
+  tenantId   String            @map("tenant_id") @db.Uuid
+  offerId    String            @map("offer_id") @db.Uuid
+  name       String
+  url        String
+  domain     String
+  status     LandingPageStatus @default(ACTIVE)
+  createdAt  DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+  archivedAt DateTime?         @map("archived_at") @db.Timestamptz(3)
+  deletedAt  DateTime?         @map("deleted_at") @db.Timestamptz(3)
+
+  offer         Offer          @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  trackingLinks TrackingLink[]
+
+  @@index([offerId])
+  @@index([domain])
+  @@index([status])
+  @@index([tenantId])
+  @@map("landing_pages")
+}
+
+model TrackingLink {
+  id            String             @id @db.Uuid
+  tenantId      String             @map("tenant_id") @db.Uuid
+  publicId      String             @unique @map("public_id")
+  campaignId    String?            @map("campaign_id") @db.Uuid
+  adGroupId     String?            @map("ad_group_id") @db.Uuid
+  adId          String?            @map("ad_id") @db.Uuid
+  criterionId   String?            @map("criterion_id") @db.Uuid
+  offerId       String             @map("offer_id") @db.Uuid
+  landingPageId String?            @map("landing_page_id") @db.Uuid
+  status        TrackingLinkStatus @default(ACTIVE)
+  createdAt     DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  archivedAt    DateTime?          @map("archived_at") @db.Timestamptz(3)
+  deletedAt     DateTime?          @map("deleted_at") @db.Timestamptz(3)
+
+  campaign    Campaign?         @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  adGroup     AdGroup?          @relation(fields: [adGroupId], references: [id], onDelete: Restrict)
+  ad          Ad?               @relation(fields: [adId], references: [id], onDelete: Restrict)
+  criterion   AdGroupCriterion? @relation(fields: [criterionId], references: [id], onDelete: Restrict)
+  offer       Offer             @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  landingPage LandingPage?      @relation(fields: [landingPageId], references: [id], onDelete: Restrict)
+  clicks      Click[]
+  trackingLinkOffers TrackingLinkOffer[]
+
+  @@index([campaignId])
+  @@index([adGroupId])
+  @@index([adId])
+  @@index([criterionId])
+  @@index([offerId])
+  @@index([landingPageId])
+  @@index([status])
+  @@index([tenantId])
+  @@map("tracking_links")
+}
+
+/// Event-level click storage. gclid is NOT globally unique — duplicates allowed.
+/// Click.id is the public clickId used by Conversion/Order attribution.
+model Click {
+  id              String   @id @db.Uuid
+  /// Mirrors id for explicit attribution APIs; unique within tenant writes
+  clickId         String   @unique @map("click_id") @db.Uuid
+  tenantId        String   @map("tenant_id") @db.Uuid
+  trackingLinkId  String   @map("tracking_link_id") @db.Uuid
+  offerId         String?  @map("offer_id") @db.Uuid
+  landingPageId   String?  @map("landing_page_id") @db.Uuid
+  campaignId      String?  @map("campaign_id") @db.Uuid
+  adGroupId       String?  @map("ad_group_id") @db.Uuid
+  adId            String?  @map("ad_id") @db.Uuid
+  criterionId     String?  @map("criterion_id") @db.Uuid
+  gclid           String?
+  gbraid          String?
+  wbraid          String?
+  utmSource       String?  @map("utm_source")
+  utmMedium       String?  @map("utm_medium")
+  utmCampaign     String?  @map("utm_campaign")
+  utmTerm         String?  @map("utm_term")
+  utmContent      String?  @map("utm_content")
+  userAgent       String?  @map("user_agent")
+  ipAddress       String?  @map("ip_address")
+  referer         String?
+  country         String?
+  region          String?
+  city            String?
+  deviceType      String?  @map("device_type")
+  queryParameters Json?    @map("query_parameters")
+  ingestionId     String?  @map("ingestion_id")
+  occurredAt      DateTime @default(now()) @map("occurred_at") @db.Timestamptz(3)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  /// Restrict — never cascade-delete clicks when tracking link archived
+  trackingLink TrackingLink @relation(fields: [trackingLinkId], references: [id], onDelete: Restrict)
+  conversions  Conversion[]
+  orders       Order[]
+
+  @@unique([tenantId, ingestionId])
+  @@index([trackingLinkId])
+  @@index([offerId])
+  @@index([campaignId])
+  @@index([gclid])
+  @@index([createdAt])
+  @@index([occurredAt])
+  @@index([country])
+  @@index([deviceType])
+  @@index([tenantId])
+  @@map("clicks")
+}
+
+model Conversion {
+  id                           String             @id @db.Uuid
+  tenantId                     String             @map("tenant_id") @db.Uuid
+  clickId                      String             @map("click_id") @db.Uuid
+  conversionAction             String             @map("conversion_action")
+  conversionTime               DateTime           @map("conversion_time") @db.Timestamptz(3)
+  /// Money: Decimal(19,4) — never floating point
+  value                        Decimal?           @db.Decimal(19, 4)
+  currency                     String?
+  status                       ConversionStatus   @default(PENDING)
+  googleUploadStatus           GoogleUploadStatus @default(NOT_UPLOADED) @map("google_upload_status")
+  googleConversionResourceName String?            @map("google_conversion_resource_name")
+  idempotencyScope             String?            @map("idempotency_scope")
+  idempotencyKey               String?            @map("idempotency_key")
+  createdAt                    DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                    DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  archivedAt                   DateTime?          @map("archived_at") @db.Timestamptz(3)
+  deletedAt                    DateTime?          @map("deleted_at") @db.Timestamptz(3)
+
+  click  Click   @relation(fields: [clickId], references: [id], onDelete: Restrict)
+  orders Order[]
+
+  @@unique([tenantId, idempotencyScope, idempotencyKey])
+  @@index([clickId])
+  @@index([conversionTime])
+  @@index([status])
+  @@index([googleUploadStatus])
+  @@index([tenantId])
+  @@map("conversions")
+}
+
+model Order {
+  id               String      @id @db.Uuid
+  tenantId         String      @map("tenant_id") @db.Uuid
+  clickId          String?     @map("click_id") @db.Uuid
+  conversionId     String?     @map("conversion_id") @db.Uuid
+  /// Business order id — unique per tenant (not global)
+  orderId          String      @map("order_id")
+  /// Money: Decimal(19,4)
+  value            Decimal     @db.Decimal(19, 4)
+  currency         String
+  status           OrderStatus @default(PENDING)
+  idempotencyScope String?     @map("idempotency_scope")
+  idempotencyKey   String?     @map("idempotency_key")
+  createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+  archivedAt       DateTime?   @map("archived_at") @db.Timestamptz(3)
+  deletedAt        DateTime?   @map("deleted_at") @db.Timestamptz(3)
+
+  tenant     Tenant      @relation(fields: [tenantId], references: [id])
+  click      Click?      @relation(fields: [clickId], references: [id], onDelete: Restrict)
+  conversion Conversion? @relation(fields: [conversionId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, orderId])
+  @@unique([tenantId, idempotencyScope, idempotencyKey])
+  @@index([clickId])
+  @@index([conversionId])
+  @@index([orderId])
+  @@index([createdAt])
+  @@index([tenantId])
+  @@map("orders")
+}
+
+/// Append-only URL history. Content columns must never be UPDATEd after insert;
+/// only status / effectiveAt may change via application rules.
+model UrlVersion {
+  id               String           @id @db.Uuid
+  tenantId         String           @map("tenant_id") @db.Uuid
+  entityType       UrlEntityType    @map("entity_type")
+  entityId         String           @map("entity_id") @db.Uuid
+  finalUrl         String           @map("final_url")
+  finalMobileUrl   String?          @map("final_mobile_url")
+  finalAppUrl      String?          @map("final_app_url")
+  trackingTemplate String?          @map("tracking_template")
+  /// Typed JSON map Record<string, string> — validated at API boundary
+  customParameters Json             @default("{}") @map("custom_parameters")
+  version          Int
+  status           UrlVersionStatus @default(DRAFT)
+  effectiveAt      DateTime?        @map("effective_at") @db.Timestamptz(3)
+  createdBy        String?          @map("created_by")
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  /// Used only for status transitions — never rewrite URL content
+  updatedAt        DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  /// Version uniqueness is tenant-scoped (DB-enforced). Concurrent creates must retry on conflict.
+  @@unique([tenantId, entityType, entityId, version])
+  @@index([entityType, entityId])
+  @@index([entityType, entityId, status])
+  @@index([status])
+  @@index([effectiveAt])
+  @@index([tenantId])
+  /// Partial unique ACTIVE: CREATE UNIQUE INDEX url_versions_one_active_per_entity
+  /// ON url_versions (tenant_id, entity_type, entity_id) WHERE status = 'ACTIVE'
+  /// (see migrations 20260909120000 / 20260909130000 — Prisma cannot express partial unique indexes)
+  @@map("url_versions")
+}
+
+model UrlChangeRequest {
+  id               String                 @id @db.Uuid
+  tenantId         String                 @map("tenant_id") @db.Uuid
+  entityType       UrlEntityType          @map("entity_type")
+  entityId         String                 @map("entity_id") @db.Uuid
+  fromVersionId    String?                @map("from_version_id") @db.Uuid
+  toVersionId      String                 @map("to_version_id") @db.Uuid
+  reason           String
+  requestedBy      String                 @map("requested_by")
+  status           UrlChangeRequestStatus @default(DRAFT)
+  idempotencyScope String                 @default("URL_CHANGE") @map("idempotency_scope")
+  idempotencyKey   String                 @map("idempotency_key")
+  jobId            String?                @map("job_id")
+  scheduledAt      DateTime?              @map("scheduled_at") @db.Timestamptz(3)
+  executedAt       DateTime?              @map("executed_at") @db.Timestamptz(3)
+  error            String?
+  createdAt        DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([tenantId, idempotencyScope, idempotencyKey])
+  @@index([entityType, entityId])
+  @@index([status])
+  @@index([scheduledAt])
+  @@index([jobId])
+  @@index([tenantId])
+  @@map("url_change_requests")
+}
+
+model SyncJob {
+  id                String        @id @db.Uuid
+  tenantId          String        @map("tenant_id") @db.Uuid
+  type              String
+  status            SyncJobStatus @default(PENDING)
+  provider          String        @default("mock")
+  externalAccountId String?       @map("external_account_id")
+  idempotencyScope  String        @default("SYNC_JOB") @map("idempotency_scope")
+  idempotencyKey    String        @map("idempotency_key")
+  /// BullMQ / queue correlation id (optional)
+  jobId             String?       @unique @map("job_id")
+  attempts          Int           @default(0)
+  startedAt         DateTime?     @map("started_at") @db.Timestamptz(3)
+  completedAt       DateTime?     @map("completed_at") @db.Timestamptz(3)
+  error             String?
+  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([tenantId, idempotencyScope, idempotencyKey])
+  @@index([type])
+  @@index([status])
+  @@index([provider])
+  @@index([createdAt])
+  @@index([tenantId])
+  @@map("sync_jobs")
+}
+
+/// Immutable audit trail — never cascade-deleted
+model AuditLog {
+  id         String   @id @db.Uuid
+  tenantId   String?  @map("tenant_id") @db.Uuid
+  actorId    String?  @map("actor_id") @db.Uuid
+  action     String
+  entityType String   @map("entity_type")
+  entityId   String?  @map("entity_id")
+  /// Typed JSON snapshots — validated at write boundary
+  before     Json?
+  after      Json?
+  requestId  String?  @map("request_id")
+  jobId      String?  @map("job_id")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([entityType, entityId])
+  @@index([actorId])
+  @@index([action])
+  @@index([createdAt])
+  @@index([tenantId])
+  @@map("audit_logs")
+}
+
+/// Phase 8.4.1 — Google Ads Script Integration (desired-state config source for Scripts).
+/// Token plaintext is NEVER stored — only keyId / prefix / hash.
+model GoogleAdsScriptIntegration {
+  id               String                   @id @db.Uuid
+  tenantId         String                   @map("tenant_id") @db.Uuid
+  googleAccountId  String                   @map("google_account_id") @db.Uuid
+  name             String
+  status           ScriptIntegrationStatus  @default(ACTIVE)
+  /// Opaque id for logs — never the raw token
+  tokenKeyId       String                   @map("token_key_id")
+  /// Short display prefix e.g. alk_s_ab12
+  tokenPrefix      String                   @map("token_prefix")
+  /// HMAC-SHA256 hash (pepper outside DB) — never plaintext
+  tokenHash        String                   @unique @map("token_hash")
+  /// Bumped when desired config for this integration changes
+  configGeneration Int                      @default(0) @map("config_generation")
+  lastSeenAt       DateTime?                @map("last_seen_at") @db.Timestamptz(3)
+  createdAt        DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(3)
+  archivedAt       DateTime?                @map("archived_at") @db.Timestamptz(3)
+  deletedAt        DateTime?                @map("deleted_at") @db.Timestamptz(3)
+
+  tenant        Tenant            @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  googleAccount GoogleAccount     @relation(fields: [googleAccountId], references: [id], onDelete: Restrict)
+  targets       ScriptSyncTarget[]
+  syncLogs      ScriptSyncLog[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([googleAccountId])
+  @@map("google_ads_script_integrations")
+}
+
+/// Phase 8.4.1 — Sync target. entityId is polymorphic; AD-only enforced in Domain/Repository.
+/// Ad (internal) is authority for Google IDs — denormalized fields are cache only.
+model ScriptSyncTarget {
+  id               String                 @id @db.Uuid
+  tenantId         String                 @map("tenant_id") @db.Uuid
+  integrationId    String                 @map("integration_id") @db.Uuid
+  entityType       UrlEntityType          @map("entity_type")
+  entityId         String                 @map("entity_id") @db.Uuid
+  /// Denormalized from Ad.googleAdId — not authority
+  googleAdId       String?                @map("google_ad_id")
+  /// Denormalized AdLinkLab Campaign.id
+  campaignId       String?                @map("campaign_id") @db.Uuid
+  /// Denormalized AdLinkLab AdGroup.id
+  adGroupId        String?                @map("ad_group_id") @db.Uuid
+  desiredVersion   Int?                   @map("desired_version")
+  appliedVersion   Int?                   @map("applied_version")
+  lastSyncAt       DateTime?              @map("last_sync_at") @db.Timestamptz(3)
+  lastSuccessAt    DateTime?              @map("last_success_at") @db.Timestamptz(3)
+  syncState        ScriptSyncState        @default(NEVER_APPLIED) @map("sync_state")
+  connectionHealth ScriptConnectionHealth @default(STALE) @map("connection_health")
+  lastExecution    ScriptExecutionResult? @map("last_execution")
+  createdAt        DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+  archivedAt       DateTime?              @map("archived_at") @db.Timestamptz(3)
+  deletedAt        DateTime?              @map("deleted_at") @db.Timestamptz(3)
+
+  integration GoogleAdsScriptIntegration @relation(fields: [integrationId], references: [id], onDelete: Restrict)
+  syncLogs    ScriptSyncLog[]
+
+  @@unique([tenantId, integrationId, entityType, entityId])
+  @@index([tenantId])
+  @@index([integrationId])
+  @@index([integrationId, entityType, entityId])
+  @@map("script_sync_targets")
+}
+
+/// Phase 8.4.1 — Append-only Script sync history. Never cascade-delete.
+model ScriptSyncLog {
+  id                      String                @id @db.Uuid
+  tenantId                String                @map("tenant_id") @db.Uuid
+  integrationId           String                @map("integration_id") @db.Uuid
+  targetId                String                @map("target_id") @db.Uuid
+  desiredVersion          Int                   @map("desired_version")
+  reportedAppliedVersion  Int?                  @map("reported_applied_version")
+  result                  ScriptExecutionResult
+  errorCode               String?               @map("error_code")
+  errorMessage            String?               @map("error_message")
+  requestId               String?               @map("request_id")
+  idempotencyScope        String                @default("SCRIPT_SYNC_RESULT") @map("idempotency_scope")
+  idempotencyKey          String                @map("idempotency_key")
+  createdAt               DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  integration GoogleAdsScriptIntegration @relation(fields: [integrationId], references: [id], onDelete: Restrict)
+  target      ScriptSyncTarget           @relation(fields: [targetId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, idempotencyScope, idempotencyKey])
+  @@index([tenantId])
+  @@index([integrationId])
+  @@index([targetId])
+  @@index([createdAt])
+  @@map("script_sync_logs")
+}

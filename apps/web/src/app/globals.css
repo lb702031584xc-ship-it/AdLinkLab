@@ -1,0 +1,21 @@
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Source+Sans+3:wght@400;600&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --ink: #0f1c2e;
+  --mist: #e8eef5;
+  --signal: #1f6feb;
+  --sand: #c4a35a;
+}
+
+body {
+  @apply bg-mist text-ink font-body antialiased;
+  background-image:
+    radial-gradient(circle at 12% 8%, rgba(31, 111, 235, 0.12), transparent 42%),
+    radial-gradient(circle at 88% 0%, rgba(196, 163, 90, 0.16), transparent 36%),
+    linear-gradient(180deg, #f4f7fb 0%, #e8eef5 100%);
+  min-height: 100vh;
+}

@@ -1,0 +1,8 @@
+http:
+  middlewares:
+    secure-headers:
+      headers:
+        customResponseHeaders:
+          X-Frame-Options: "DENY"
+          X-Content-Type-Options: "nosniff"
+          Referrer-Policy: "no-referrer"

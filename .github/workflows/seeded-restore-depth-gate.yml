@@ -1,0 +1,221 @@
+# Phase 13.2-CI.1 — Controlled CI / Lab Seeded Restore Depth Gate
+#
+# Manual/controlled only (workflow_dispatch).
+# Reuses existing: pnpm --filter @adlinklab/database backup:depth-gate
+# Does NOT change backup/restore/depth semantics.
+#
+# LAB_CI_ONLY — not a production backup path.
+# Never commit ADLINKLAB_BACKUP_ALLOW_RESTORE into .env.
+
+name: Seeded Restore Depth Gate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seeded-restore-depth-gate-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  depth-gate:
+    name: backup-depth-gate (isolated Postgres 16)
+    runs-on: ubuntu-latest
+
+    env:
+      # CI-only ephemeral identity (not production). Unique per run.
+      CI_PG_USER: adlinklab_ci
+      CI_PG_PASSWORD: cigate_${{ github.run_id }}_${{ github.run_attempt }}
+      CI_SOURCE_DB: adlinklab_ci_src_${{ github.run_id }}
+      CI_RESTORE_DB: adlinklab_ci_rst_${{ github.run_id }}
+      CI_PG_HOST: localhost
+      CI_PG_PORT: "5432"
+      ADLINKLAB_BACKUP_DIR: ${{ github.workspace }}/artifacts/depth-gate
+      # Gate / restore safety (process/job env only — never written to .env)
+      ADLINKLAB_SEEDED_DEPTH_GATE: "1"
+      ADLINKLAB_BACKUP_ALLOW_RESTORE: "1"
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: adlinklab_ci
+          POSTGRES_PASSWORD: cigate_${{ github.run_id }}_${{ github.run_attempt }}
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U adlinklab_ci -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install PostgreSQL client tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+          pg_dump --version
+          pg_restore --version
+          psql --version
+
+      - name: Wait for PostgreSQL (bounded readiness)
+        env:
+          PGPASSWORD: ${{ env.CI_PG_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            if psql -h "$CI_PG_HOST" -p "$CI_PG_PORT" -U "$CI_PG_USER" -d postgres -c "SELECT 1" >/dev/null 2>&1; then
+              echo "postgres_ready attempt=$i host=$CI_PG_HOST port=$CI_PG_PORT"
+              exit 0
+            fi
+            echo "postgres_wait attempt=$i/30"
+            sleep 2
+          done
+          echo "postgres_not_ready_after_bounded_retries"
+          exit 1
+
+      - name: Create isolated source and restore databases
+        env:
+          PGPASSWORD: ${{ env.CI_PG_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ "$CI_SOURCE_DB" = "$CI_RESTORE_DB" ]; then
+            echo "source_restore_name_collision"
+            exit 1
+          fi
+          psql -h "$CI_PG_HOST" -p "$CI_PG_PORT" -U "$CI_PG_USER" -d postgres -v ON_ERROR_STOP=1 <<SQL
+          CREATE DATABASE "${CI_SOURCE_DB}";
+          CREATE DATABASE "${CI_RESTORE_DB}";
+          SQL
+          echo "created_source_db=$CI_SOURCE_DB"
+          echo "created_restore_db=$CI_RESTORE_DB"
+
+      - name: Prepare artifact directory
+        run: mkdir -p "$ADLINKLAB_BACKUP_DIR"
+
+      - name: Run seeded restore depth gate
+        env:
+          PGPASSWORD: ${{ env.CI_PG_PASSWORD }}
+          ADLINKLAB_BACKUP_SOURCE_DATABASE_URL: postgresql://${{ env.CI_PG_USER }}:${{ env.CI_PG_PASSWORD }}@${{ env.CI_PG_HOST }}:${{ env.CI_PG_PORT }}/${{ env.CI_SOURCE_DB }}
+          ADLINKLAB_BACKUP_RESTORE_DATABASE_URL: postgresql://${{ env.CI_PG_USER }}:${{ env.CI_PG_PASSWORD }}@${{ env.CI_PG_HOST }}:${{ env.CI_PG_PORT }}/${{ env.CI_RESTORE_DB }}
+          DATABASE_URL: postgresql://${{ env.CI_PG_USER }}:${{ env.CI_PG_PASSWORD }}@${{ env.CI_PG_HOST }}:${{ env.CI_PG_PORT }}/${{ env.CI_SOURCE_DB }}?schema=public
+          ADLINKLAB_BACKUP_PRODUCTION_DATABASE: ${{ env.CI_SOURCE_DB }}
+          ADLINKLAB_BACKUP_DIR: ${{ env.ADLINKLAB_BACKUP_DIR }}
+          ADLINKLAB_SEEDED_DEPTH_GATE: "1"
+          ADLINKLAB_BACKUP_ALLOW_RESTORE: "1"
+        run: |
+          set -euo pipefail
+          # Safe diagnostics — host/db names only (no passwords / URLs)
+          echo "depth_gate_start host=$CI_PG_HOST port=$CI_PG_PORT source_db=$CI_SOURCE_DB restore_db=$CI_RESTORE_DB"
+
+          set +e
+          pnpm --filter @adlinklab/database backup:depth-gate \
+            >"$ADLINKLAB_BACKUP_DIR/depth-gate-stdout.txt" \
+            2>"$ADLINKLAB_BACKUP_DIR/depth-gate-stderr.txt"
+          GATE_EXIT=$?
+          set -e
+          echo "depth_gate_exit=$GATE_EXIT"
+          export GATE_EXIT
+
+          # Parse CLI JSON; fail closed if exit!=0 or overallStatus!=passed
+          node <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const dir = process.env.ADLINKLAB_BACKUP_DIR;
+          const stdout = fs.readFileSync(path.join(dir, "depth-gate-stdout.txt"), "utf8");
+          const stderr = fs.readFileSync(path.join(dir, "depth-gate-stderr.txt"), "utf8");
+          const gateExit = Number(process.env.GATE_EXIT || "1");
+          const start = stdout.indexOf("{");
+          const end = stdout.lastIndexOf("}");
+          let result = null;
+          let parseError = null;
+          if (start >= 0 && end > start) {
+            try {
+              result = JSON.parse(stdout.slice(start, end + 1));
+            } catch (e) {
+              parseError = e instanceof Error ? e.message : String(e);
+            }
+          }
+          const outPath = path.join(dir, "depth-gate-result.json");
+          if (result) {
+            fs.writeFileSync(outPath, JSON.stringify(result, null, 2));
+          } else {
+            fs.writeFileSync(
+              outPath,
+              JSON.stringify(
+                {
+                  overallStatus: "failed",
+                  scope: "LAB_CI_ONLY",
+                  parseError: parseError || "no_json_in_stdout",
+                  gateExit,
+                  stdoutBytes: Buffer.byteLength(stdout),
+                  stderrBytes: Buffer.byteLength(stderr),
+                },
+                null,
+                2
+              )
+            );
+          }
+          const status = result && result.overallStatus;
+          if (gateExit !== 0) {
+            console.error(JSON.stringify({ ok: false, reason: "gate_nonzero_exit", gateExit, overallStatus: status ?? null }));
+            process.exit(1);
+          }
+          if (status !== "passed") {
+            console.error(JSON.stringify({ ok: false, reason: "overallStatus_not_passed", overallStatus: status ?? null }));
+            process.exit(1);
+          }
+          console.log(JSON.stringify({
+            ok: true,
+            overallStatus: status,
+            scope: result.scope,
+            backupId: result.backupId ?? null,
+            runId: result.runId ?? null,
+            sourceUnchanged: result.sourceUnchanged ?? null,
+            depthPassedCount: result.depthVerification?.passedCount ?? null,
+          }));
+          NODE
+
+      - name: Upload depth-gate artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: seeded-restore-depth-gate-${{ github.run_id }}
+          path: |
+            artifacts/depth-gate/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Cleanup CI databases
+        if: always()
+        env:
+          PGPASSWORD: ${{ env.CI_PG_PASSWORD }}
+        run: |
+          set +e
+          psql -h "$CI_PG_HOST" -p "$CI_PG_PORT" -U "$CI_PG_USER" -d postgres -v ON_ERROR_STOP=1 <<SQL
+          SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname IN ('${CI_SOURCE_DB}', '${CI_RESTORE_DB}') AND pid <> pg_backend_pid();
+          DROP DATABASE IF EXISTS "${CI_SOURCE_DB}";
+          DROP DATABASE IF EXISTS "${CI_RESTORE_DB}";
+          SQL
+          echo "cleanup_done"

@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "composite": true
+  },
+  "exclude": ["src/**/*.test.ts"],
+  "include": ["src/**/*"],
+  "references": [{ "path": "../shared" }, { "path": "../domain" }]
+}
