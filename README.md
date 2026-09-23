@@ -2,7 +2,7 @@
 
 Research SaaS for Google Ads API integration study, tracking links, GCLID/UTM attribution, URL versioning, Script-based URL sync, and Click → Conversion → Order experiments.
 
-> **Current baseline: Phase 12 ACCEPTED / CLOSED** (on Phase 9–10 production hardening). Phase 13 is in **planning**; **Phase 13.1** is documentation truth sync. **Phase 13.2** is an owner-selected future track (not implemented). **Mock / Adapter only** — no production Google Ads mutations, no traffic forgery / cloaking.
+> **Current baseline: Phase 12 ACCEPTED / CLOSED** (on Phase 9–10 production hardening). **Phase 13.1** docs truth sync **CLOSED**. **Phase 13.2-CI** controlled GitHub Actions depth-gate **CLOSED / PASS**. **Phase 13.3** documentation truth sync (this update). **Mock / Adapter only** — no production Google Ads mutations, no traffic forgery / cloaking.
 
 ## Phase status
 
@@ -13,7 +13,9 @@ Research SaaS for Google Ads API integration study, tracking links, GCLID/UTM at
 | 10.5 — Backup / restore lab validation | **CLOSED** |
 | 11 — Seeded isolated restore validation | **CLOSED** |
 | 12 — Seeded restore depth automation | **ACCEPTED / CLOSED** |
-| 13 — Planning | **IN PROGRESS** (13.1 docs; 13.2 not started) |
+| 13.1 — Documentation truth sync | **CLOSED** |
+| 13.2-CI — Controlled GitHub Actions depth-gate | **CLOSED / PASS** |
+| 13.3 — Documentation truth sync | **CLOSED / PASS** |
 
 ## Current status
 
@@ -27,11 +29,12 @@ Research SaaS for Google Ads API integration study, tracking links, GCLID/UTM at
 | Google Ads mutation | Mock allowed (lab); **API provider refuses** — not production-capable |
 | Auth | Production requires `api_key`; Script Bearer; **no** cookie/session SSO |
 | Observability | `/health` (`phase: "10"` stamp), `/health/live`, `/health/ready`, `/metrics` |
-| Backup / restore | `backup:create\|verify\|restore-test\|cleanup` + **LAB_CI_ONLY** `backup:depth-gate` (Phase 12) |
+| Backup / restore | `backup:create\|verify\|restore-test\|cleanup` + **LAB_CI_ONLY** `backup:depth-gate` (Phase 12 + 13.2-CI) |
 | Phase 10 hardening | `CORS_ORIGINS` fail-closed; in-process rate limits; Traefik dashboard switch; API → `/health/ready`; worker health = `dist/worker.js` artifact |
 | Traefik / TLS | HTTP `:80` only — TLS/HTTPS/ACME **not** implemented |
-| Seeded restore depth | Phase 12 D1–D11 **PASS** in lab; Script Integration / `tracking_link_offers` fixtures **not** covered |
-| Not claimed | Production restore, offsite DR, scheduled GitHub Actions CI, browser E2E |
+| Seeded restore depth | Phase 12 lab + Phase 13.2-CI GitHub Actions D1–D11 **PASS**; Script Integration / `tracking_link_offers` fixtures **not** covered |
+| Controlled CI | `.github/workflows/seeded-restore-depth-gate.yml` — **`workflow_dispatch` only** (not scheduled/push) |
+| Not claimed | Production restore, offsite DR, scheduled/push CI, browser E2E |
 
 Canonical docs: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) · [docs/operations.md](./docs/operations.md) · [docs/phase-9-capability-matrix.md](./docs/phase-9-capability-matrix.md) · [packages/database/SEEDED_RESTORE_DEPTH_GATE.md](./packages/database/SEEDED_RESTORE_DEPTH_GATE.md)
 

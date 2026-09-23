@@ -1,8 +1,8 @@
 # AdLinkLab Operations Runbook
 
-Operational baseline for the **actual** deployment through **Phase 12** (Phase 12 **ACCEPTED / CLOSED**; Phase 9–10 foundation). This document describes how to run and operate the system; it does **not** invent features.
+Operational baseline for the **actual** deployment through **Phase 12** (**ACCEPTED / CLOSED**) and **Phase 13.2-CI** (**CLOSED / PASS**; Phase 9–10 foundation). This document describes how to run and operate the system; it does **not** invent features.
 
-Canonical architecture: [ARCHITECTURE.md](./ARCHITECTURE.md). Capability matrix: [phase-9-capability-matrix.md](./phase-9-capability-matrix.md). Seeded depth gate: [`packages/database/SEEDED_RESTORE_DEPTH_GATE.md`](../packages/database/SEEDED_RESTORE_DEPTH_GATE.md).
+Canonical architecture: [ARCHITECTURE.md](./ARCHITECTURE.md). Capability matrix: [phase-9-capability-matrix.md](./phase-9-capability-matrix.md). Seeded depth gate: [`packages/database/SEEDED_RESTORE_DEPTH_GATE.md`](../packages/database/SEEDED_RESTORE_DEPTH_GATE.md). Controlled CI workflow: [`.github/workflows/seeded-restore-depth-gate.yml`](../.github/workflows/seeded-restore-depth-gate.yml).
 
 **Never put real secrets in this file or in git.** Use `.env` (gitignored); start from `.env.example`.
 
@@ -217,7 +217,16 @@ Rules:
 3. Phase 12 status: **ACCEPTED / CLOSED**; D1–D11 proven in lab evidence (`backups-phase122c-lab/`)  
 4. D10 (`ACTIVE UrlVersion count === 3`) is a **Phase 1.3 fixture contract**, not a universal production rule  
 5. Depth gate does **not** prove Script Integration rows or `tracking_link_offers` restore  
-6. Does **not** mean scheduled GitHub Actions CI exists (repo CI not wired)
+6. Phase 13.2-CI (**CLOSED / PASS**) wires the **same** gate into GitHub Actions via `.github/workflows/seeded-restore-depth-gate.yml` (`workflow_dispatch` only). That is **controlled dispatch CI**, not scheduled/push automation, not production restore, not offsite DR.
+
+### Controlled GitHub Actions (Phase 13.2-CI)
+
+- Workflow: `seeded-restore-depth-gate.yml` — manual `workflow_dispatch` on `main`
+- Postgres **16** ephemeral service; isolated source/restore DB names per run
+- CI-only trust auth (`POSTGRES_HOST_AUTH_METHOD=trust`; no service `POSTGRES_PASSWORD`; passwordless URLs) after R3 remediation
+- Invokes existing `pnpm --filter @adlinklab/database backup:depth-gate` (no duplicated D1–D11)
+- Acceptance evidence: run `35808897526` on commit `e95e14ce941e7564d476804bc1e8c352505941ab` — D1–D11 **PASS**, `overallStatus=passed`, `sourceUnchanged=true`, artifacts + cleanup
+- **Resolved finding:** R2 exposed service-container `POSTGRES_PASSWORD` in Initialize containers `docker create` logs; R3 removed that password path
 
 ---
 

@@ -1,15 +1,15 @@
 # Documentation
 
-Canonical architecture and operations for AdLinkLab through **Phase 12** (Phase 12 **ACCEPTED / CLOSED**). Phase 13 is planning; **13.1** synchronizes documentation truth.
+Canonical architecture and operations for AdLinkLab through **Phase 12** (**ACCEPTED / CLOSED**), **Phase 13.1** docs sync (**CLOSED**), **Phase 13.2-CI** controlled GitHub Actions depth-gate (**CLOSED / PASS**), and **Phase 13.3** documentation truth sync.
 
 ## Architecture & operations
 
 | Document | Purpose |
 |----------|---------|
-| [ARCHITECTURE.md](./ARCHITECTURE.md) | **Canonical architecture** (Phase 0 → 12) |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | **Canonical architecture** (Phase 0 → 13.2-CI) |
 | [operations.md](./operations.md) | **Operations runbook** (Compose, env, health, backup, depth-gate, auth, test matrix) |
-| [phase-9-capability-matrix.md](./phase-9-capability-matrix.md) | Capability matrix (Phase 9–12 + boundaries) |
-| [../packages/database/SEEDED_RESTORE_DEPTH_GATE.md](../packages/database/SEEDED_RESTORE_DEPTH_GATE.md) | Phase 12 **LAB_CI_ONLY** seeded restore depth gate |
+| [phase-9-capability-matrix.md](./phase-9-capability-matrix.md) | Capability matrix (Phase 9–13.2-CI + boundaries) |
+| [../packages/database/SEEDED_RESTORE_DEPTH_GATE.md](../packages/database/SEEDED_RESTORE_DEPTH_GATE.md) | Phase 12 **LAB_CI_ONLY** seeded restore depth gate (+ 13.2-CI wiring) |
 
 ## Domain / feature contracts
 
@@ -41,4 +41,5 @@ Canonical architecture and operations for AdLinkLab through **Phase 12** (Phase 
 - **ACTIVE UrlVersion** is sole Desired Authority; `ScriptSyncTarget.desiredVersion` is cache only.
 - No production Google Ads mutation capability.
 - Shallow `dataVerification: "passed"` ⇔ `tenantCount > 0` only; depth = `backup:depth-gate` (LAB_CI_ONLY).
-- TLS, offsite DR, production restore, scheduled GitHub Actions CI, and browser E2E are **not** claimed.
+- TLS, offsite DR, production restore, **scheduled/push** CI, and browser E2E are **not** claimed.
+- Controlled **`workflow_dispatch`** depth-gate CI exists (Phase 13.2-CI **CLOSED / PASS**); that is **not** fully automated/scheduled CI.

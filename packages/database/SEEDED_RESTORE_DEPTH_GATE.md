@@ -4,9 +4,15 @@ Phase 12.2-B orchestration. Validates that backup → isolated restore preserves
 
 **Phase 12 status: ACCEPTED / CLOSED** (lab evidence under `backups-phase122c-lab/`).
 
+**Phase 13.2-CI status: CLOSED / PASS** — controlled GitHub Actions runs the **same** command via `.github/workflows/seeded-restore-depth-gate.yml` (`workflow_dispatch` only). Acceptance run: `35808897526` on `e95e14ce941e7564d476804bc1e8c352505941ab` (D1–D11 PASS, `overallStatus=passed`, `sourceUnchanged=true`).
+
 **Not a production backup path.** Shallow `dataVerification: "passed"` (`tenantCount > 0`) is unchanged and is not treated as depth success.
 
-**Not scheduled GitHub Actions CI** — this is a local/lab (CI-compatible) command; repo CI wiring is future work.
+**Not scheduled / push CI** — local/lab command remains primary; repo CI is **manual `workflow_dispatch` only** (not fully automated CI).
+
+**CI auth (R3):** ephemeral Actions Postgres uses CI-only `POSTGRES_HOST_AUTH_METHOD=trust` (no service `POSTGRES_PASSWORD`). Trust is not a production auth model.
+
+**Resolved finding:** Phase 13.2-CI.2-R2 logged expanded service-container `POSTGRES_PASSWORD` during Initialize containers `docker create`. **Resolved** in R3 by removing the password and using trust + passwordless URLs.
 
 ## Prerequisites
 
@@ -29,7 +35,7 @@ ADLINKLAB_BACKUP_PRODUCTION_DATABASE="adlinklab" \
 pnpm --filter @adlinklab/database backup:depth-gate
 ```
 
-Optional: `ADLINKLAB_SEEDED_DEPTH_SKIP_PREPARE=1` skips migrate deploy + `SEED_RESET=1` seed (source must already satisfy Phase 1.3 fixtures).
+Optional: `ADLINKLAB_SEEDED_DEPTH_SKIP_PREPARE=1` skips migrate deploy + `SEED_RESET=1` seed (source must already satisfy Phase 1.3 fixtures). GitHub Actions CI does **not** set `SKIP_PREPARE`.
 
 ## What it does
 

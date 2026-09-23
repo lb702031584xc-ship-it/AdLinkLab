@@ -1,10 +1,10 @@
-# AdLinkLab Architecture (Phase 0 → 12)
+# AdLinkLab Architecture (Phase 0 → 13.2-CI)
 
 Research SaaS for studying Google Ads tracking, URL versioning, Script-based URL sync, and Click → Conversion → Order attribution.
 
 **Hard boundary:** Mock / Simulator providers only for production-facing mutations. No live Google Ads production mutations, no traffic forgery against third parties, no cloaking / detection bypass.
 
-**Current baseline (Phase 12 ACCEPTED / CLOSED on Phase 9–10 foundation):** deployment, production AUTH fail-closed, observability, backup/restore gates, Desired Version hygiene, Queue Catalog honesty, CORS allowlist, HTTP rate limits, Traefik dashboard switch, Compose ready healthchecks, and **LAB_CI_ONLY seeded restore depth gate** (`backup:depth-gate`, D1–D11). See [phase-9-capability-matrix.md](./phase-9-capability-matrix.md), [operations.md](./operations.md), and [`packages/database/SEEDED_RESTORE_DEPTH_GATE.md`](../packages/database/SEEDED_RESTORE_DEPTH_GATE.md).
+**Current baseline (Phase 12 ACCEPTED / CLOSED on Phase 9–10 foundation; Phase 13.2-CI CLOSED / PASS):** deployment, production AUTH fail-closed, observability, backup/restore gates, Desired Version hygiene, Queue Catalog honesty, CORS allowlist, HTTP rate limits, Traefik dashboard switch, Compose ready healthchecks, **LAB_CI_ONLY seeded restore depth gate** (`backup:depth-gate`, D1–D11), and **controlled GitHub Actions** (`.github/workflows/seeded-restore-depth-gate.yml`, `workflow_dispatch` only). See [phase-9-capability-matrix.md](./phase-9-capability-matrix.md), [operations.md](./operations.md), and [`packages/database/SEEDED_RESTORE_DEPTH_GATE.md`](../packages/database/SEEDED_RESTORE_DEPTH_GATE.md).
 
 Phase milestones (summary):
 
@@ -16,7 +16,9 @@ Phase milestones (summary):
 - **10** — CORS / rate-limit / Traefik switch / ready healthchecks / backup URL sanitization / migration BOM fix
 - **10.5 / 11** — Lab backup/restore + seeded isolated restore validation
 - **12** — Seeded restore depth automation (module + LAB/CI gate + real lab acceptance) — **CLOSED**
-- **13** — Planning; **13.1** documentation truth sync (this docs baseline). **13.2** = owner-selected future track (not implemented)
+- **13.1** — Documentation truth sync — **CLOSED**
+- **13.2-CI** — Controlled GitHub Actions execution of existing `backup:depth-gate` (Postgres 16, ephemeral source/restore DBs, D1–D11, artifacts, cleanup; CI-only trust auth after R3) — **CLOSED / PASS**
+- **13.3** — Documentation truth sync (align docs with 13.2-CI) — owner track
 
 ---
 
