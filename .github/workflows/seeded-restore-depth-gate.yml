@@ -6,6 +6,13 @@
 #
 # LAB_CI_ONLY — not a production backup path.
 # Never commit ADLINKLAB_BACKUP_ALLOW_RESTORE into .env.
+#
+# Password handling (13.2-CI.2-R1):
+# - Ephemeral PG password is NOT in the job-wide env block (avoids Actions env dumps
+#   on install/setup steps).
+# - Steps that need credentials construct PGPASSWORD / DB URLs inside the shell from
+#   GITHUB_RUN_ID / GITHUB_RUN_ATTEMPT (script text shows vars, not secret values).
+# - Never echo passwords or full DATABASE_URLs.
 
 name: Seeded Restore Depth Gate
 
@@ -25,9 +32,8 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      # CI-only ephemeral identity (not production). Unique per run.
+      # Non-secret CI identity only (no password here — 13.2-CI.2-R1).
       CI_PG_USER: adlinklab_ci
-      CI_PG_PASSWORD: cigate_${{ github.run_id }}_${{ github.run_attempt }}
       CI_SOURCE_DB: adlinklab_ci_src_${{ github.run_id }}
       CI_RESTORE_DB: adlinklab_ci_rst_${{ github.run_id }}
       CI_PG_HOST: localhost
@@ -42,6 +48,7 @@ jobs:
         image: postgres:16
         env:
           POSTGRES_USER: adlinklab_ci
+          # Service-container only; not injected into job/step env dumps.
           POSTGRES_PASSWORD: cigate_${{ github.run_id }}_${{ github.run_attempt }}
           POSTGRES_DB: postgres
         ports:
@@ -80,10 +87,9 @@ jobs:
           psql --version
 
       - name: Wait for PostgreSQL (bounded readiness)
-        env:
-          PGPASSWORD: ${{ env.CI_PG_PASSWORD }}
         run: |
           set -euo pipefail
+          export PGPASSWORD="cigate_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
           for i in $(seq 1 30); do
             if psql -h "$CI_PG_HOST" -p "$CI_PG_PORT" -U "$CI_PG_USER" -d postgres -c "SELECT 1" >/dev/null 2>&1; then
               echo "postgres_ready attempt=$i host=$CI_PG_HOST port=$CI_PG_PORT"
@@ -96,10 +102,9 @@ jobs:
           exit 1
 
       - name: Create isolated source and restore databases
-        env:
-          PGPASSWORD: ${{ env.CI_PG_PASSWORD }}
         run: |
           set -euo pipefail
+          export PGPASSWORD="cigate_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
           if [ "$CI_SOURCE_DB" = "$CI_RESTORE_DB" ]; then
             echo "source_restore_name_collision"
             exit 1
@@ -116,16 +121,17 @@ jobs:
 
       - name: Run seeded restore depth gate
         env:
-          PGPASSWORD: ${{ env.CI_PG_PASSWORD }}
-          ADLINKLAB_BACKUP_SOURCE_DATABASE_URL: postgresql://${{ env.CI_PG_USER }}:${{ env.CI_PG_PASSWORD }}@${{ env.CI_PG_HOST }}:${{ env.CI_PG_PORT }}/${{ env.CI_SOURCE_DB }}
-          ADLINKLAB_BACKUP_RESTORE_DATABASE_URL: postgresql://${{ env.CI_PG_USER }}:${{ env.CI_PG_PASSWORD }}@${{ env.CI_PG_HOST }}:${{ env.CI_PG_PORT }}/${{ env.CI_RESTORE_DB }}
-          DATABASE_URL: postgresql://${{ env.CI_PG_USER }}:${{ env.CI_PG_PASSWORD }}@${{ env.CI_PG_HOST }}:${{ env.CI_PG_PORT }}/${{ env.CI_SOURCE_DB }}?schema=public
+          # Non-secret only. Credentials/URLs constructed in-script (no Actions env dump of password).
           ADLINKLAB_BACKUP_PRODUCTION_DATABASE: ${{ env.CI_SOURCE_DB }}
-          ADLINKLAB_BACKUP_DIR: ${{ env.ADLINKLAB_BACKUP_DIR }}
-          ADLINKLAB_SEEDED_DEPTH_GATE: "1"
-          ADLINKLAB_BACKUP_ALLOW_RESTORE: "1"
         run: |
           set -euo pipefail
+          PW="cigate_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          export PGPASSWORD="$PW"
+          export ADLINKLAB_BACKUP_SOURCE_DATABASE_URL="postgresql://${CI_PG_USER}:${PW}@${CI_PG_HOST}:${CI_PG_PORT}/${CI_SOURCE_DB}"
+          export ADLINKLAB_BACKUP_RESTORE_DATABASE_URL="postgresql://${CI_PG_USER}:${PW}@${CI_PG_HOST}:${CI_PG_PORT}/${CI_RESTORE_DB}"
+          export DATABASE_URL="postgresql://${CI_PG_USER}:${PW}@${CI_PG_HOST}:${CI_PG_PORT}/${CI_SOURCE_DB}?schema=public"
+          unset PW
+
           # Safe diagnostics — host/db names only (no passwords / URLs)
           echo "depth_gate_start host=$CI_PG_HOST port=$CI_PG_PORT source_db=$CI_SOURCE_DB restore_db=$CI_RESTORE_DB"
 
@@ -209,10 +215,9 @@ jobs:
 
       - name: Cleanup CI databases
         if: always()
-        env:
-          PGPASSWORD: ${{ env.CI_PG_PASSWORD }}
         run: |
           set +e
+          export PGPASSWORD="cigate_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
           psql -h "$CI_PG_HOST" -p "$CI_PG_PORT" -U "$CI_PG_USER" -d postgres -v ON_ERROR_STOP=1 <<SQL
           SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname IN ('${CI_SOURCE_DB}', '${CI_RESTORE_DB}') AND pid <> pg_backend_pid();
           DROP DATABASE IF EXISTS "${CI_SOURCE_DB}";

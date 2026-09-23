@@ -34,7 +34,7 @@
     "backup:restore-test": "tsx scripts/backup.mts restore-test",
     "backup:cleanup": "tsx scripts/backup.mts cleanup",
     "backup:depth-gate": "tsx scripts/backup-depth-gate.mts",
-    "postinstall": "prisma generate || echo Prisma generate skipped (engine download unavailable)"
+    "postinstall": "prisma generate || echo \"Prisma generate skipped (engine download unavailable)\""
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
