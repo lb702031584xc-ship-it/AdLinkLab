@@ -142,14 +142,36 @@ export async function checkAllActiveLinks(
       id: true,
       tenantId: true,
       publicId: true,
+      healthCheckIntervalSec: true,
+      linkSource: true,
       offer: { select: { name: true, destinationUrl: true } },
       landingPage: { select: { name: true, url: true } },
+      healthChecks: {
+        orderBy: { checkedAt: "desc" },
+        take: 1,
+        select: { checkedAt: true },
+      },
     },
     orderBy: { createdAt: "asc" },
-  })) as ScanLinkRow[];
+  })) as (ScanLinkRow & {
+    healthCheckIntervalSec: number;
+    linkSource: string;
+    healthChecks: { checkedAt: Date }[];
+  })[];
+
+  const now = Date.now();
+  const MIN_INTERVAL_SEC = 600; // 10min floor to avoid hammering
 
   for (const link of links) {
     try {
+      // Per-link interval: skip if checked recently enough.
+      const intervalSec = Math.max(link.healthCheckIntervalSec || 3600, MIN_INTERVAL_SEC);
+      const lastChecked = link.healthChecks[0]?.checkedAt?.getTime();
+      if (lastChecked && now - lastChecked < intervalSec * 1000) {
+        summary.skippedNoUrl += 0; // interval-skip, not counted as no-url
+        continue;
+      }
+
       const url = resolveDestinationUrl(link);
       if (!url) {
         summary.skippedNoUrl += 1;

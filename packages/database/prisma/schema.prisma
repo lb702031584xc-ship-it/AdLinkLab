@@ -508,6 +508,10 @@ model TrackingLink {
   offerId       String             @map("offer_id") @db.Uuid
   landingPageId String?            @map("landing_page_id") @db.Uuid
   status        TrackingLinkStatus @default(ACTIVE)
+  /// Health check: per-link interval in seconds (default 3600 = 1h), min 600 enforced in code
+  healthCheckIntervalSec Int    @default(3600) @map("health_check_interval_sec")
+  /// How this link was added: MANUAL (pasted by user) or AUTO (synced from network/offer)
+  linkSource      String             @default("MANUAL") @map("link_source")
   createdAt     DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt     DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
   archivedAt    DateTime?          @map("archived_at") @db.Timestamptz(3)
@@ -522,6 +526,8 @@ model TrackingLink {
   clicks              Click[]
   trackingLinkOffers  TrackingLinkOffer[]
   alerts              Alert[]
+  /// Health check history (per-link interval scheduling)
+  healthChecks        LinkHealthCheck[]
   /// Automation — cashback offers bound to this tracking link (additive)
   cashbackOffers      CashbackOffer[]
   /// Launch Wizard back-reference (additive)
@@ -1614,6 +1620,8 @@ model LinkHealthCheck {
   isAlive        Boolean  @map("is_alive")
   failureReason  String?  @map("failure_reason")
   responseTimeMs Int?     @map("response_time_ms")
+
+  trackingLink TrackingLink @relation(fields: [trackingLinkId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, trackingLinkId, checkedAt])
   @@map("link_health_checks")

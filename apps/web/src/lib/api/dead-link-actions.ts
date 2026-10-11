@@ -101,3 +101,36 @@ export async function listLinkHealthHistoryAction(
     return (await res.json()) as LinkHealthHistory;
   }, []);
 }
+
+/** Update per-link health check config (interval + source). */
+export async function updateLinkHealthConfigAction(
+  trackingLinkId: string,
+  input: { healthCheckIntervalSec?: number; linkSource?: string }
+) {
+  return attempt(async () => {
+    const base = getApiBaseUrl();
+    const headers = await sessionHeaders();
+    const res = await fetch(
+      `${base}/api/v1/tracking-links/${trackingLinkId}/health-config`,
+      {
+        method: "PATCH",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+        cache: "no-store",
+      }
+    );
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(
+        (body as { error?: string }).error ??
+          `Failed to update health config (HTTP ${res.status})`
+      );
+    }
+    return (await res.json()) as {
+      ok: boolean;
+      id: string;
+      healthCheckIntervalSec: number;
+      linkSource: string;
+    };
+  }, [`/tracking-links/${trackingLinkId}`]);
+}

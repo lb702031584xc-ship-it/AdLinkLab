@@ -58,6 +58,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
           title: s.affiliate,
           pinned: true,
           items: [
+            { href: "/affiliate/beginner-sop", label: ni.affiliateBeginnerSop },
             { href: "/networks", label: ni.connectNetworks },
             { href: "/offers", label: ni.offerList },
             { href: "/offers/new", label: ni.offerNewImport },

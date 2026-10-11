@@ -29,9 +29,10 @@ export const zh = {
     },
     // Per-item nav labels (step numbers are part of the value where used).
     items: {
-      connectNetworks: "① 连接联盟网络",
-      offerList: "② Offer 列表",
-      offerNewImport: "③ 新建/导入 Offer",
+      affiliateBeginnerSop: "① 新手 7 天 SOP",
+      connectNetworks: "② 连接联盟网络",
+      offerList: "③ Offer 列表",
+      offerNewImport: "④ 新建/导入 Offer",
       launchAds: "⑨ 投广告",
       trafficMonitoring: "⑪ 流量监控",
       amazonPaapi: "② 配置 PA-API",
@@ -132,9 +133,10 @@ export const en: typeof zh = {
     },
     // Per-item nav labels (step numbers are part of the value where used).
     items: {
-      connectNetworks: "① Connect a Network",
-      offerList: "② Offers",
-      offerNewImport: "③ New / Import Offer",
+      affiliateBeginnerSop: "① 7-Day Starter SOP",
+      connectNetworks: "② Connect a Network",
+      offerList: "③ Offers",
+      offerNewImport: "④ New / Import Offer",
       launchAds: "⑨ Create Ads",
       trafficMonitoring: "⑪ Traffic Monitoring",
       amazonPaapi: "② Configure PA-API",

@@ -125,6 +125,8 @@ export interface TrackingLink {
   criterionId?: string;
   landingPageId?: string;
   status: string;
+  healthCheckIntervalSec?: number;
+  linkSource?: string;
   createdAt: string;
   updatedAt: string;
 }

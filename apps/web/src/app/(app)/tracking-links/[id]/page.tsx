@@ -28,6 +28,7 @@ import {
   LinkSwapPanel,
   type LinkSwapAccount,
 } from "@/components/entities/link-swap-form";
+import { HealthConfigPanel } from "@/components/entities/health-config-panel";
 import { getLang } from "@/i18n/lang";
 import { getDictionary } from "@/i18n/dictionaries";
 
@@ -173,6 +174,13 @@ export default async function TrackingLinkDetailPage({
       />
       <OfferSelectionTest trackingLinkId={link.id} />
       <TestClickChain trackingLinkId={link.id} />
+      <div className="mt-6">
+        <HealthConfigPanel
+          trackingLinkId={link.id}
+          initialIntervalSec={link.healthCheckIntervalSec ?? 3600}
+          initialSource={link.linkSource ?? "MANUAL"}
+        />
+      </div>
       <SectionTitle>{d.bindingsTitle}</SectionTitle>
       <DataTable<TrackingLinkOfferBinding>
         columns={bindingColumns}

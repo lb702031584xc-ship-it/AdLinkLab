@@ -54,4 +54,48 @@ export async function registerDeadLinkRoutes(
     const summary = await checkAllActiveLinks(prisma, tenantId);
     return { ok: true, tenantId, ...summary };
   });
+
+  // Per-link health check config: interval (seconds, min 600) + source label.
+  app.patch<{
+    Params: { id: string };
+    Body: { healthCheckIntervalSec?: number; linkSource?: string };
+  }>("/api/v1/tracking-links/:id/health-config", async (request, reply) => {
+    const tenantId = requireTenant(auth, request);
+    const { id } = request.params;
+    const { healthCheckIntervalSec, linkSource } = request.body ?? {};
+
+    const link = await prisma.trackingLink.findFirst({
+      where: { id, tenantId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!link) {
+      reply.code(404);
+      return { ok: false, error: "tracking link not found" };
+    }
+
+    const data: { healthCheckIntervalSec?: number; linkSource?: string } = {};
+    if (healthCheckIntervalSec !== undefined) {
+      const sec = Math.floor(Number(healthCheckIntervalSec));
+      if (!Number.isFinite(sec) || sec < 600 || sec > 86400 * 7) {
+        reply.code(400);
+        return { ok: false, error: "healthCheckIntervalSec must be 600..604800" };
+      }
+      data.healthCheckIntervalSec = sec;
+    }
+    if (linkSource !== undefined) {
+      const src = String(linkSource).toUpperCase();
+      if (src !== "MANUAL" && src !== "AUTO") {
+        reply.code(400);
+        return { ok: false, error: "linkSource must be MANUAL or AUTO" };
+      }
+      data.linkSource = src;
+    }
+
+    const updated = await prisma.trackingLink.update({
+      where: { id },
+      data,
+      select: { id: true, healthCheckIntervalSec: true, linkSource: true },
+    });
+    return { ok: true, ...updated };
+  });
 }
