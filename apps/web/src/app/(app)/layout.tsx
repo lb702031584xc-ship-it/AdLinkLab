@@ -64,6 +64,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
             { href: "/offers/new", label: ni.offerNewImport },
             { href: "/ai/analyze", label: t.ai.nav.analyze },
             { href: "/ai/terms", label: t.ai.nav.terms },
+            { href: "/ai/traffic-planner", label: t.ai.nav.trafficPlanner },
             { href: "/ai/compliance", label: t.ai.nav.compliance },
             { href: "/ai/profit", label: t.ai.nav.profit },
             { href: "/landing-pages", label: t.common.nav.landingPages },

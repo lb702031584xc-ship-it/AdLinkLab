@@ -26,6 +26,9 @@ import {
   type AiUrlCheckResponse,
   type AnalyzeInput,
   type SaveSettingsInput,
+  type TrafficPlanInput,
+  type TrafficPlanResult,
+  analyzeTrafficPlan,
 } from "./ai";
 import type {
   ProfitAnalysisInput,
@@ -197,5 +200,25 @@ export async function analyzeProfitAction(
     return { ok: true, data };
   } catch (e) {
     return mapAiActionError(e, t, lang === "zh" ? "盈利测算失败，请稍后重试。" : "Profit analysis failed, please try again.");
+  }
+}
+
+export async function analyzeTrafficPlanAction(
+  input: Omit<TrafficPlanInput, "language">
+): Promise<AiActionResult<TrafficPlanResult>> {
+  const lang = await getLang();
+  const t = getDictionary(lang);
+  try {
+    const data = await analyzeTrafficPlan({
+      ...input,
+      language: lang,
+    });
+    return { ok: true, data };
+  } catch (e) {
+    return mapAiActionError(
+      e,
+      t,
+      lang === "zh" ? "投流分析失败，请稍后重试。" : "Traffic plan analysis failed, please try again."
+    );
   }
 }

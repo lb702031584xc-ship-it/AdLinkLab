@@ -280,6 +280,68 @@ export async function analyzeTerms(
   });
 }
 
+export interface TrafficPlanKeywordInput {
+  keyword: string;
+  volume?: number;
+  cpc?: number;
+  plannerLow?: number;
+  plannerHigh?: number;
+  competition?: string;
+  density?: number;
+  intent?: string;
+}
+
+export interface TrafficPlanInput {
+  mode: "landing" | "direct";
+  brandPolicy: "allowed" | "forbidden";
+  offerName: string;
+  payout?: number;
+  network?: string;
+  cookieDays?: number;
+  epc?: number;
+  networkCvr?: number;
+  refundRate?: number;
+  bestPayout?: number;
+  bestPayoutNetwork?: string;
+  competitorAds?: string;
+  spyfuKeywords?: string;
+  spyfuBudgetTrend?: string;
+  similarwebNotes?: string;
+  keywords: TrafficPlanKeywordInput[];
+  negativeKeywords: string[];
+  targetProfitMargin?: number;
+  notes?: string;
+  language?: string;
+}
+
+export interface TrafficPlanMathRow {
+  keyword: string;
+  refCpc: number | null;
+  breakEvenCvrPct: number | null;
+  maxBid: number | null;
+  affordable: boolean | null;
+  verdict: string;
+}
+
+export interface TrafficPlanResult {
+  id: string;
+  language: string;
+  combo: string;
+  report: string;
+  math: { rows: TrafficPlanMathRow[]; epcVerdict: string | null };
+  analyzedAt: string;
+}
+
+/** 投流决策分析：2×2 组合 + EPC 优先，返回五板块 markdown 报告。 */
+export async function analyzeTrafficPlan(
+  input: TrafficPlanInput
+): Promise<TrafficPlanResult> {
+  return aiFetch<TrafficPlanResult>("/api/v1/ai/traffic-plan", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
 /** Batch-screen up to 10 offers' terms, ranked go → caution → stop. */
 export async function screenOffers(
   items: AiScreenItemInput[],

@@ -18,6 +18,14 @@ import {
   encryptSecret,
 } from "../ai/crypto.js";
 import { AiError, chatJson, chatJsonValidated } from "../ai/llm.js";
+import {
+  buildTrafficPlanPrompt,
+  computeKeywordMath,
+  getComboProfile,
+  type BrandPolicy,
+  type TrafficMode,
+  type TrafficPlanInput,
+} from "../ai/traffic-planner.js";
 import { fetchPage } from "../ai/fetch-page.js";
 import {
   checkUrlVerdict,
@@ -506,6 +514,121 @@ export async function registerAiRoutes(
       },
     });
     return { id, language, terms, analyzedAt: new Date().toISOString() };
+  });
+
+  /**
+   * 投流决策分析：2×2 组合（落地页/直链 × 可投品牌词/不可投品牌词），
+   * EPC 优先判断，输出五板块中文报告（markdown）。
+   */
+  app.post("/api/v1/ai/traffic-plan", async (request) => {
+    const info = await requireSession(deps, request);
+    const body = (request.body ?? {}) as Record<string, unknown>;
+
+    const mode = body.mode === "direct" ? "direct" : "landing";
+    const brandPolicy = body.brandPolicy === "forbidden" ? "forbidden" : "allowed";
+    const offerName = asTrimmedString(body.offerName);
+    if (!offerName) {
+      throw new ValidationError("offerName is required");
+    }
+
+    const keywords = Array.isArray(body.keywords)
+      ? (body.keywords as Record<string, unknown>[])
+          .map((k) => ({
+            keyword: asTrimmedString(k.keyword) ?? "",
+            volume: asFiniteNumber(k.volume),
+            cpc: asFiniteNumber(k.cpc),
+            plannerLow: asFiniteNumber(k.plannerLow),
+            plannerHigh: asFiniteNumber(k.plannerHigh),
+            competition: asTrimmedString(k.competition),
+            density: asFiniteNumber(k.density),
+            intent: asTrimmedString(k.intent),
+          }))
+          .filter((k) => k.keyword.length > 0)
+          .slice(0, 50)
+      : [];
+    const negativeKeywords = Array.isArray(body.negativeKeywords)
+      ? (body.negativeKeywords as unknown[])
+          .map((n) => String(n ?? "").trim())
+          .filter(Boolean)
+          .slice(0, 200)
+      : [];
+
+    const input: TrafficPlanInput = {
+      mode: mode as TrafficMode,
+      brandPolicy: brandPolicy as BrandPolicy,
+      language: body.language === "en" ? "en" : "zh",
+      offerName,
+      payout: asFiniteNumber(body.payout) ?? undefined,
+      network: asTrimmedString(body.network) || undefined,
+      cookieDays: asFiniteNumber(body.cookieDays) ?? undefined,
+      epc: asFiniteNumber(body.epc) ?? undefined,
+      networkCvr: asFiniteNumber(body.networkCvr) ?? undefined,
+      refundRate: asFiniteNumber(body.refundRate) ?? undefined,
+      bestPayout: asFiniteNumber(body.bestPayout) ?? undefined,
+      bestPayoutNetwork: asTrimmedString(body.bestPayoutNetwork) || undefined,
+      competitorAds: asTrimmedString(body.competitorAds) || undefined,
+      spyfuKeywords: asTrimmedString(body.spyfuKeywords) || undefined,
+      spyfuBudgetTrend: asTrimmedString(body.spyfuBudgetTrend) || undefined,
+      similarwebNotes: asTrimmedString(body.similarwebNotes) || undefined,
+      keywords,
+      negativeKeywords,
+      targetProfitMargin: asFiniteNumber(body.targetProfitMargin) ?? 0.5,
+      notes: asTrimmedString(body.notes) || undefined,
+    };
+
+    const settings = await readSettings(prisma);
+    if (!isConfigured(settings)) {
+      throw new AppError("AI is not configured", {
+        code: "AI_NOT_CONFIGURED",
+        statusCode: 400,
+      });
+    }
+
+    const pepper = assertAiSettingsPepperConfigured();
+    const apiKey = decryptSecret(settings.apiKeyEnc as string, pepper);
+    const profile = getComboProfile(input.mode, input.brandPolicy);
+    const math = computeKeywordMath(input, profile);
+    const { system, user } = buildTrafficPlanPrompt(input);
+
+    let report: string;
+    try {
+      const raw = (await chatJsonImpl({
+        baseUrl: settings.baseUrl as string,
+        model: settings.model as string,
+        apiKey,
+        system: system + "\nReturn JSON: {\"report\": \"<markdown report>\"}",
+        user,
+      })) as { report?: unknown };
+      report = typeof raw?.report === "string" ? raw.report : JSON.stringify(raw);
+    } catch (e) {
+      if (e instanceof AiError) throw e;
+      throw new AiError("LLM request failed");
+    }
+
+    const id = randomUUID();
+    await prisma.aiAnalysis.create({
+      data: {
+        id,
+        tenantId: info.tenantId,
+        userId: info.id,
+        inputKind: "traffic-plan",
+        inputRef: createHash("sha256").update(offerName, "utf8").digest("hex").slice(0, 16),
+        merchant: input.offerName,
+        network: input.network ?? null,
+        payout: input.payout ?? null,
+        payoutCurrency: "USD",
+        estimatedCpc: null,
+        result: { report, combo: profile.key, math } as never,
+      },
+    });
+    return {
+      id,
+      language: input.language,
+      combo: profile.key,
+      report,
+      math,
+      analyzedAt: new Date().toISOString(),
+    };
   });
 
   /**
