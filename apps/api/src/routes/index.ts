@@ -241,6 +241,12 @@ export async function registerRoutes(
     // 流量需求门阈值管理 (2026-10-09)
     const { registerTrafficRoutes } = await import("./traffic.js");
     registerTrafficRoutes(app, { prisma: services.prisma });
+    // multipart 只注册一次（Fastify 同一实例重复注册会 FST_ERR_DEC_ALREADY_PRESENT 导致启动崩溃）。
+    // 上限取各上传场景的最大值（offer-metrics OCR 8MB / keepa vision 5MB），各 handler 内部仍做流式精确校验。
+    const { default: multipart } = await import("@fastify/multipart");
+    await app.register(multipart, {
+      limits: { files: 3, fileSize: 8 * 1024 * 1024 },
+    });
     // Offer 最终链接指标抓取 + 推荐指数 (2026-10-10)
     const offerMetricsModule = await import("./offer-metrics.js");
     attachMetricsSummaries = offerMetricsModule.attachMetricsSummaries;

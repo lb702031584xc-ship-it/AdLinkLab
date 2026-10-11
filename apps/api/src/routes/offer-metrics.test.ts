@@ -95,6 +95,11 @@ async function buildApp(
   } = {}
 ) {
   const app = Fastify({ logger: false });
+  // 与生产一致：multipart 由 routes/index.ts 统一注册一次，模块不再自注册
+  const { default: multipart } = await import("@fastify/multipart");
+  await app.register(multipart, {
+    limits: { files: 3, fileSize: 8 * 1024 * 1024 },
+  });
   app.addHook("onRequest", (request, _reply, done) => {
     request.sessionAuth = {
       id: "u1",

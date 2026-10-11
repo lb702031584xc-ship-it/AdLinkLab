@@ -12,7 +12,6 @@
  */
 import { randomUUID } from "node:crypto";
 import { Redis } from "ioredis";
-import multipart from "@fastify/multipart";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { PrismaClient } from "@adlinklab/database";
 import {
@@ -160,10 +159,8 @@ export async function registerOfferMetricsRoutes(
 ): Promise<void> {
   const { prisma } = deps;
 
-  // multipart：仅本模块的 OCR 上传用。图片只在内存里处理，不落盘。
-  await app.register(multipart, {
-    limits: { files: 1, fileSize: OCR_MAX_BYTES },
-  });
+  // multipart 已在 routes/index.ts 统一注册一次（重复注册会导致启动崩溃）。
+  // 上传大小由本 handler 内部流式校验（OCR_MAX_BYTES），不依赖插件层 limits。
 
   app.post<{
     Params: { id: string };

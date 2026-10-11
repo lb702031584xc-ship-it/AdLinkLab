@@ -16,7 +16,6 @@
 import { Redis } from "ioredis";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { PrismaClient } from "@adlinklab/database";
-import multipart from "@fastify/multipart";
 import {
   AppError,
   UnauthorizedError,
@@ -248,11 +247,8 @@ export function registerKeepaRoutes(app: FastifyInstance, deps: Deps): Promise<v
   const visionImpl = deps.visionImpl ?? chatJsonVision;
 
   return (async () => {
-  // multipart：仅本模块的 vision-judge 上传用。图片只在内存里处理，不落盘。
-  // fileSize 由插件在流层面强制执行，超限错误在 readVisionUploads 里转成友好文案。
-  await app.register(multipart, {
-    limits: { files: 3, fileSize: VISION_MAX_BYTES },
-  });
+  // multipart 已在 routes/index.ts 统一注册一次（重复注册会导致启动崩溃）。
+  // 上传大小由 readVisionUploads 内部流式校验（VISION_MAX_BYTES），不依赖插件层 limits。
 
   /** Keepa API Key 是否已配置（只返回布尔值）。 */
   app.get("/api/v1/keepa/status", async (request) => {
