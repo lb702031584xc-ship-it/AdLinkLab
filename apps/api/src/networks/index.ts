@@ -10,6 +10,7 @@ import { CJAdapter } from "./cj-adapter.js";
 import { ShareASaleAdapter } from "./shareasale-adapter.js";
 import { RakutenAdapter } from "./rakuten-adapter.js";
 import { FlexOffersAdapter } from "./flexoffers-adapter.js";
+import { PartnerBoostAdapter } from "./partnerboost-adapter.js";
 import type { NetworkAdapter } from "./types.js";
 
 export const SUPPORTED_NETWORK_KINDS = [
@@ -19,6 +20,7 @@ export const SUPPORTED_NETWORK_KINDS = [
   "shareasale",
   "rakuten",
   "flexoffers",
+  "partnerboost",
 ] as const;
 export type SupportedNetworkKind = (typeof SUPPORTED_NETWORK_KINDS)[number];
 
@@ -29,6 +31,7 @@ const ADAPTERS: Record<SupportedNetworkKind, NetworkAdapter> = {
   shareasale: new ShareASaleAdapter(),
   rakuten: new RakutenAdapter(),
   flexoffers: new FlexOffersAdapter(),
+  partnerboost: new PartnerBoostAdapter(),
 };
 
 export function getAdapter(kind: string): NetworkAdapter {
