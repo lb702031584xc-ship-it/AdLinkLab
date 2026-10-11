@@ -95,7 +95,7 @@ export function AffiliateSopClient({
           >
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-bold text-ink">
-                {dict.dayLabel(day.day)}：{day.title}
+                {dict.dayLabel.replace("{n}", String(day.day))}：{day.title}
               </h2>
               {dayComplete && <span className="text-xl">✅</span>}
             </div>

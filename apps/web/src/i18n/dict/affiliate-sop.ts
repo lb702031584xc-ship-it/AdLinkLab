@@ -15,7 +15,7 @@ export interface AffiliateSopDict {
   progress: string;
   reset: string;
   resetConfirm: string;
-  dayLabel: (n: number) => string;
+  dayLabel: string;
   goalLabel: string;
   checklistLabel: string;
   profitTipLabel: string;
@@ -31,7 +31,7 @@ export const zh: AffiliateSopDict = {
   progress: "完成进度",
   reset: "重置进度",
   resetConfirm: "确定要清空所有勾选进度吗？",
-  dayLabel: (n) => `第 ${n} 天`,
+  dayLabel: "第 {n} 天",
   goalLabel: "今日目标",
   checklistLabel: "Checklist",
   profitTipLabel: "💰 盈利加速建议",
@@ -165,7 +165,7 @@ export const en: AffiliateSopDict = {
   progress: "Progress",
   reset: "Reset progress",
   resetConfirm: "Clear all checked progress?",
-  dayLabel: (n) => `Day ${n}`,
+  dayLabel: "Day {n}",
   goalLabel: "Today's goal",
   checklistLabel: "Checklist",
   profitTipLabel: "💰 Profit acceleration tips",
