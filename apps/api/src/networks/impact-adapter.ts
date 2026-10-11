@@ -171,6 +171,7 @@ function readNumPages(body: unknown): number | null {
 export class ImpactAdapter implements NetworkAdapter {
   readonly kind = "impact";
   readonly displayName = "Impact";
+  readonly defaultBaseUrl = IMPACT_DEFAULT_BASE_URL;
 
   async pullOffers(ctx: AdapterContext): Promise<NetworkOffer[]> {
     const creds = parseImpactCredentials(ctx.apiKey);

@@ -189,6 +189,7 @@ function parseCommission(raw: unknown): number | null {
 export class PartnerBoostAdapter implements NetworkAdapter {
   readonly kind = "partnerboost";
   readonly displayName = "PartnerBoost";
+  readonly defaultBaseUrl = PARTNERBOOST_DEFAULT_BASE_URL;
 
   async pullOffers(
     ctx: AdapterContext,

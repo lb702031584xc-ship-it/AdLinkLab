@@ -18,7 +18,6 @@ import {
   resolveNetworkApiPepper,
 } from "../networks/network-crypto.js";
 import { getAdapter } from "../networks/index.js";
-import { IMPACT_DEFAULT_BASE_URL } from "../networks/impact-adapter.js";
 import type { NetworkAdapter, NetworkOffer } from "../networks/types.js";
 
 export interface NetworkPullLog {
@@ -154,7 +153,7 @@ export async function pullNetwork(
 
     const offers = await adapter.pullOffers({
       apiKey,
-      apiBaseUrl: (network.apiBaseUrl ?? "").trim() || IMPACT_DEFAULT_BASE_URL,
+      apiBaseUrl: (network.apiBaseUrl ?? "").trim() || adapter.defaultBaseUrl,
       tenantId,
     });
 

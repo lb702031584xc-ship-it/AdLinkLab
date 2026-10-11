@@ -31,6 +31,7 @@ export function parseAwinCredentials(apiKey: string): { apiToken: string } {
 export class AwinAdapter implements NetworkAdapter {
   readonly kind = "awin";
   readonly displayName = "Awin";
+  readonly defaultBaseUrl = AWIN_DEFAULT_BASE_URL;
 
   async pullOffers(ctx: AdapterContext): Promise<NetworkOffer[]> {
     void ctx;

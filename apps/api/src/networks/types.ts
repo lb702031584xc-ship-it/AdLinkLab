@@ -50,5 +50,7 @@ export interface NetworkAdapter {
   readonly kind: string;
   /** Human label for the web UI. */
   readonly displayName: string;
+  /** Production API base URL used when the user leaves apiBaseUrl empty. */
+  readonly defaultBaseUrl: string;
   pullOffers(ctx: AdapterContext): Promise<NetworkOffer[]>;
 }

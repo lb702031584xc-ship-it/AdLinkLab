@@ -383,6 +383,7 @@ export function scoreAmazonProduct(p: AmazonProduct): number {
 export class AmazonAdapter implements NetworkAdapter {
   readonly kind = "amazon";
   readonly displayName = "Amazon";
+  readonly defaultBaseUrl = "https://api.amazon.com";
 
   async pullOffers(ctx: AdapterContext): Promise<NetworkOffer[]> {
     // Amazon 走选品流程而非全量拉取，这里返回空，实际用 searchAmazonProducts

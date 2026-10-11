@@ -15,6 +15,7 @@ export const SHAREASALE_DEFAULT_BASE_URL = "https://api.shareasale.com";
 export class ShareASaleAdapter implements NetworkAdapter {
   readonly kind = "shareasale";
   readonly displayName = "ShareASale";
+  readonly defaultBaseUrl = SHAREASALE_DEFAULT_BASE_URL;
   async pullOffers(ctx: AdapterContext): Promise<NetworkOffer[]> {
     void ctx;
     throw new NetworkAdapterError("NOT_IMPLEMENTED", "ShareASale adapter is a stub");

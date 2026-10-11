@@ -22,6 +22,7 @@ export const CJ_DEFAULT_TIMEOUT_MS = 15_000;
 export class CJAdapter implements NetworkAdapter {
   readonly kind = "cj";
   readonly displayName = "CJ Affiliate";
+  readonly defaultBaseUrl = CJ_DEFAULT_BASE_URL;
 
   async pullOffers(ctx: AdapterContext): Promise<NetworkOffer[]> {
     void ctx;

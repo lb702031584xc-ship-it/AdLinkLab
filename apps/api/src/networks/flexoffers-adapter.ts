@@ -15,6 +15,7 @@ export const FLEXOFFERS_DEFAULT_BASE_URL = "https://api.flexoffers.com";
 export class FlexOffersAdapter implements NetworkAdapter {
   readonly kind = "flexoffers";
   readonly displayName = "FlexOffers";
+  readonly defaultBaseUrl = FLEXOFFERS_DEFAULT_BASE_URL;
   async pullOffers(ctx: AdapterContext): Promise<NetworkOffer[]> {
     void ctx;
     throw new NetworkAdapterError("NOT_IMPLEMENTED", "FlexOffers adapter is a stub");

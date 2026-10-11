@@ -15,6 +15,7 @@ export const RAKUTEN_DEFAULT_BASE_URL = "https://api.rakutenadvertising.com";
 export class RakutenAdapter implements NetworkAdapter {
   readonly kind = "rakuten";
   readonly displayName = "Rakuten Advertising";
+  readonly defaultBaseUrl = RAKUTEN_DEFAULT_BASE_URL;
   async pullOffers(ctx: AdapterContext): Promise<NetworkOffer[]> {
     void ctx;
     throw new NetworkAdapterError("NOT_IMPLEMENTED", "Rakuten adapter is a stub");

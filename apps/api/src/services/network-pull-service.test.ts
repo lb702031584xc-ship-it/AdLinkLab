@@ -104,6 +104,7 @@ function stubAdapter(offers: NetworkOffer[]): NetworkAdapter {
   return {
     kind: "impact",
     displayName: "Impact",
+    defaultBaseUrl: "https://api.impact.com",
     pullOffers: async () => offers,
   };
 }
@@ -256,5 +257,52 @@ describe("pullAllConfiguredNetworks", () => {
     const results = await pullAllConfiguredNetworks(deps);
     expect(results).toHaveLength(1);
     expect(results[0]!.status).toBe("SUCCESS");
+  });
+});
+
+describe("per-adapter defaultBaseUrl (regression: no hardcoded Impact fallback)", () => {
+  it("uses the adapter's own defaultBaseUrl when network.apiBaseUrl is empty", async () => {
+    let capturedBaseUrl = "";
+    const adapter: NetworkAdapter = {
+      kind: "partnerboost",
+      displayName: "PartnerBoost",
+      defaultBaseUrl: "https://app.partnerboost.com",
+      pullOffers: async (ctx) => {
+        capturedBaseUrl = ctx.apiBaseUrl;
+        return [];
+      },
+    };
+    const ctx: Ctx = {
+      networks: [networkRow({ kind: "partnerboost", apiBaseUrl: null })],
+      offers: [],
+      pulls: [],
+    };
+    const deps = buildDeps(ctx, adapter);
+    await pullNetwork(deps, TENANT, NETWORK);
+    expect(capturedBaseUrl).toBe("https://app.partnerboost.com");
+    expect(capturedBaseUrl).not.toContain("impact.com");
+  });
+
+  it("prefers the user-configured apiBaseUrl over the adapter default", async () => {
+    let capturedBaseUrl = "";
+    const adapter: NetworkAdapter = {
+      kind: "partnerboost",
+      displayName: "PartnerBoost",
+      defaultBaseUrl: "https://app.partnerboost.com",
+      pullOffers: async (ctx) => {
+        capturedBaseUrl = ctx.apiBaseUrl;
+        return [];
+      },
+    };
+    const ctx: Ctx = {
+      networks: [
+        networkRow({ kind: "partnerboost", apiBaseUrl: "https://custom.example.com/" }),
+      ],
+      offers: [],
+      pulls: [],
+    };
+    const deps = buildDeps(ctx, adapter);
+    await pullNetwork(deps, TENANT, NETWORK);
+    expect(capturedBaseUrl).toBe("https://custom.example.com/");
   });
 });
