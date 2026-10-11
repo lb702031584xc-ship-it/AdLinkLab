@@ -11,6 +11,8 @@ export interface ManualGuideStep {
   intro: string[];
   checklist: string[];
   tools: { label: string; href: string; external?: boolean }[];
+  /** 可跳过：卡片上显示"跳过这步"按钮，一键勾选全部事项 */
+  skippable?: boolean;
 }
 
 export interface AmazonManualGuideDict {
@@ -20,6 +22,7 @@ export interface AmazonManualGuideDict {
   progressText: string; // "{done}/{total}"
   stepDone: string;
   stepTodo: string;
+  skipStep: string;
   expand: string;
   collapse: string;
   categoriesTitle: string;
@@ -127,6 +130,7 @@ export const zh: AmazonManualGuideDict = {
   progressText: "{done}/{total}",
   stepDone: "已完成",
   stepTodo: "进行中",
+  skipStep: "跳过这步",
   expand: "展开",
   collapse: "收起",
   categoriesTitle: "选择你的 2 个类目",
@@ -338,10 +342,12 @@ export const zh: AmazonManualGuideDict = {
       id: "reviews",
       dayLabel: "Day 6–7",
       title: "差评挖掘：找切入点，定 3 个测试品",
+      skippable: true,
       intro: [
         "最后一步：看剩下候选品的差评。重点看 3.5–4.2 星的产品——评分太高没改进空间，太低是质量问题碰不得。",
         "差评分类：如果集中吐槽“质量差”“与描述不符”→ 避开；如果吐槽“缺某个功能”“尺寸不对”“说明书看不懂”→ 这就是切入点，找有改进款的品。",
         "定出 3 个测试品，记下 ASIN，送入选品流水线跑 6 道门。手动流程到此结束，后面交给数据。",
+        "赶时间可以直接点下方“跳过这步”——Keepa 验证过的品基本盘已经够稳，差评挖掘是加分项不是必答题。",
       ],
       checklist: [
         "每个候选品读 20 条以上差评",
@@ -365,6 +371,7 @@ export const en: AmazonManualGuideDict = {
   progressText: "{done}/{total}",
   stepDone: "Done",
   stepTodo: "In progress",
+  skipStep: "Skip this step",
   expand: "Expand",
   collapse: "Collapse",
   categoriesTitle: "Pick your 2 categories",
@@ -576,10 +583,12 @@ export const en: AmazonManualGuideDict = {
       id: "reviews",
       dayLabel: "Day 6–7",
       title: "Review mining: find entry points, lock 3 test products",
+      skippable: true,
       intro: [
         "Final step: read the bad reviews of remaining candidates. Focus on 3.5–4.2 star products — higher ratings leave no improvement room, lower ones mean quality problems to avoid.",
         "Classify complaints: “poor quality” / “not as described” → avoid; “missing feature” / “wrong size” / “confusing manual” → that's your entry point, find improved versions.",
         "Lock in 3 test products, note their ASINs, and send them to the product pipeline for the 6 gates. The manual flow ends here — data takes over.",
+        "Short on time? Hit “Skip this step” below — products validated by Keepa are already solid; review mining is a bonus, not a must.",
       ],
       checklist: [
         "Read 20+ bad reviews per candidate",

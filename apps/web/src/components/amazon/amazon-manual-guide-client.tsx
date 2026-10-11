@@ -624,15 +624,17 @@ function StepCard({
   onToggle,
   checks,
   onCheck,
+  onSkipStep,
   children,
   scanLinks,
 }: {
-  step: { id: string; dayLabel: string; title: string; intro: string[]; checklist: string[]; tools: { label: string; href: string; external?: boolean }[] };
+  step: { id: string; dayLabel: string; title: string; intro: string[]; checklist: string[]; tools: { label: string; href: string; external?: boolean }[]; skippable?: boolean };
   d: AmazonManualGuideDict;
   open: boolean;
   onToggle: () => void;
   checks: Record<string, boolean>;
   onCheck: (key: string, v: boolean) => void;
+  onSkipStep: () => void;
   children?: React.ReactNode;
   scanLinks?: string[];
 }) {
@@ -703,6 +705,17 @@ function StepCard({
               );
             })}
           </ul>
+          {step.skippable && !complete && (
+            <div className="pt-1">
+              <button
+                type="button"
+                onClick={onSkipStep}
+                className="rounded-lg border border-dashed border-ink/25 px-3 py-1.5 text-sm text-ink/60 transition hover:border-ink/50 hover:text-ink"
+              >
+                {d.skipStep} →
+              </button>
+            </div>
+          )}
           {children}
           {step.tools.length > 0 && (
             <div className="flex flex-wrap gap-2">
@@ -844,6 +857,12 @@ export function AmazonManualGuideClient({
   const removeRow = (id: string) => setCandidates((prev) => prev.filter((r) => r.id !== id));
 
   const onCheck = (key: string, v: boolean) => setChecks((prev) => ({ ...prev, [key]: v }));
+  const onSkipStep = (stepId: string, count: number) =>
+    setChecks((prev) => {
+      const next = { ...prev };
+      for (let i = 0; i < count; i++) next[`${stepId}:${i}`] = true;
+      return next;
+    });
   const toggleStep = (id: string) => setOpen((prev) => ({ ...prev, [id]: !prev[id] }));
 
   const addFromUrl = async () => {
@@ -929,6 +948,7 @@ export function AmazonManualGuideClient({
           onToggle={() => toggleStep(step.id)}
           checks={checks}
           onCheck={onCheck}
+          onSkipStep={() => onSkipStep(step.id, step.checklist.length)}
           scanLinks={step.id === "scan" ? scanLinks : undefined}
         >
           {step.id === "categories" && (
