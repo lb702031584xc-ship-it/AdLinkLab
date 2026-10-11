@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { AmazonManualGuideDict } from "@/i18n/dict/amazon-manual-guide";
 import {
@@ -19,6 +20,15 @@ const LS_CANDIDATES = "adlinklab-manual-guide-candidates";
 const LS_COUNTRY = "adlinklab-manual-guide-country";
 const LS_KEEPA_CHECKED = "adlinklab-manual-guide-keepa-checked";
 const LS_KEEPA_VERDICTS = "adlinklab-manual-guide-keepa-verdicts";
+// 与 amazon-pipeline-client.tsx 的 PIPELINE_IMPORT_KEY 同值；定品台写入后流水线页"导入"可直接读取
+const PIPELINE_IMPORT_KEY = "adlinklab-pipeline-input";
+const LS_REVIEW_TAGS = "adlinklab-manual-guide-review-tags";
+
+interface ReviewTag {
+  decided?: boolean;
+  quality?: boolean;
+  featureGap?: boolean;
+}
 
 // 扫榜三榜单路径（与 scan 步骤 checklist 前三项一一对应）
 const SCAN_PATHS = ["/Best-Sellers/zgbs", "/gp/movers-and-shakers", "/gp/new-releases"];
@@ -617,6 +627,136 @@ function VisionModal({
   );
 }
 
+/**
+ * Day 6–7 定品台：只列 Day 5 没被淘汰的候选品。
+ * - 点产品名直达亚马逊页面看差评
+ * - 每品可打标签：✅定下 / 🚫质量问题 / 💡功能缺口（定下与质量问题互斥）
+ * - 一键把定下的品写入流水线导入（sessionStorage），跳到 /amazon/pipeline
+ */
+function ReviewDecidePanel({
+  d,
+  candidates,
+  verdicts,
+  reviewTags,
+  dpUrl,
+  onToggleTag,
+  onSend,
+}: {
+  d: AmazonManualGuideDict;
+  candidates: CandidateRow[];
+  verdicts: Record<string, VisionVerdictStored>;
+  reviewTags: Record<string, ReviewTag>;
+  dpUrl: (asin: string) => string | null;
+  onToggleTag: (id: string, key: "decided" | "quality" | "featureGap") => void;
+  onSend: (
+    items: Array<{ asin?: string; title: string; detailPageUrl?: string; opportunity?: boolean }>
+  ) => void;
+}) {
+  const survivors = candidates.filter((r) => verdicts[r.id]?.verdict !== "kill");
+  const decided = survivors.filter((r) => reviewTags[r.id]?.decided && !reviewTags[r.id]?.quality);
+
+  const pill = (active: boolean, activeCls: string) =>
+    `shrink-0 rounded-full border px-2.5 py-1 text-xs font-medium transition ${
+      active ? activeCls : "border-ink/20 text-ink/60 hover:border-ink/40 hover:text-ink"
+    }`;
+
+  const handleSend = () => {
+    onSend(
+      decided.map((r) => ({
+        asin: r.asin.trim().toUpperCase() || undefined,
+        title: r.name || r.asin.trim().toUpperCase(),
+        detailPageUrl: dpUrl(r.asin) ?? undefined,
+        opportunity: reviewTags[r.id]?.featureGap === true,
+      }))
+    );
+  };
+
+  return (
+    <div className="rounded-xl border border-ink/10 bg-white p-4">
+      <p className="text-sm font-semibold text-ink">{d.reviewDecideTitle}</p>
+      <p className="mt-1 text-xs leading-5 text-ink/60">{d.reviewDecideHint}</p>
+      {survivors.length === 0 ? (
+        <p className="mt-2 text-xs text-amber-700">{d.noPassCandidates}</p>
+      ) : (
+        <>
+          <ul className="mt-3 space-y-1.5">
+            {survivors.map((r, i) => {
+              const v = verdicts[r.id];
+              const tags = reviewTags[r.id] ?? {};
+              const link = dpUrl(r.asin);
+              const badgeCls =
+                !v || v.verdict === "unknown"
+                  ? "bg-ink/10 text-ink/60"
+                  : "bg-emerald-100 text-emerald-800";
+              const badgeLabel =
+                !v || v.verdict === "unknown" ? d.keepaVerdictUnknown : d.keepaVerdictPass;
+              return (
+                <li key={r.id} className="rounded-lg border border-ink/10 px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 shrink-0 text-xs text-ink/50">{i + 1}</span>
+                    {link ? (
+                      <a
+                        href={link}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="min-w-0 flex-1 truncate text-sm text-sky-700 underline underline-offset-2 hover:text-sky-900"
+                      >
+                        {r.name || d.unnamedProduct} ↗
+                      </a>
+                    ) : (
+                      <span className="min-w-0 flex-1 truncate text-sm text-ink/85">
+                        {r.name || d.unnamedProduct}
+                      </span>
+                    )}
+                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${badgeCls}`}>
+                      {badgeLabel}
+                    </span>
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap gap-1.5 pl-8">
+                    <button
+                      type="button"
+                      onClick={() => onToggleTag(r.id, "decided")}
+                      className={pill(!!tags.decided, "border-emerald-600 bg-emerald-600 text-white")}
+                    >
+                      {d.tagDecided}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onToggleTag(r.id, "quality")}
+                      className={pill(!!tags.quality, "border-red-600 bg-red-600 text-white")}
+                    >
+                      {d.tagQuality}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onToggleTag(r.id, "featureGap")}
+                      className={pill(!!tags.featureGap, "border-amber-500 bg-amber-500 text-white")}
+                    >
+                      {d.tagFeatureGap}
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+          <div className="mt-3 flex items-center gap-3">
+            <button
+              type="button"
+              disabled={decided.length === 0}
+              onClick={handleSend}
+              title={decided.length === 0 ? d.noDecided : undefined}
+              className="rounded-lg bg-ink px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-40"
+            >
+              {d.sendDecided.replace("{n}", String(decided.length))}
+            </button>
+            {decided.length === 0 && <span className="text-xs text-ink/50">{d.noDecided}</span>}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function StepCard({
   step,
   d,
@@ -766,6 +906,8 @@ export function AmazonManualGuideClient({
   const [parseError, setParseError] = useState("");
   const [keepaChecked, setKeepaChecked] = useState<string[]>([]);
   const [verdicts, setVerdicts] = useState<Record<string, VisionVerdictStored>>({});
+  const [reviewTags, setReviewTags] = useState<Record<string, ReviewTag>>({});
+  const router = useRouter();
   const [llmOk, setLlmOk] = useState<boolean | null>(null);
   const [visionTarget, setVisionTarget] = useState<{
     id: string;
@@ -782,6 +924,7 @@ export function AmazonManualGuideClient({
     setCountry(loadJson(LS_COUNTRY, "US"));
     setKeepaChecked(loadJson<string[]>(LS_KEEPA_CHECKED, []));
     setVerdicts(loadJson<Record<string, VisionVerdictStored>>(LS_KEEPA_VERDICTS, {}));
+    setReviewTags(loadJson<Record<string, ReviewTag>>(LS_REVIEW_TAGS, {}));
     setReady(true);
   }, []);
 
@@ -811,6 +954,9 @@ export function AmazonManualGuideClient({
   useEffect(() => {
     if (ready) localStorage.setItem(LS_KEEPA_CHECKED, JSON.stringify(keepaChecked));
   }, [keepaChecked, ready]);
+  useEffect(() => {
+    if (ready) localStorage.setItem(LS_REVIEW_TAGS, JSON.stringify(reviewTags));
+  }, [reviewTags, ready]);
   useEffect(() => {
     if (ready) localStorage.setItem(LS_KEEPA_VERDICTS, JSON.stringify(verdicts));
   }, [verdicts, ready]);
@@ -1254,16 +1400,39 @@ export function AmazonManualGuideClient({
           )}
 
           {step.id === "reviews" && (
-            <div className="rounded-xl border border-ink/10 bg-ink/[0.03] p-4">
-              <p className="text-sm font-semibold text-ink">{d.finalPickTitle}</p>
-              <p className="mt-1 text-xs leading-5 text-ink/65">{d.finalPickHint}</p>
-              <Link
-                href="/amazon/pipeline"
-                className="mt-3 inline-block rounded-lg bg-ink px-4 py-2 text-sm font-medium text-white transition hover:opacity-90"
-              >
-                {d.goPipeline}
-              </Link>
-            </div>
+            <>
+              <ReviewDecidePanel
+                d={d}
+                candidates={candidates}
+                verdicts={verdicts}
+                reviewTags={reviewTags}
+                dpUrl={dpUrl}
+                onToggleTag={(id, key) =>
+                  setReviewTags((prev) => {
+                    const cur = prev[id] ?? {};
+                    const next: ReviewTag = { ...cur, [key]: !cur[key] };
+                    // 定下与质量问题互斥
+                    if (key === "decided" && next.decided) next.quality = false;
+                    if (key === "quality" && next.quality) next.decided = false;
+                    return { ...prev, [id]: next };
+                  })
+                }
+                onSend={(items) => {
+                  sessionStorage.setItem(PIPELINE_IMPORT_KEY, JSON.stringify(items));
+                  router.push("/amazon/pipeline");
+                }}
+              />
+              <div className="rounded-xl border border-ink/10 bg-ink/[0.03] p-4">
+                <p className="text-sm font-semibold text-ink">{d.finalPickTitle}</p>
+                <p className="mt-1 text-xs leading-5 text-ink/65">{d.finalPickHint}</p>
+                <Link
+                  href="/amazon/pipeline"
+                  className="mt-3 inline-block rounded-lg bg-ink px-4 py-2 text-sm font-medium text-white transition hover:opacity-90"
+                >
+                  {d.goPipeline}
+                </Link>
+              </div>
+            </>
           )}
         </StepCard>
       ))}

@@ -114,6 +114,14 @@ export interface AmazonManualGuideDict {
   finalPickTitle: string;
   finalPickHint: string;
   goPipeline: string;
+  reviewDecideTitle: string;
+  reviewDecideHint: string;
+  tagDecided: string;
+  tagQuality: string;
+  tagFeatureGap: string;
+  sendDecided: string;
+  noDecided: string;
+  noPassCandidates: string;
   congratsTitle: string;
   congratsBody: string;
   nextStepsTitle: string;
@@ -245,6 +253,15 @@ export const zh: AmazonManualGuideDict = {
   finalPickHint:
     "从候选清单里挑出综合评分最高的 3 个，记下 ASIN，然后一键送入选品流水线跑 6 道门评估。",
   goPipeline: "送入选品流水线 →",
+  reviewDecideTitle: "定品台：从通过 Keepa 的候选里挑",
+  reviewDecideHint:
+    "只列出 Day 5 没被淘汰的品。点产品名直达亚马逊页面看差评；质量问题直接排除，功能缺口是机会；勾选「定下」的品一键送入选品流水线。",
+  tagDecided: "✅ 定下",
+  tagQuality: "🚫 质量问题",
+  tagFeatureGap: "💡 功能缺口",
+  sendDecided: "把定下的 {n} 个品送入选品流水线 →",
+  noDecided: "先勾选「定下」再发送",
+  noPassCandidates: "还没有通过 Keepa 验证的候选品，先回 Day 5 查一遍。",
   congratsTitle: "7 天 SOP 完成！",
   congratsBody:
     "你已经走完手动选品全流程：类目聚焦、榜单扫描、Keepa 验证、差评挖掘。把 3 个测试品送入流水线，让 6 道门再筛一遍，然后就可以小预算实测了。",
@@ -486,6 +503,15 @@ export const en: AmazonManualGuideDict = {
   finalPickHint:
     "Pick the top 3 from your candidate list, note their ASINs, then send them to the product pipeline for the 6-gate evaluation.",
   goPipeline: "Send to product pipeline →",
+  reviewDecideTitle: "Decision board: pick from Keepa survivors",
+  reviewDecideHint:
+    "Only lists candidates not killed on Day 5. Click a product name to read its reviews on Amazon; tag quality issues to exclude, feature gaps as opportunities; send checked products to the pipeline in one click.",
+  tagDecided: "✅ Shortlist",
+  tagQuality: "🚫 Quality issue",
+  tagFeatureGap: "💡 Feature gap",
+  sendDecided: "Send {n} shortlisted to product pipeline →",
+  noDecided: "Check “Shortlist” on products first",
+  noPassCandidates: "No candidates passed Keepa validation yet — go back to Day 5 first.",
   congratsTitle: "7-day SOP complete!",
   congratsBody:
     "You've finished the full manual flow: category focus, list scanning, Keepa validation, review mining. Send the 3 test products to the pipeline for the 6 gates, then start small-budget live testing.",
