@@ -39,6 +39,26 @@ function statusColor(status: string): string {
   }
 }
 
+/**
+ * 网络类型中文分类标签：联盟网络 / 返利网 / 亚马逊联盟。
+ * kind → [分类] 显示名
+ */
+const KIND_LABELS: Record<string, [string, string]> = {
+  impact: ["联盟网络", "Impact"],
+  awin: ["联盟网络", "Awin"],
+  cj: ["联盟网络", "CJ Affiliate"],
+  shareasale: ["联盟网络", "ShareASale"],
+  rakuten: ["联盟网络", "Rakuten Advertising"],
+  flexoffers: ["联盟网络", "FlexOffers"],
+  partnerboost: ["联盟网络", "PartnerBoost"],
+};
+
+function kindLabel(kind: string): string {
+  const entry = KIND_LABELS[kind.toLowerCase()];
+  if (entry) return `【${entry[0]}】${entry[1]}`;
+  return kind;
+}
+
 export function NetworksClient({
   initial,
   supportedKinds,
@@ -216,7 +236,7 @@ export function NetworksClient({
               <div>
                 <h2 className="text-lg font-semibold text-ink">{n.name}</h2>
                 <p className="mt-1 text-xs text-ink/60">
-                  {d.card.kind}: {n.kind}
+                  {d.card.kind}: {kindLabel(n.kind)}
                 </p>
               </div>
               <span
@@ -404,7 +424,7 @@ export function NetworksClient({
                 >
                   {supportedKinds.map((k) => (
                     <option key={k} value={k}>
-                      {k}
+                      {kindLabel(k)}
                     </option>
                   ))}
                 </select>
