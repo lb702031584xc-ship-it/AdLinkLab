@@ -75,7 +75,7 @@ async function postWithFallback(
     if (!res.ok) {
       throw new NetworkAdapterError(
         "HTTP_ERROR",
-        `PartnerBoost API returned HTTP ${res.status}`,
+        `PartnerBoost API returned HTTP ${res.status} for ${url}`,
         res.status
       );
     }
@@ -83,7 +83,9 @@ async function postWithFallback(
   }
   throw new NetworkAdapterError(
     "HTTP_ERROR",
-    "PartnerBoost API returned HTTP 404 (endpoint not found — check that the Datafeed/Amazon API is enabled for your account)",
+    `PartnerBoost API returned HTTP 404 for all endpoints tried: ${candidates.join(" , ")} ` +
+      `(token length ${(body.token as string)?.length ?? 0}; ` +
+      `check the API Base URL in network settings and that the Datafeed/Amazon API is enabled)`,
     404
   );
 }
