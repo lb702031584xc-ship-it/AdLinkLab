@@ -74,6 +74,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         },
         {
           title: s.amazon,
+          pinned: true,
           items: [
             // PA-API config page: admin-only (API credentials), hidden from members.
             ...(isAdmin
@@ -90,7 +91,9 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         },
         {
           title: s.cashback,
+          pinned: true,
           items: [
+            { href: "/cashback/quickstart", label: ni.cashbackQuickstart },
             { href: "/cashback/monitor", label: ni.cashbackMonitor },
             { href: "/cashback/offers", label: ni.cashbackOffers },
             { href: "/cashback/rotations", label: ni.cashbackRotations },
@@ -99,6 +102,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         },
         {
           title: s.reports,
+          pinned: true,
           items: [
             { href: "/reports/weekly", label: t.weeklyReport.nav.title },
             { href: "/tracking-links", label: t.common.nav.trackingLinks },
