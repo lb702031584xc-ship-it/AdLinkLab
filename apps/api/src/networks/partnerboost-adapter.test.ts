@@ -184,3 +184,21 @@ describe("endpoint fallback", () => {
     );
   });
 });
+
+describe("baseUrl normalization", () => {
+  it("strips trailing slashes to avoid double-slash 404", async () => {
+    const calls: string[] = [];
+    const fetchImpl = vi.fn(async (url: string) => {
+      calls.push(url);
+      return jsonResponse(listResponse([product()]));
+    }) as unknown as typeof fetch;
+    const adapter = new PartnerBoostAdapter();
+    const ctx = ctxWith(fetchImpl);
+    ctx.apiBaseUrl = "https://app.partnerboost.com/";
+    await adapter.pullOffers(ctx);
+    expect(calls[0]).toBe(
+      "https://app.partnerboost.com/api/datafeed/get_fba_products"
+    );
+    expect(calls[0]).not.toContain("//api/");
+  });
+});

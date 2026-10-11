@@ -37,9 +37,10 @@ export const PARTNERBOOST_DEFAULT_COUNTRY = "US";
 function endpointCandidates(baseUrl: string, restPath: string): string[] {
   // get_fba_products -> mod=datafeed&op=get_fba_products (legacy api.php style)
   const legacyOp = restPath.replace(/^\/api\/datafeed\//, "");
+  const base = baseUrl.replace(/\/+$/, ""); // strip trailing slashes to avoid //
   return [
-    `${baseUrl}${restPath}`,
-    `${baseUrl}/api.php?mod=datafeed&op=${legacyOp}`,
+    `${base}${restPath}`,
+    `${base}/api.php?mod=datafeed&op=${legacyOp}`,
   ];
 }
 
