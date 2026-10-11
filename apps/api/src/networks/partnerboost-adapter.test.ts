@@ -156,3 +156,31 @@ describe("adapter metadata", () => {
     expect(PARTNERBOOST_DEFAULT_BASE_URL).toBe("https://app.partnerboost.com");
   });
 });
+
+describe("endpoint fallback", () => {
+  it("falls back to api.php style when REST path 404s", async () => {
+    const calls: string[] = [];
+    const fetchImpl = vi.fn(async (url: string) => {
+      calls.push(url);
+      if (url.includes("/api/datafeed/")) {
+        return jsonResponse({}, 404);
+      }
+      return jsonResponse(listResponse([product()]));
+    }) as unknown as typeof fetch;
+    const adapter = new PartnerBoostAdapter();
+    const offers = await adapter.pullOffers(ctxWith(fetchImpl));
+    expect(offers).toHaveLength(1);
+    expect(calls[0]).toContain("/api/datafeed/get_fba_products");
+    expect(calls[1]).toContain("api.php?mod=datafeed&op=get_fba_products");
+  });
+
+  it("throws helpful 404 when all candidates fail", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({}, 404)
+    ) as unknown as typeof fetch;
+    const adapter = new PartnerBoostAdapter();
+    await expect(adapter.pullOffers(ctxWith(fetchImpl))).rejects.toMatchObject(
+      { code: "HTTP_ERROR", status: 404 }
+    );
+  });
+});

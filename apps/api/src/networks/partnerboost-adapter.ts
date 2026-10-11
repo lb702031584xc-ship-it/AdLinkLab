@@ -29,6 +29,66 @@ export const PARTNERBOOST_MAX_PAGES = 20;
 export const PARTNERBOOST_DEFAULT_TIMEOUT_MS = 15_000;
 export const PARTNERBOOST_DEFAULT_COUNTRY = "US";
 
+/**
+ * Endpoint candidates: docs list the `/api/datafeed/...` REST paths, but
+ * some accounts only expose the legacy `api.php?mod=...&op=...` style
+ * (same as the Transaction API). Try in order, fall through on 404.
+ */
+function endpointCandidates(baseUrl: string, restPath: string): string[] {
+  // get_fba_products -> mod=datafeed&op=get_fba_products (legacy api.php style)
+  const legacyOp = restPath.replace(/^\/api\/datafeed\//, "");
+  return [
+    `${baseUrl}${restPath}`,
+    `${baseUrl}/api.php?mod=datafeed&op=${legacyOp}`,
+  ];
+}
+
+/**
+ * POST JSON to the first endpoint candidate that doesn't 404.
+ * Returns { res, json } from the successful call.
+ */
+async function postWithFallback(
+  candidates: string[],
+  body: Record<string, unknown>,
+  fetchImpl: typeof fetch,
+  timeoutMs: number
+): Promise<{ res: Response; json: any }> {
+  let last404: Response | null = null;
+  for (const url of candidates) {
+    let res: Response;
+    try {
+      res = await fetchImpl(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (error) {
+      throw new NetworkAdapterError(
+        "NETWORK_ERROR",
+        `PartnerBoost request failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+    if (res.status === 404) {
+      last404 = res;
+      continue; // try next candidate
+    }
+    if (!res.ok) {
+      throw new NetworkAdapterError(
+        "HTTP_ERROR",
+        `PartnerBoost API returned HTTP ${res.status}`,
+        res.status
+      );
+    }
+    return { res, json: await res.json() };
+  }
+  throw new NetworkAdapterError(
+    "HTTP_ERROR",
+    "PartnerBoost API returned HTTP 404 (endpoint not found — check that the Datafeed/Amazon API is enabled for your account)",
+    404
+  );
+}
+
 export class NetworkAdapterError extends Error {
   readonly code: string;
   readonly status?: number;
@@ -168,38 +228,22 @@ export class PartnerBoostAdapter implements NetworkAdapter {
         return_performance_bonus: opts.returnPerformanceBonus ? 1 : 0,
       };
 
-      let res: Response;
-      try {
-        res = await fetchImpl(`${baseUrl}/api/datafeed/get_fba_products`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-          signal: AbortSignal.timeout(timeoutMs),
-        });
-      } catch (error) {
-        throw new NetworkAdapterError(
-          "NETWORK_ERROR",
-          `PartnerBoost request failed: ${error instanceof Error ? error.message : String(error)}`
-        );
-      }
+      const { json } = await postWithFallback(
+        endpointCandidates(baseUrl, "/api/datafeed/get_fba_products"),
+        body,
+        fetchImpl,
+        timeoutMs
+      );
 
-      if (!res.ok) {
-        throw new NetworkAdapterError(
-          "HTTP_ERROR",
-          `PartnerBoost API returned HTTP ${res.status}`,
-          res.status
-        );
-      }
-
-      const json = (await res.json()) as PartnerBoostListResponse;
-      if (json.status?.code !== 0) {
+      const listRes = json as PartnerBoostListResponse;
+      if (listRes.status?.code !== 0) {
         throw new NetworkAdapterError(
           "API_ERROR",
-          `PartnerBoost API error: ${json.status?.msg ?? "unknown"}`
+          `PartnerBoost API error: ${listRes.status?.msg ?? "unknown"}`
         );
       }
 
-      const list = json.data?.list ?? [];
+      const list = listRes.data?.list ?? [];
       for (const p of list) {
         const commissionPct = parseCommission(p.commission);
         const bonusDesc = p.performance_bonus?.enabled
@@ -263,38 +307,28 @@ export class PartnerBoostAdapter implements NetworkAdapter {
     // API caps at 50 ASINs per call.
     for (let i = 0; i < asins.length; i += 50) {
       const batch = asins.slice(i, i + 50);
-      const res = await fetchImpl(
-        `${baseUrl}/api/datafeed/get_amazon_link_by_asin`,
+      const { json } = await postWithFallback(
+        endpointCandidates(baseUrl, "/api/datafeed/get_amazon_link_by_asin"),
         {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            token,
-            asins: batch.join(","),
-            country_code: countryCode,
-            return_partnerboost_link: 1,
-          }),
-          signal: AbortSignal.timeout(timeoutMs),
-        }
+          token,
+          asins: batch.join(","),
+          country_code: countryCode,
+          return_partnerboost_link: 1,
+        },
+        fetchImpl,
+        timeoutMs
       );
-      if (!res.ok) {
-        throw new NetworkAdapterError(
-          "HTTP_ERROR",
-          `PartnerBoost API returned HTTP ${res.status}`,
-          res.status
-        );
-      }
-      const json = (await res.json()) as {
+      const linkRes = json as {
         status?: { code?: number; msg?: string };
         data?: { asin?: string; link?: string; partnerboost_link?: string }[];
       };
-      if (json.status?.code !== 0) {
+      if (linkRes.status?.code !== 0) {
         throw new NetworkAdapterError(
           "API_ERROR",
-          `PartnerBoost API error: ${json.status?.msg ?? "unknown"}`
+          `PartnerBoost API error: ${linkRes.status?.msg ?? "unknown"}`
         );
       }
-      for (const item of json.data ?? []) {
+      for (const item of linkRes.data ?? []) {
         if (item.asin && (item.partnerboost_link || item.link)) {
           out[item.asin] = item.partnerboost_link || item.link!;
         }
