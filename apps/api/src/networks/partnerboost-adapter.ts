@@ -53,7 +53,6 @@ async function postWithFallback(
   fetchImpl: typeof fetch,
   timeoutMs: number
 ): Promise<{ res: Response; json: any }> {
-  let last404: Response | null = null;
   for (const url of candidates) {
     let res: Response;
     try {
@@ -70,7 +69,6 @@ async function postWithFallback(
       );
     }
     if (res.status === 404) {
-      last404 = res;
       continue; // try next candidate
     }
     if (!res.ok) {
