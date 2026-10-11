@@ -212,22 +212,20 @@ export class PartnerBoostAdapter implements NetworkAdapter {
     const fetchImpl = ctx.fetchImpl ?? fetch;
     const timeoutMs = ctx.timeoutMs ?? PARTNERBOOST_DEFAULT_TIMEOUT_MS;
     const maxPages = opts.maxPages ?? PARTNERBOOST_MAX_PAGES;
-    const countryCode = opts.countryCode ?? PARTNERBOOST_DEFAULT_COUNTRY;
+    // countryCode 保留给未来（当前 API 对额外字段敏感，暂不发送）
 
     const offers: NetworkOffer[] = [];
     let page = 1;
     let hasMore = true;
 
     while (hasMore && page <= maxPages) {
-      const body = {
+      // 注意：PartnerBoost datafeed API 对请求体做严格字段白名单校验，
+      // 多加任何一个可选字段（如 country_code/sort/relationship）都会返回
+      // code 1000 "user not exist"。只发最小必需字段。
+      const body: Record<string, unknown> = {
         token,
         page_size: PARTNERBOOST_PAGE_SIZE,
         page,
-        country_code: countryCode,
-        sort: opts.sort ?? 1,
-        relationship: opts.relationship ?? 1,
-        return_link: opts.returnLink ? 1 : 0,
-        return_performance_bonus: opts.returnPerformanceBonus ? 1 : 0,
       };
 
       const { json } = await postWithFallback(
@@ -285,8 +283,7 @@ export class PartnerBoostAdapter implements NetworkAdapter {
    */
   async generateLinks(
     ctx: AdapterContext,
-    asins: string[],
-    countryCode = PARTNERBOOST_DEFAULT_COUNTRY
+    asins: string[]
   ): Promise<Record<string, string>> {
     const token = ctx.apiKey.trim();
     if (!token) {
@@ -311,12 +308,8 @@ export class PartnerBoostAdapter implements NetworkAdapter {
       const batch = asins.slice(i, i + 50);
       const { json } = await postWithFallback(
         endpointCandidates(baseUrl, "/api/datafeed/get_amazon_link_by_asin"),
-        {
-          token,
-          asins: batch.join(","),
-          country_code: countryCode,
-          return_partnerboost_link: 1,
-        },
+        // 最小字段：API 对额外字段敏感
+        { token, asins: batch.join(",") },
         fetchImpl,
         timeoutMs
       );
