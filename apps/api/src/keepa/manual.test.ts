@@ -117,6 +117,16 @@ describe("parseManualNumbers", () => {
     expect(() => parseManualNumbers({ ...BASE, reviewsNow: "abc" })).toThrow(ValidationError);
   });
 
+  it("全角数字（中文输入法）→ 正常解析", () => {
+    const out = parseManualNumbers({
+      ...BASE,
+      amazonPriceNow: "１９９",
+      priceLow90d: "９６．５",
+    });
+    expect(out.amazonPriceNow).toBe(199);
+    expect(out.priceLow90d).toBeCloseTo(96.5, 1);
+  });
+
   it("空 body → 400", () => {
     expect(() => parseManualNumbers(null)).toThrow(ValidationError);
   });

@@ -72,6 +72,9 @@ export interface AmazonManualGuideDict {
   mReviewsNow: string;
   mReviews90dAgo: string;
   manualInvalidNumber: string;
+  manualFieldEmpty: string;
+  manualFieldInvalid: string;
+  manualLowGtHigh: string;
   addRow: string;
   removeRow: string;
   namePlaceholder: string;
@@ -175,6 +178,9 @@ export const zh: AmazonManualGuideDict = {
   mReviewsNow: "当前评论数",
   mReviews90dAgo: "90 天前评论数（可选）",
   manualInvalidNumber: "请输入有效数字（≥0），最低价不能高于最高价",
+  manualFieldEmpty: "请填写「{label}」",
+  manualFieldInvalid: "「{label}」请输入有效数字（≥0）",
+  manualLowGtHigh: "90天内最低价不能高于最高价",
   addRow: "添加一行",
   removeRow: "删除",
   namePlaceholder: "如：降噪蓝牙耳机",
@@ -409,6 +415,9 @@ export const en: AmazonManualGuideDict = {
   mReviewsNow: "Current review count",
   mReviews90dAgo: "Review count 90 days ago (optional)",
   manualInvalidNumber: "Enter valid numbers (≥0); low must not exceed high",
+  manualFieldEmpty: "Please fill in '{label}'",
+  manualFieldInvalid: "'{label}' must be a valid number (≥0)",
+  manualLowGtHigh: "90-day low must not exceed 90-day high",
   addRow: "Add row",
   removeRow: "Delete",
   namePlaceholder: "e.g. noise-cancelling earbuds",

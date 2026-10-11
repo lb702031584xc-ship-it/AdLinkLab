@@ -293,6 +293,13 @@ export interface VisionVerdictStored {
  * 结果写回候选行的 verdict badge。
  */
 // 手动输入模式字段配置（价格 / 排名 / 评论三组）
+/** 全角数字/小数点转半角：中文输入法常把 199 打成 １９９，看着一样但 Number() 认不出。 */
+function toHalfWidth(s: string): string {
+  return s.replace(/[０-９．。]/g, (ch) =>
+    ch === "．" || ch === "。" ? "." : String.fromCharCode(ch.charCodeAt(0) - 0xfee0)
+  );
+}
+
 const MANUAL_GROUPS: Array<{
   getTitle: (d: AmazonManualGuideDict) => string;
   fields: Array<{
@@ -394,22 +401,24 @@ function VisionModal({
     const nums: Record<string, number> = {};
     for (const g of MANUAL_GROUPS) {
       for (const f of g.fields) {
-        const raw = (vals[f.key] ?? "").trim();
+        // 中文输入法全角数字（１９９．５）转半角，否则 Number() 得到 NaN
+        const raw = toHalfWidth(vals[f.key] ?? "").trim();
+        const label = f.getLabel(d);
         if (raw === "") {
           if (f.optional) continue;
-          setMError(d.manualInvalidNumber);
+          setMError(d.manualFieldEmpty.replace("{label}", label));
           return;
         }
         const n = Number(raw);
         if (!Number.isFinite(n) || n < 0) {
-          setMError(d.manualInvalidNumber);
+          setMError(d.manualFieldInvalid.replace("{label}", label));
           return;
         }
         nums[f.key] = n;
       }
     }
     if (nums.priceLow90d > nums.priceHigh90d) {
-      setMError(d.manualInvalidNumber);
+      setMError(d.manualLowGtHigh);
       return;
     }
     setMRunning(true);

@@ -354,8 +354,19 @@ const MANUAL_FIELD_LABELS: Record<string, string> = {
 };
 
 function asNonNegNumber(v: unknown, label: string): number {
+  // 兼容中文输入法全角数字（１９９．５ → 199.5）
+  const normalized =
+    typeof v === "string"
+      ? v.replace(/[０-９．。]/g, (ch) =>
+          ch === "．" || ch === "。" ? "." : String.fromCharCode(ch.charCodeAt(0) - 0xfee0)
+        )
+      : v;
   const n =
-    typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
+    typeof normalized === "number"
+      ? normalized
+      : typeof normalized === "string" && normalized.trim() !== ""
+        ? Number(normalized)
+        : NaN;
   if (!Number.isFinite(n) || n < 0) {
     throw new ValidationError(`${label}：请输入有效数字（≥0）`);
   }
