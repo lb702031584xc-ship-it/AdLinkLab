@@ -75,6 +75,7 @@ export interface AmazonManualGuideDict {
   manualFieldEmpty: string;
   manualFieldInvalid: string;
   manualLowGtHigh: string;
+  manualRankPartial: string;
   addRow: string;
   removeRow: string;
   namePlaceholder: string;
@@ -166,7 +167,7 @@ export const zh: AmazonManualGuideDict = {
   visionTabScreenshot: "截图 AI 判断",
   visionTabManual: "手动输入数字",
   manualPriceGroup: "价格（对着价格历史图 90 天抄）",
-  manualRankGroup: "排名（对着 Sales Rank 图 90 天抄）",
+  manualRankGroup: "排名（可选，Keepa 排名历史需付费；对着 Sales Rank 图 90 天抄）",
   manualReviewGroup: "评论（Keepa 面板抄数字，不用截图）",
   mAmazonPriceNow: "当前 Amazon 价格",
   mAmazonPrice30dAgo: "30 天前 Amazon 价格",
@@ -181,6 +182,7 @@ export const zh: AmazonManualGuideDict = {
   manualFieldEmpty: "请填写「{label}」",
   manualFieldInvalid: "「{label}」请输入有效数字（≥0）",
   manualLowGtHigh: "90天内最低价不能高于最高价",
+  manualRankPartial: "排名三个框要么都填，要么都空",
   addRow: "添加一行",
   removeRow: "删除",
   namePlaceholder: "如：降噪蓝牙耳机",
@@ -403,7 +405,7 @@ export const en: AmazonManualGuideDict = {
   visionTabScreenshot: "Screenshot AI",
   visionTabManual: "Manual numbers",
   manualPriceGroup: "Price (copy from 90-day price history chart)",
-  manualRankGroup: "Rank (copy from 90-day Sales Rank chart)",
+  manualRankGroup: "Rank (optional, Keepa paywalled; copy from 90-day Sales Rank chart)",
   manualReviewGroup: "Reviews (numbers from Keepa panel, no screenshot needed)",
   mAmazonPriceNow: "Current Amazon price",
   mAmazonPrice30dAgo: "Amazon price 30 days ago",
@@ -418,6 +420,7 @@ export const en: AmazonManualGuideDict = {
   manualFieldEmpty: "Please fill in '{label}'",
   manualFieldInvalid: "'{label}' must be a valid number (≥0)",
   manualLowGtHigh: "90-day low must not exceed 90-day high",
+  manualRankPartial: "Fill all three rank fields, or leave all empty",
   addRow: "Add row",
   removeRow: "Delete",
   namePlaceholder: "e.g. noise-cancelling earbuds",

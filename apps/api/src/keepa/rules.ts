@@ -309,9 +309,10 @@ export interface ManualNumbersInput {
   amazonPrice30dAgo: number;
   priceLow90d: number;
   priceHigh90d: number;
-  rankNow: number;
-  rankBest90d: number;
-  rankWorst90d: number;
+  /** 可选；Keepa 排名历史是付费功能，不填则排名相关规则记 unknown，不参与判定 */
+  rankNow: number | null;
+  rankBest90d: number | null;
+  rankWorst90d: number | null;
   reviewsNow: number;
   /** 可选；不填则评论增长记 unknown，不参与 pass 判定 */
   reviews90dAgo: number | null;
@@ -335,9 +336,6 @@ const MANUAL_REQUIRED_FIELDS = [
   "amazonPrice30dAgo",
   "priceLow90d",
   "priceHigh90d",
-  "rankNow",
-  "rankBest90d",
-  "rankWorst90d",
   "reviewsNow",
 ] as const;
 
@@ -388,6 +386,18 @@ export function parseManualNumbers(body: unknown): ManualNumbersInput {
   if (rawOpt !== undefined && rawOpt !== null && String(rawOpt).trim() !== "") {
     reviews90dAgo = asNonNegNumber(rawOpt, MANUAL_FIELD_LABELS["reviews90dAgo"]);
   }
+  // 排名三项可选（Keepa 排名历史需付费）：要么三项都填，要么都空；填一半 → 400
+  const rankFields = ["rankNow", "rankBest90d", "rankWorst90d"] as const;
+  const rankVals = rankFields.map((f) => {
+    const v = b[f];
+    return v === undefined || v === null || String(v).trim() === ""
+      ? null
+      : asNonNegNumber(v, MANUAL_FIELD_LABELS[f]);
+  });
+  const rankFilled = rankVals.filter((v) => v !== null).length;
+  if (rankFilled > 0 && rankFilled < 3) {
+    throw new ValidationError("排名三个框要么都填，要么都空（Keepa 排名历史需付费，可空着）");
+  }
   if (out["priceLow90d"] > out["priceHigh90d"]) {
     throw new ValidationError("最低价不能高于最高价");
   }
@@ -396,9 +406,9 @@ export function parseManualNumbers(body: unknown): ManualNumbersInput {
     amazonPrice30dAgo: out["amazonPrice30dAgo"],
     priceLow90d: out["priceLow90d"],
     priceHigh90d: out["priceHigh90d"],
-    rankNow: out["rankNow"],
-    rankBest90d: out["rankBest90d"],
-    rankWorst90d: out["rankWorst90d"],
+    rankNow: rankVals[0],
+    rankBest90d: rankVals[1],
+    rankWorst90d: rankVals[2],
     reviewsNow: out["reviewsNow"],
     reviews90dAgo,
   };
@@ -406,11 +416,14 @@ export function parseManualNumbers(body: unknown): ManualNumbersInput {
 
 /**
  * 手动数字映射判定。阈值与 evaluateKeepa 完全一致：
- * kill = 30 天跌幅>25% 或排名最差/最好>10 倍；
- * pass = 90 天价格波动<15% 且最差排名<100 且（填了 90 天前评论数时）评论增长>0；
+ * kill = 30 天跌幅>25% 或（有排名数据时）排名最差/最好>10 倍；
+ * pass = 90 天价格波动<15% 且（有排名数据时）最差排名<100 且（填了 90 天前评论数时）评论增长>0；
  * 两头不靠 → unknown。断货手动无法得知，不参与判定。
+ * 排名历史是 Keepa 付费功能，缺失时相关规则记 unknown，不硬判。
  */
 export function evaluateManualNumbers(input: ManualNumbersInput): ManualEvaluation {
+  const hasRank =
+    input.rankNow !== null && input.rankBest90d !== null && input.rankWorst90d !== null;
   const m: ManualMetrics = {
     priceDrop30dPct:
       input.amazonPrice30dAgo > 0
@@ -425,7 +438,7 @@ export function evaluateManualNumbers(input: ManualNumbersInput): ManualEvaluati
           )
         : null,
     rankRatio90d:
-      input.rankBest90d > 0 ? round1(input.rankWorst90d / input.rankBest90d) : null,
+      hasRank && input.rankBest90d! > 0 ? round1(input.rankWorst90d! / input.rankBest90d!) : null,
     reviewGrowth90d:
       input.reviews90dAgo !== null ? Math.round(input.reviewsNow - input.reviews90dAgo) : null,
   };
@@ -447,17 +460,17 @@ export function evaluateManualNumbers(input: ManualNumbersInput): ManualEvaluati
     return { verdict: "kill", reasons, metrics: m };
   }
 
+  const rankOk = !hasRank || input.rankWorst90d! < PASS_RANK_MEDIAN_90D;
   const reviewOk = m.reviewGrowth90d === null || m.reviewGrowth90d > PASS_REVIEW_GROWTH_90D;
   if (
     m.priceVolatility90dPct !== null &&
     m.priceVolatility90dPct < PASS_PRICE_SWING_90D_PCT &&
-    input.rankWorst90d < PASS_RANK_MEDIAN_90D &&
+    rankOk &&
     reviewOk
   ) {
-    const parts = [
-      `90 天价格波动 ${m.priceVolatility90dPct}%`,
-      `最差排名 ${input.rankWorst90d}`,
-    ];
+    const parts = [`90 天价格波动 ${m.priceVolatility90dPct}%`];
+    if (hasRank) parts.push(`最差排名 ${input.rankWorst90d}`);
+    else parts.push(`排名数据缺失（Keepa 付费功能），未参与判定`);
     if (m.reviewGrowth90d !== null) parts.push(`评论增长 ${m.reviewGrowth90d}`);
     return {
       verdict: "pass",
@@ -471,12 +484,17 @@ export function evaluateManualNumbers(input: ManualNumbersInput): ManualEvaluati
     };
   }
 
+  const missing: string[] = [];
+  if (!hasRank) missing.push("排名数据缺失（Keepa 付费功能）");
+  if (m.reviewGrowth90d === null) missing.push("90 天前评论数未填");
   return {
     verdict: "unknown",
     reasons: [
       {
         code: "insufficient",
-        detail: "介于通过与淘汰之间，建议人工复核（断货情况手动无法得知）",
+        detail: `介于通过与淘汰之间，建议人工复核${
+          missing.length > 0 ? `（${missing.join("；")}）` : "（断货情况手动无法得知）"
+        }`,
       },
     ],
     metrics: m,

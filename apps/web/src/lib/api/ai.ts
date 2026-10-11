@@ -444,9 +444,9 @@ export interface KeepaManualInput {
   amazonPrice30dAgo: number;
   priceLow90d: number;
   priceHigh90d: number;
-  rankNow: number;
-  rankBest90d: number;
-  rankWorst90d: number;
+  rankNow: number | null;
+  rankBest90d: number | null;
+  rankWorst90d: number | null;
   reviewsNow: number;
   reviews90dAgo?: number | null;
 }

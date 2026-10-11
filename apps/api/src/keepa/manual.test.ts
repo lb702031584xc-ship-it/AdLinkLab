@@ -51,6 +51,30 @@ describe("evaluateManualNumbers", () => {
     expect(out.metrics.reviewGrowth90d).toBeNull();
   });
 
+  it("不填排名（Keepa 付费墙）：价格平稳仍可 pass，原因注明排名未参与", () => {
+    const out = evaluateManualNumbers({
+      ...BASE,
+      rankNow: null,
+      rankBest90d: null,
+      rankWorst90d: null,
+    });
+    expect(out.verdict).toBe("pass");
+    expect(out.metrics.rankRatio90d).toBeNull();
+    expect(out.reasons[0].detail).toContain("排名数据缺失");
+  });
+
+  it("不填排名但价格跳水：仍 kill（价格规则不受影响）", () => {
+    const out = evaluateManualNumbers({
+      ...BASE,
+      amazonPrice30dAgo: 100,
+      amazonPriceNow: 70,
+      rankNow: null,
+      rankBest90d: null,
+      rankWorst90d: null,
+    });
+    expect(out.verdict).toBe("kill");
+  });
+
   it("评论零增长 → 不 pass（降级 unknown）", () => {
     const out = evaluateManualNumbers({ ...BASE, reviews90dAgo: 700 });
     expect(out.verdict).toBe("unknown");
@@ -108,9 +132,21 @@ describe("parseManualNumbers", () => {
     ).toThrow(/最低价不能高于最高价/);
   });
 
-  it("缺字段 → 400", () => {
-    const { rankNow: _drop, ...rest } = BASE;
+  it("缺必填字段 → 400", () => {
+    const { reviewsNow: _drop, ...rest } = BASE;
     expect(() => parseManualNumbers(rest)).toThrow(ValidationError);
+  });
+
+  it("排名三项都空 → 通过，rank 记 null", () => {
+    const { rankNow: _a, rankBest90d: _b, rankWorst90d: _c, ...rest } = BASE;
+    const out = parseManualNumbers(rest);
+    expect(out.rankNow).toBeNull();
+    expect(out.rankBest90d).toBeNull();
+    expect(out.rankWorst90d).toBeNull();
+  });
+
+  it("排名只填一半 → 400", () => {
+    expect(() => parseManualNumbers({ ...BASE, rankNow: undefined })).toThrow(/要么都填/);
   });
 
   it("非数字字符串 → 400", () => {

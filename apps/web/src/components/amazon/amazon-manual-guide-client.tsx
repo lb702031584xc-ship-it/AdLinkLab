@@ -320,9 +320,9 @@ const MANUAL_GROUPS: Array<{
   {
     getTitle: (d) => d.manualRankGroup,
     fields: [
-      { key: "rankNow", getLabel: (d) => d.mRankNow },
-      { key: "rankBest90d", getLabel: (d) => d.mRankBest90d },
-      { key: "rankWorst90d", getLabel: (d) => d.mRankWorst90d },
+      { key: "rankNow", getLabel: (d) => d.mRankNow, optional: true },
+      { key: "rankBest90d", getLabel: (d) => d.mRankBest90d, optional: true },
+      { key: "rankWorst90d", getLabel: (d) => d.mRankWorst90d, optional: true },
     ],
   },
   {
@@ -421,6 +421,13 @@ function VisionModal({
       setMError(d.manualLowGtHigh);
       return;
     }
+    // 排名三项要么都填，要么都空（Keepa 排名历史需付费）
+    const rankKeys = ["rankNow", "rankBest90d", "rankWorst90d"];
+    const rankFilled = rankKeys.filter((k) => nums[k] !== undefined).length;
+    if (rankFilled > 0 && rankFilled < 3) {
+      setMError(d.manualRankPartial);
+      return;
+    }
     setMRunning(true);
     setMError("");
     try {
@@ -429,9 +436,9 @@ function VisionModal({
         amazonPrice30dAgo: nums.amazonPrice30dAgo,
         priceLow90d: nums.priceLow90d,
         priceHigh90d: nums.priceHigh90d,
-        rankNow: nums.rankNow,
-        rankBest90d: nums.rankBest90d,
-        rankWorst90d: nums.rankWorst90d,
+        rankNow: nums.rankNow ?? null,
+        rankBest90d: nums.rankBest90d ?? null,
+        rankWorst90d: nums.rankWorst90d ?? null,
         reviewsNow: nums.reviewsNow,
         reviews90dAgo: nums.reviews90dAgo ?? null,
       };
