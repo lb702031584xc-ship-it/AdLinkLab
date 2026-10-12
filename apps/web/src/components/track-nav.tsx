@@ -7,6 +7,13 @@ import { usePathname } from "next/navigation";
 export interface TrackNavItem {
   href: string;
   label: string;
+  /**
+   * Workflow phase within the lane (e.g. 选品 / 分析判断 / 物料制作 / 投流 / 监控优化).
+   * When the phase changes between consecutive items, a small phase divider
+   * label is rendered. Items without a phase (lane intros like the 7-day SOP)
+   * render directly under the section title.
+   */
+  phase?: string;
 }
 
 export interface TrackNavSection {
@@ -38,7 +45,9 @@ function sectionIndexForPath(sections: TrackNavSection[], path: string): number 
 }
 
 function isActiveItem(item: TrackNavItem, path: string): boolean {
-  return path === item.href || path.startsWith(`${item.href}/`);
+  // Strip query string (?tab=...) so deep-linked phase entries still highlight.
+  const base = item.href.split("?")[0];
+  return path === base || path.startsWith(`${base}/`);
 }
 
 /**
@@ -108,21 +117,34 @@ export function TrackNav({ sections, activePath }: TrackNavProps) {
             )}
             {open ? (
               <div className="flex flex-col gap-0.5 pb-1">
-                {section.items.map((item) => {
+                {section.items.map((item, itemIndex) => {
                   const active = isActiveItem(item, path);
+                  const prevPhase =
+                    itemIndex > 0 ? section.items[itemIndex - 1].phase : undefined;
+                  const showPhaseHeader =
+                    item.phase !== undefined && item.phase !== prevPhase;
                   return (
-                    <Link
-                      key={item.href}
-                      href={item.href}
-                      aria-current={active ? "page" : undefined}
-                      className={`rounded-md px-3 py-2 text-sm transition ${
-                        active
-                          ? "bg-white/15 font-medium text-white"
-                          : "text-mist/85 hover:bg-white/10 hover:text-white"
-                      }`}
-                    >
-                      {item.label}
-                    </Link>
+                    <span key={item.href} className="flex flex-col gap-0.5">
+                      {showPhaseHeader ? (
+                        <span
+                          aria-hidden="true"
+                          className="mt-2 px-3 text-[11px] font-semibold uppercase tracking-widest text-amber-200/70 first:mt-0"
+                        >
+                          {item.phase}
+                        </span>
+                      ) : null}
+                      <Link
+                        href={item.href}
+                        aria-current={active ? "page" : undefined}
+                        className={`rounded-md px-3 py-2 text-sm transition ${
+                          active
+                            ? "bg-white/15 font-medium text-white"
+                            : "text-mist/85 hover:bg-white/10 hover:text-white"
+                        }`}
+                      >
+                        {item.label}
+                      </Link>
+                    </span>
                   );
                 })}
               </div>

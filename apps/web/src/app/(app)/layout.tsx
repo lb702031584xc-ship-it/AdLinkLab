@@ -3,6 +3,10 @@ import { redirect } from "next/navigation";
 import { getLang } from "@/i18n/lang";
 import { getDictionary } from "@/i18n/dictionaries";
 import { zh as experimentZh, en as experimentEn } from "@/i18n/dict/experiment";
+import { zh as rateWatchZh, en as rateWatchEn } from "@/i18n/dict/cashback-rate-watch";
+import { zh as termsWatchZh, en as termsWatchEn } from "@/i18n/dict/cashback-terms-watch";
+import { zh as redirectCheckZh, en as redirectCheckEn } from "@/i18n/dict/cashback-redirect-check";
+import { zh as rateCompareZh, en as rateCompareEn } from "@/i18n/dict/cashback-rate-compare";
 import { LangSwitcher } from "@/components/lang-switcher";
 import { getCurrentUser, getViewTenant } from "@/lib/api/auth";
 import { clearViewTenantAction, logoutAction } from "@/lib/api/auth-actions";
@@ -35,13 +39,19 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
 
   interface NavSection {
     title: string;
-    items: { href: string; label: string }[];
+    items: { href: string; label: string; phase?: string }[];
     /** 常驻展开 + 标题高亮的一级菜单组。 */
     pinned?: boolean;
   }
 
   const s = t.common.nav.sections;
   const ni = t.common.nav.items;
+  const ph = t.common.nav.phases;
+  const experimentDict = lang === "en" ? experimentEn : experimentZh;
+  const rateWatchDict = lang === "en" ? rateWatchEn : rateWatchZh;
+  const termsWatchDict = lang === "en" ? termsWatchEn : termsWatchZh;
+  const redirectCheckDict = lang === "en" ? redirectCheckEn : redirectCheckZh;
+  const rateCompareDict = lang === "en" ? rateCompareEn : rateCompareZh;
   const navSections: NavSection[] = isResearcher
     ? [{ title: "🧪 Research", items: [researchNavItem] }]
     : [
@@ -59,36 +69,69 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
           pinned: true,
           items: [
             { href: "/affiliate/beginner-sop", label: ni.affiliateBeginnerSop },
-            { href: "/networks", label: ni.connectNetworks },
-            { href: "/offers", label: ni.offerList },
-            { href: "/offers/new", label: ni.offerNewImport },
-            { href: "/ai/analyze", label: t.ai.nav.analyze },
-            { href: "/ai/terms", label: t.ai.nav.terms },
-            { href: "/ai/traffic-planner", label: t.ai.nav.trafficPlanner },
-            { href: "/ai/compliance", label: t.ai.nav.compliance },
-            { href: "/ai/profit", label: t.ai.nav.profit },
-            { href: "/landing-pages", label: t.common.nav.landingPages },
-            { href: "/ads/auto-create", label: ni.launchAds },
-            { href: "/campaigns", label: t.common.nav.campaigns },
-            { href: "/monitoring", label: ni.trafficMonitoring },
-            { href: "/keywords/starter", label: t.keywordStarter.pageTitle },
+            { href: "/networks", label: ni.connectNetworks, phase: ph.selection },
+            { href: "/offers", label: ni.offerList, phase: ph.selection },
+            { href: "/offers/new", label: ni.offerNewImport, phase: ph.selection },
+            {
+              href: "/keywords/starter?tab=research",
+              label: ni.keywordResearch,
+              phase: ph.selection,
+            },
+            { href: "/ai/analyze", label: t.ai.nav.analyze, phase: ph.analysis },
+            {
+              href: "/landing-pages",
+              label: t.common.nav.landingPages,
+              phase: ph.creative,
+            },
+            { href: "/ads/auto-create", label: ni.launchAds, phase: ph.creative },
+            {
+              href: "/keywords/starter?tab=launch",
+              label: ni.keywordLaunch,
+              phase: ph.traffic,
+            },
+            { href: "/campaigns", label: t.common.nav.campaigns, phase: ph.traffic },
+            { href: "/monitoring", label: ni.trafficMonitoring, phase: ph.monitor },
+            {
+              href: "/reports/weekly",
+              label: t.weeklyReport.nav.title,
+              phase: ph.monitor,
+            },
+            {
+              href: "/experiments",
+              label: experimentDict.nav.experiments,
+              phase: ph.monitor,
+            },
           ],
         },
         {
           title: s.amazon,
           pinned: true,
           items: [
+            { href: "/amazon/manual-guide", label: ni.amazonManualGuide },
             // PA-API config page: admin-only (API credentials), hidden from members.
             ...(isAdmin
-              ? [{ href: "/admin/ai-settings", label: ni.amazonPaapi }]
+              ? [
+                  {
+                    href: "/admin/ai-settings",
+                    label: ni.amazonPaapi,
+                    phase: ph.selection,
+                  },
+                ]
               : []),
-            { href: "/amazon/manual-guide", label: ni.amazonManualGuide },
-            { href: "/amazon/discovery", label: ni.amazonDiscovery },
-            { href: "/amazon/trends", label: ni.amazonTrends },
-            { href: "/amazon/pipeline", label: ni.amazonPipeline },
-            { href: "/amazon/combo", label: ni.amazonCombo },
-            { href: "/amazon/watch", label: ni.amazonWatch },
-            { href: "/offers", label: ni.amazonImportAffiliate },
+            { href: "/amazon/discovery", label: ni.amazonDiscovery, phase: ph.selection },
+            { href: "/amazon/trends", label: ni.amazonTrends, phase: ph.selection },
+            { href: "/amazon/pipeline", label: ni.amazonPipeline, phase: ph.selection },
+            { href: "/amazon/combo", label: ni.amazonCombo, phase: ph.analysis },
+            { href: "/amazon/watch", label: ni.amazonWatch, phase: ph.analysis },
+            { href: "/ai/analyze", label: t.ai.nav.analyze, phase: ph.analysis },
+            { href: "/offers", label: ni.amazonImportAffiliate, phase: ph.analysis },
+            {
+              href: "/landing-pages",
+              label: t.common.nav.landingPages,
+              phase: ph.creative,
+            },
+            { href: "/campaigns", label: t.common.nav.campaigns, phase: ph.traffic },
+            { href: "/monitoring", label: ni.trafficMonitoring, phase: ph.monitor },
           ],
         },
         {
@@ -96,26 +139,49 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
           pinned: true,
           items: [
             { href: "/cashback/quickstart", label: ni.cashbackQuickstart },
-            { href: "/cashback/monitor", label: ni.cashbackMonitor },
-            { href: "/cashback/offers", label: ni.cashbackOffers },
-            { href: "/cashback/rotations", label: ni.cashbackRotations },
-            { href: "/ads/rotation-script", label: ni.rotationScript },
+            { href: "/cashback/offers", label: ni.cashbackOffers, phase: ph.selection },
+            { href: "/cashback/monitor", label: ni.cashbackMonitor, phase: ph.selection },
+            { href: "/ai/analyze", label: t.ai.nav.analyze, phase: ph.analysis },
+            {
+              href: "/landing-pages",
+              label: t.common.nav.landingPages,
+              phase: ph.creative,
+            },
+            { href: "/cashback/rotations", label: ni.cashbackRotations, phase: ph.traffic },
+            { href: "/ads/rotation-script", label: ni.rotationScript, phase: ph.traffic },
+            { href: "/campaigns", label: t.common.nav.campaigns, phase: ph.traffic },
+            { href: "/monitoring", label: ni.trafficMonitoring, phase: ph.monitor },
+            {
+              href: "/cashback/rate-watch",
+              label: rateWatchDict.page.title,
+              phase: ph.monitor,
+            },
+            {
+              href: "/cashback/terms-watch",
+              label: termsWatchDict.termsWatch.title,
+              phase: ph.monitor,
+            },
+            {
+              href: "/cashback/redirect-check",
+              label: redirectCheckDict.page.title,
+              phase: ph.monitor,
+            },
+            {
+              href: "/cashback/rate-compare",
+              label: rateCompareDict.rateCompare.title,
+              phase: ph.monitor,
+            },
           ],
         },
         {
           title: s.reports,
           pinned: true,
           items: [
-            { href: "/reports/weekly", label: t.weeklyReport.nav.title },
             { href: "/tracking-links", label: t.common.nav.trackingLinks },
             { href: "/clicks", label: t.common.nav.clicks },
             { href: "/conversions", label: t.common.nav.conversions },
             { href: "/ai/decision", label: t.ai.nav.decision },
             { href: "/ai/strategy", label: t.strategy.nav.strategy },
-            {
-              href: "/experiments",
-              label: (lang === "en" ? experimentEn : experimentZh).nav.experiments,
-            },
             researchNavItem,
           ],
         },
