@@ -1,0 +1,318 @@
+"use client";
+
+/**
+ * 需求验证清单（关键词启动包 · 需求验证 Tab）：
+ * 逐词填写月搜索量 / 趋势 / 竞争度 / 意图 → 自动输出「需求是否存在 / 竞争是否可打」结论。
+ * 纯前端，无后端依赖。
+ */
+import { useEffect, useMemo, useState } from "react";
+import type { KeywordStarterDict } from "@/i18n/dict/keyword-starter";
+
+type Trend = "up" | "flat" | "down";
+type Competition = "low" | "medium" | "high";
+type Intent = "buy" | "review" | "compare" | "info";
+type Verdict = "good" | "caution" | "bad";
+
+interface DemandRow {
+  id: string;
+  keyword: string;
+  volume: string; // 手填数字字符串
+  trend: Trend;
+  competition: Competition;
+  intent: Intent;
+}
+
+export interface SeedImportSignal {
+  words: string[];
+  seq: number;
+}
+
+let rowSeq = 0;
+const newRow = (keyword = ""): DemandRow => ({
+  id: `dm-${++rowSeq}`,
+  keyword,
+  volume: "",
+  trend: "flat",
+  competition: "medium",
+  intent: "buy",
+});
+
+const inputCls =
+  "w-full rounded-lg border border-ink/15 bg-white px-2.5 py-1.5 text-sm text-ink outline-none focus:border-signal";
+const labelCls = "mb-1 block text-xs font-medium text-ink/60";
+
+function plannerUrl(kw: string): string {
+  return "https://ads.google.com/aw/keywordplanner/home";
+}
+function trendsUrl(kw: string): string {
+  const q = encodeURIComponent(kw.trim());
+  return q ? `https://trends.google.com/trends/explore?q=${q}` : "https://trends.google.com/";
+}
+function semrushUrl(): string {
+  return "https://www.semrush.com/";
+}
+
+/** 需求强度：按月搜索量分档 */
+function demandLevel(volume: string): "strong" | "weak" | "none" {
+  const v = Number(volume);
+  if (!Number.isFinite(v) || v < 100) return "none";
+  if (v < 1000) return "weak";
+  return "strong";
+}
+
+/** 是否可打：竞争度 × 意图 */
+function beatable(
+  competition: Competition,
+  intent: Intent,
+  trend: Trend
+): "yes" | "caution" | "no" {
+  if (competition === "high") return "no";
+  if (competition === "medium") return "caution";
+  if (intent === "info") return "caution";
+  if (trend === "down") return "caution";
+  return "yes";
+}
+
+function verdictOf(row: DemandRow): Verdict {
+  const dl = demandLevel(row.volume);
+  if (dl === "none") return "bad";
+  const b = beatable(row.competition, row.intent, row.trend);
+  if (b === "no") return "bad";
+  if (b === "caution" || dl === "weak") return "caution";
+  return "good";
+}
+
+const verdictCls: Record<Verdict, string> = {
+  good: "bg-emerald-100 text-emerald-800",
+  caution: "bg-amber-100 text-amber-800",
+  bad: "bg-red-100 text-red-700",
+};
+
+export function DemandCheckClient({
+  dict: d,
+  importSignal,
+}: {
+  dict: KeywordStarterDict;
+  importSignal: SeedImportSignal | null;
+}) {
+  const [rows, setRows] = useState<DemandRow[]>([]);
+  const [kwInput, setKwInput] = useState("");
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkText, setBulkText] = useState("");
+
+  // 上方种子词一键导入（去重）
+  useEffect(() => {
+    if (!importSignal || importSignal.seq === 0) return;
+    setRows((rs) => {
+      const have = new Set(rs.map((r) => r.keyword.trim().toLowerCase()));
+      const fresh = importSignal.words
+        .map((w) => w.trim())
+        .filter((w) => w && !have.has(w.toLowerCase()))
+        .map((w) => newRow(w));
+      return fresh.length ? [...rs, ...fresh] : rs;
+    });
+  }, [importSignal]);
+
+  const update = (id: string, patch: Partial<DemandRow>) =>
+    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  const removeRow = (id: string) => setRows((rs) => rs.filter((r) => r.id !== id));
+
+  const addKeyword = () => {
+    const kw = kwInput.trim();
+    if (!kw) return;
+    setRows((rs) => [...rs, newRow(kw)]);
+    setKwInput("");
+  };
+
+  const doBulkImport = () => {
+    const words = bulkText.split("\n").map((s) => s.trim()).filter(Boolean);
+    if (!words.length) {
+      setBulkOpen(false);
+      return;
+    }
+    setRows((rs) => {
+      const have = new Set(rs.map((r) => r.keyword.trim().toLowerCase()));
+      const fresh = words
+        .filter((w) => !have.has(w.toLowerCase()))
+        .map((w) => newRow(w));
+      return [...rs, ...fresh];
+    });
+    setBulkText("");
+    setBulkOpen(false);
+  };
+
+  const summary = useMemo(() => {
+    let good = 0, caution = 0, bad = 0;
+    for (const r of rows) {
+      const v = verdictOf(r);
+      if (v === "good") good++;
+      else if (v === "caution") caution++;
+      else bad++;
+    }
+    return { total: rows.length, good, caution, bad };
+  }, [rows]);
+
+  const summaryText = d.summaryLine
+    .replace("{total}", String(summary.total))
+    .replace("{good}", String(summary.good))
+    .replace("{caution}", String(summary.caution))
+    .replace("{bad}", String(summary.bad));
+
+  return (
+    <div className="mt-8 space-y-4">
+      <div>
+        <h2 className="text-lg font-bold text-ink">📊 {d.demandTitle}</h2>
+        <p className="mt-1 text-sm text-ink/60">{d.demandSubtitle}</p>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          value={kwInput}
+          onChange={(e) => setKwInput(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && addKeyword()}
+          placeholder={d.kwPlaceholder}
+          className={`${inputCls} max-w-xs`}
+        />
+        <button
+          type="button"
+          onClick={addKeyword}
+          className="rounded-lg bg-ink px-3 py-1.5 text-sm font-medium text-white hover:opacity-90"
+        >
+          + {d.addKeyword}
+        </button>
+        <button
+          type="button"
+          onClick={() => setBulkOpen((o) => !o)}
+          className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink/70 hover:bg-ink/5"
+        >
+          {d.importKeywords}
+        </button>
+      </div>
+
+      {bulkOpen && (
+        <div className="rounded-xl border border-ink/10 bg-white p-4">
+          <textarea
+            value={bulkText}
+            onChange={(e) => setBulkText(e.target.value)}
+            placeholder={d.bulkPlaceholder}
+            rows={5}
+            className={inputCls}
+          />
+          <div className="mt-2 flex gap-2">
+            <button
+              type="button"
+              onClick={doBulkImport}
+              className="rounded-lg bg-signal px-4 py-1.5 text-sm font-medium text-white hover:opacity-90"
+            >
+              {d.doImport}
+            </button>
+            <button
+              type="button"
+              onClick={() => setBulkOpen(false)}
+              className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink/70 hover:bg-ink/5"
+            >
+              {d.cancel}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {rows.length === 0 ? (
+        <p className="rounded-xl border border-dashed border-ink/20 bg-white/50 p-6 text-center text-sm text-ink/50">
+          {d.emptyDemand}
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {rows.map((r) => {
+            const v = verdictOf(r);
+            const dl = demandLevel(r.volume);
+            const b = beatable(r.competition, r.intent, r.trend);
+            return (
+              <div key={r.id} className="rounded-xl border border-ink/10 bg-white p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="truncate text-sm font-bold text-ink">{r.keyword}</p>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${verdictCls[v]}`}>
+                      {d.verdictOptions[v]}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removeRow(r.id)}
+                      className="text-xs text-ink/40 hover:text-red-600"
+                    >
+                      {d.remove}
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <div>
+                    <label className={labelCls}>{d.thVolume}</label>
+                    <input
+                      value={r.volume}
+                      onChange={(e) => update(r.id, { volume: e.target.value.replace(/[^\d]/g, "") })}
+                      inputMode="numeric"
+                      placeholder="1000"
+                      className={inputCls}
+                    />
+                  </div>
+                  <div>
+                    <label className={labelCls}>{d.thTrend}</label>
+                    <select
+                      value={r.trend}
+                      onChange={(e) => update(r.id, { trend: e.target.value as Trend })}
+                      className={inputCls}
+                    >
+                      {(Object.keys(d.trendOptions) as Trend[]).map((k) => (
+                        <option key={k} value={k}>{d.trendOptions[k]}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className={labelCls}>{d.thCompetition}</label>
+                    <select
+                      value={r.competition}
+                      onChange={(e) => update(r.id, { competition: e.target.value as Competition })}
+                      className={inputCls}
+                    >
+                      {(Object.keys(d.competitionOptions) as Competition[]).map((k) => (
+                        <option key={k} value={k}>{d.competitionOptions[k]}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className={labelCls}>{d.thIntent}</label>
+                    <select
+                      value={r.intent}
+                      onChange={(e) => update(r.id, { intent: e.target.value as Intent })}
+                      className={inputCls}
+                    >
+                      {(Object.keys(d.intentOptions) as Intent[]).map((k) => (
+                        <option key={k} value={k}>{d.intentOptions[k]}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink/60">
+                  <span>{d.demandLabel}：<b className="text-ink/80">{d.demandLevels[dl]}</b></span>
+                  <span>{d.beatableLabel}：<b className="text-ink/80">{d.beatableLevels[b]}</b></span>
+                  <span className="ml-auto flex gap-2">
+                    <a href={plannerUrl(r.keyword)} target="_blank" rel="noreferrer" className="text-signal hover:underline">{d.openPlanner} ↗</a>
+                    <a href={trendsUrl(r.keyword)} target="_blank" rel="noreferrer" className="text-signal hover:underline">{d.openTrends} ↗</a>
+                    <a href={semrushUrl()} target="_blank" rel="noreferrer" className="text-signal hover:underline">{d.openSemrush} ↗</a>
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {rows.length > 0 && (
+        <div className="rounded-xl border border-signal/30 bg-signal/[0.06] p-4">
+          <p className="text-sm font-bold text-ink">✅ {d.summaryTitle}</p>
+          <p className="mt-1 text-sm text-ink/80">{summaryText}</p>
+        </div>
+      )}
+    </div>
+  );
+}

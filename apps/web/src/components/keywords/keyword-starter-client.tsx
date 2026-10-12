@@ -10,15 +10,19 @@ import {
   generateStarterKeywords,
   flattenStarterKeywords,
   type StarterCategoryKey,
+  type StarterKeywordGroup,
 } from "@/lib/keywords/starter";
 import type { KeywordStarterDict } from "@/i18n/dict/keyword-starter";
 
 export function KeywordStarterClient({
   dict: d,
   lang,
+  onSeedsReady,
 }: {
   dict: KeywordStarterDict;
   lang: "zh" | "en";
+  /** 可选：把当前类目的种子词导出给上层（如需求验证清单一键导入） */
+  onSeedsReady?: (groups: StarterKeywordGroup[]) => void;
 }) {
   const [cat, setCat] = useState<StarterCategoryKey>("electronics");
   const [copied, setCopied] = useState(false);
@@ -37,11 +41,6 @@ export function KeywordStarterClient({
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-ink">{d.pageTitle}</h1>
-        <p className="mt-1 text-sm text-ink/60">{d.pageSubtitle}</p>
-      </div>
-
       <div>
         <p className="mb-2 text-sm font-medium text-ink/70">{d.pickCategory}</p>
         <div className="flex flex-wrap gap-2">
@@ -71,6 +70,15 @@ export function KeywordStarterClient({
           📋 {d.copyAll}
         </button>
         {copied && <span className="text-sm text-emerald-600">✓ {d.copied}</span>}
+        {onSeedsReady && (
+          <button
+            type="button"
+            onClick={() => onSeedsReady(groups)}
+            className="rounded-lg border border-ink/15 px-4 py-2 text-sm text-ink/70 hover:bg-ink/5"
+          >
+            {d.importSeeds}
+          </button>
+        )}
         <Link
           href="/ads/auto-create"
           className="rounded-lg border border-ink/15 px-4 py-2 text-sm text-ink/70 hover:bg-ink/5"
