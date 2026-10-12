@@ -1,8 +1,11 @@
-import { CashbackOffersClient } from "@/components/cashback/offers-client";
+import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
-/** Feature 3 — 返利 Offer 列表 + 新增表单（网络选择 / 链接粘贴 / AdsPower 环境下拉）。 */
+/**
+ * 返利 Offer 已并入统一 Offer 中心（/offers?tab=cashback）。
+ * 保留路由，兼容老书签/外链。
+ */
 export default async function CashbackOffersPage() {
-  return <CashbackOffersClient />;
+  redirect("/offers?tab=cashback");
 }

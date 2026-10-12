@@ -27,8 +27,8 @@ export class OfferService {
     private readonly unitOfWork: UnitOfWork
   ) {}
 
-  list(tenantId: string, page?: number, pageSize?: number) {
-    return this.offers.list({ tenantId, page, pageSize });
+  list(tenantId: string, page?: number, pageSize?: number, source?: string) {
+    return this.offers.list({ tenantId, page, pageSize, source });
   }
 
   async getById(tenantId: string, id: string): Promise<Offer> {
@@ -41,6 +41,8 @@ export class OfferService {
     tenantId: string;
     name: string;
     network: string;
+    /** Offer 来源：affiliate | amazon | cashback（默认 affiliate） */
+    source?: string;
     destinationUrl: string;
     status?: OfferStatus;
     priority?: number;
@@ -52,6 +54,12 @@ export class OfferService {
     if (!input.tenantId) throw new ValidationError("tenantId is required");
     if (!input.name?.trim()) throw new ValidationError("name is required");
     if (!input.network?.trim()) throw new ValidationError("network is required");
+    if (
+      input.source !== undefined &&
+      !["affiliate", "amazon", "cashback"].includes(input.source)
+    ) {
+      throw new ValidationError("source must be affiliate, amazon or cashback");
+    }
     assertSafeRedirectUrl(input.destinationUrl);
 
     if (input.idempotencyKey) {
@@ -85,6 +93,7 @@ export class OfferService {
           tenantId: input.tenantId,
           name: input.name.trim(),
           network: input.network.trim(),
+          source: input.source ?? "affiliate",
           destinationUrl: input.destinationUrl.trim(),
           status: input.status ?? "DRAFT",
           priority: input.priority ?? 100,

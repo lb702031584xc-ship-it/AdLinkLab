@@ -401,6 +401,8 @@ model Offer {
   tenantId         String      @map("tenant_id") @db.Uuid
   name             String
   network          String
+  /// Offer 来源：affiliate（联盟）| amazon（亚马逊选品）| cashback（返利网）
+  source           String      @default("affiliate") @map("source")
   destinationUrl   String      @map("destination_url")
   status           OfferStatus @default(ACTIVE)
   /// Lower number = higher priority (Phase 5)

@@ -324,6 +324,7 @@ function toOffer(row: {
   tenantId: string;
   name: string;
   network: string;
+  source: string;
   destinationUrl: string;
   status: string;
   priority: number;
@@ -341,6 +342,7 @@ function toOffer(row: {
     tenantId: row.tenantId,
     name: row.name,
     network: row.network,
+    source: row.source,
     destinationUrl: row.destinationUrl,
     status: row.status as Offer["status"],
     priority: row.priority,
@@ -1148,9 +1150,11 @@ export class PrismaOfferRepository implements OfferRepository {
     });
     return row ? toOffer(row) : null;
   }
-  async list(input?: PaginationInput & { tenantId?: string }) {
+  async list(input?: PaginationInput & { tenantId?: string; source?: string }) {
     const { page, pageSize, skip } = normalizePagination(input);
-    const where = input?.tenantId ? { tenantId: input.tenantId } : {};
+    const where: Prisma.OfferWhereInput = {};
+    if (input?.tenantId) where.tenantId = input.tenantId;
+    if (input?.source) where.source = input.source;
     const [items, total] = await Promise.all([
       this.db.offer.findMany({ where, skip, take: pageSize, orderBy: { createdAt: "desc" } }),
       this.db.offer.count({ where }),
@@ -1166,6 +1170,7 @@ export class PrismaOfferRepository implements OfferRepository {
             tenantId: data.tenantId,
             name: data.name,
             network: data.network,
+            source: data.source ?? "affiliate",
             destinationUrl: data.destinationUrl,
             status: data.status,
             priority: data.priority ?? 100,

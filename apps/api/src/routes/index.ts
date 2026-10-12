@@ -317,13 +317,17 @@ export async function registerRoutes(
 
   app.get<{
     Headers: { "x-tenant-id"?: string };
-    Querystring: { page?: string; pageSize?: string };
+    Querystring: { page?: string; pageSize?: string; source?: string };
   }>("/api/v1/offers", async (request) => {
     const tenantId = tenantOf(request);
+    const source = request.query.source;
     const result = await services.offers.list(
       tenantId,
       request.query.page ? Number(request.query.page) : undefined,
-      request.query.pageSize ? Number(request.query.pageSize) : undefined
+      request.query.pageSize ? Number(request.query.pageSize) : undefined,
+      source && ["affiliate", "amazon", "cashback"].includes(source)
+        ? source
+        : undefined
     );
     // 附带推荐指数摘要（无数据时为 null；memory 模式无 prisma 时跳过）。
     if (!services.prisma || !attachMetricsSummaries) return result;
@@ -357,6 +361,7 @@ export async function registerRoutes(
       tenantId?: string;
       name: string;
       network: string;
+      source?: string;
       destinationUrl: string;
       status?: OfferStatus;
       priority?: number;
@@ -371,6 +376,7 @@ export async function registerRoutes(
       tenantId,
       name: request.body.name,
       network: request.body.network,
+      source: request.body.source,
       destinationUrl: request.body.destinationUrl,
       status: request.body.status,
       priority: request.body.priority,

@@ -117,7 +117,9 @@ export interface OfferRepository {
     scope: string,
     idempotencyKey: string
   ): Promise<Offer | null>;
-  list(input?: PaginationInput & { tenantId?: string }): Promise<PaginatedResult<Offer>>;
+  list(
+    input?: PaginationInput & { tenantId?: string; source?: string }
+  ): Promise<PaginatedResult<Offer>>;
   create(data: Omit<Offer, "createdAt" | "updatedAt">): Promise<Offer>;
   update(id: string, data: Partial<Omit<Offer, "id" | "createdAt">>): Promise<Offer>;
 }

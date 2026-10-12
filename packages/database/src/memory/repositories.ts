@@ -592,8 +592,12 @@ export class InMemoryOfferRepository implements OfferRepository {
       ) ?? null
     );
   }
-  async list(input?: PaginationInput & { tenantId?: string }) {
-    return paginateArray(filterByTenantId([...this.store.values()], input?.tenantId), input);
+  async list(input?: PaginationInput & { tenantId?: string; source?: string }) {
+    const byTenant = filterByTenantId([...this.store.values()], input?.tenantId);
+    const filtered = input?.source
+      ? byTenant.filter((o) => (o.source ?? "affiliate") === input.source)
+      : byTenant;
+    return paginateArray(filtered, input);
   }
   async create(data: Omit<Offer, "createdAt" | "updatedAt">) {
     if (data.idempotencyScope && data.idempotencyKey) {
@@ -613,6 +617,7 @@ export class InMemoryOfferRepository implements OfferRepository {
     }
     const entity = {
       ...data,
+      source: data.source ?? "affiliate",
       priority: data.priority ?? 100,
       ...stamp(),
     };

@@ -285,6 +285,7 @@ export function registerComboTestRoutes(
             tenantId: info.tenantId,
             name: it.title.slice(0, 200),
             network: "Amazon",
+            source: "amazon",
             destinationUrl,
             status: "ACTIVE",
           },

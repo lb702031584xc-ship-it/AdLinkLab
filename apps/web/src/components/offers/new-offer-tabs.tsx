@@ -11,6 +11,7 @@ export function NewOfferTabs() {
   const t = useDict();
   const searchParams = useSearchParams();
   const initialTab = searchParams.get("tab") === "import" ? "import" : "manual";
+  const initialSource = searchParams.get("source") ?? undefined;
   const [tab, setTab] = useState<"manual" | "import">(initialTab);
 
   const tabClass = (active: boolean) =>
@@ -41,7 +42,11 @@ export function NewOfferTabs() {
         </button>
       </div>
       <div className="mt-6">
-        {tab === "manual" ? <OfferForm /> : <OfferImportClient />}
+        {tab === "manual" ? (
+          <OfferForm initialSource={initialSource} />
+        ) : (
+          <OfferImportClient />
+        )}
       </div>
     </div>
   );

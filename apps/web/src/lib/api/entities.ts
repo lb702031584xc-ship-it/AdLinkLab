@@ -91,6 +91,8 @@ export interface Offer {
   tenantId: string;
   name: string;
   network: string;
+  /** Offer 来源：affiliate | amazon | cashback */
+  source: string;
   destinationUrl: string;
   status: string;
   priority: number;
@@ -405,13 +407,20 @@ export const entityApi = {
   },
 
   offers: {
-    list: (page?: number, pageSize?: number) =>
-      apiFetch<Paginated<Offer>>(`/api/v1/offers${pageQuery(page, pageSize)}`),
+    list: (page?: number, pageSize?: number, source?: string) => {
+      const qs = new URLSearchParams();
+      if (page) qs.set("page", String(page));
+      if (pageSize) qs.set("pageSize", String(pageSize));
+      if (source) qs.set("source", source);
+      const s = qs.toString();
+      return apiFetch<Paginated<Offer>>(`/api/v1/offers${s ? `?${s}` : ""}`);
+    },
     get: (id: string) =>
       apiFetch<Offer>(`/api/v1/offers/${encodeURIComponent(id)}`),
     create: (input: {
       name: string;
       network: string;
+      source?: string;
       destinationUrl: string;
       status?: string;
       priority?: number;

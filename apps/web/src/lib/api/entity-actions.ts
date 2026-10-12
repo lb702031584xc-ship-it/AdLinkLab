@@ -56,6 +56,7 @@ export async function createGoogleAccountAction(input: {
 export async function createOfferAction(input: {
   name: string;
   network: string;
+  source?: string;
   destinationUrl: string;
   status?: string;
   priority?: number;

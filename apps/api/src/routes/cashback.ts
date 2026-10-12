@@ -292,6 +292,7 @@ export async function registerCashbackRoutes(
         tenantId,
         name: offerDisplayName(cashbackNetwork, originalUrl),
         network: cashbackNetwork,
+        source: "cashback",
         destinationUrl: originalUrl,
         status: "ACTIVE",
       },

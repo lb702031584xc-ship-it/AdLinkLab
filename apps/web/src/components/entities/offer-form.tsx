@@ -13,17 +13,24 @@ const labelClassName = "mb-1 block text-sm font-medium text-ink/70";
 
 const OFFER_STATUSES = ["ACTIVE", "PAUSED", "ARCHIVED"] as const;
 
+const OFFER_SOURCES = ["affiliate", "amazon", "cashback"] as const;
+
 function toIsoInput(value: string): string | undefined {
   if (!value) return undefined;
   const d = new Date(value);
   return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
 }
 
-export function OfferForm() {
+export function OfferForm({ initialSource }: { initialSource?: string }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [name, setName] = useState("");
   const [network, setNetwork] = useState("");
+  const [source, setSource] = useState<string>(
+    OFFER_SOURCES.includes(initialSource as (typeof OFFER_SOURCES)[number])
+      ? (initialSource as string)
+      : "affiliate"
+  );
   const [destinationUrl, setDestinationUrl] = useState("");
   const [status, setStatus] = useState<string>("ACTIVE");
   const [priority, setPriority] = useState("100");
@@ -48,6 +55,7 @@ export function OfferForm() {
       const result = await createOfferAction({
         name: name.trim(),
         network: network.trim(),
+        source,
         destinationUrl: destinationUrl.trim(),
         status,
         priority: Number.isFinite(priorityNum) ? Math.floor(priorityNum) : 100,
@@ -58,7 +66,7 @@ export function OfferForm() {
         setError(result.error);
         return;
       }
-      router.push("/offers");
+      router.push(`/offers?tab=${source}`);
     });
   }
 
@@ -90,6 +98,23 @@ export function OfferForm() {
           onChange={(e) => setNetwork(e.target.value)}
           placeholder={f.networkPlaceholder}
         />
+      </div>
+      <div>
+        <label htmlFor="offer-source" className={labelClassName}>
+          {f.source}
+        </label>
+        <select
+          id="offer-source"
+          className={inputClassName}
+          value={source}
+          onChange={(e) => setSource(e.target.value)}
+        >
+          {OFFER_SOURCES.map((s) => (
+            <option key={s} value={s}>
+              {t.entities.offers.tabs[s as keyof typeof t.entities.offers.tabs]}
+            </option>
+          ))}
+        </select>
       </div>
       <div>
         <label htmlFor="offer-url" className={labelClassName}>

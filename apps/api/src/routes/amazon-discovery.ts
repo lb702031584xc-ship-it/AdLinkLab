@@ -185,6 +185,7 @@ export function registerAmazonDiscoveryRoutes(
           tenantId: session.tenantId,
           name: p.title.slice(0, 200),
           network: "amazon",
+          source: "amazon",
           destinationUrl: url,
           status: "ACTIVE",
           commissionValue: p.estimatedCommission,
