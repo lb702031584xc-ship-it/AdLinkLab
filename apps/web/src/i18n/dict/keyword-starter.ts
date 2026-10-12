@@ -45,6 +45,16 @@ export interface KeywordStarterDict {
   openPlanner: string;
   openTrends: string;
   openSemrush: string;
+  /* AI 推荐关键词 */
+  aiRecommendTitle: string;
+  aiRecommendHint: string;
+  aiProductPlaceholder: string;
+  aiRecommendBtn: string;
+  aiRecommending: string;
+  aiScore: string;
+  aiImportAll: string;
+  aiImportOne: string;
+  aiFailed: string;
   /* 投放选词 */
   planTitle: string;
   planSubtitle: string;
@@ -117,6 +127,15 @@ export const zh: KeywordStarterDict = {
   openPlanner: "规划师",
   openTrends: "Trends",
   openSemrush: "SEMrush",
+  aiRecommendTitle: "AI 推荐关键词",
+  aiRecommendHint: "输入产品/品类，AI 按搜索需求×商业意图×竞争可打性打分推荐",
+  aiProductPlaceholder: "例如：robot vacuum",
+  aiRecommendBtn: "AI 推荐",
+  aiRecommending: "推荐中…",
+  aiScore: "评分",
+  aiImportAll: "全部导入",
+  aiImportOne: "导入",
+  aiFailed: "AI 推荐失败，请稍后重试",
   planTitle: "投放关键词计划",
   planSubtitle:
     "逐词定分组、匹配方式和出价。匹配方式新手建议从“词组”起步，跑出数据再放宽到广泛。",
@@ -190,6 +209,15 @@ export const en: KeywordStarterDict = {
   openPlanner: "Planner",
   openTrends: "Trends",
   openSemrush: "SEMrush",
+  aiRecommendTitle: "AI keyword suggestions",
+  aiRecommendHint: "Enter a product/niche; AI scores by demand × intent × beatability",
+  aiProductPlaceholder: "e.g. robot vacuum",
+  aiRecommendBtn: "Recommend",
+  aiRecommending: "Recommending…",
+  aiScore: "Score",
+  aiImportAll: "Import all",
+  aiImportOne: "Import",
+  aiFailed: "Recommendation failed, please try again",
   planTitle: "Launch keyword plan",
   planSubtitle:
     "Set ad group, match type and bid per keyword. Beginners: start with “Phrase”, loosen to “Broad” after data comes in.",

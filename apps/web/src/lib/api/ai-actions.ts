@@ -28,7 +28,9 @@ import {
   type SaveSettingsInput,
   type TrafficPlanInput,
   type TrafficPlanResult,
+  type RecommendedKeyword,
   analyzeTrafficPlan,
+  recommendKeywords,
 } from "./ai";
 import type {
   ProfitAnalysisInput,
@@ -219,6 +221,24 @@ export async function analyzeTrafficPlanAction(
       e,
       t,
       lang === "zh" ? "投流分析失败，请稍后重试。" : "Traffic plan analysis failed, please try again."
+    );
+  }
+}
+
+export async function recommendKeywordsAction(
+  product: string,
+  count = 10
+): Promise<AiActionResult<{ product: string; keywords: RecommendedKeyword[] }>> {
+  const lang = await getLang();
+  const t = getDictionary(lang);
+  try {
+    const data = await recommendKeywords(product, count, lang);
+    return { ok: true, data };
+  } catch (e) {
+    return mapAiActionError(
+      e,
+      t,
+      lang === "zh" ? "AI 推荐关键词失败，请稍后重试。" : "Keyword recommendation failed, please try again."
     );
   }
 }

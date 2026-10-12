@@ -18,6 +18,7 @@ import {
 import { getLang } from "@/i18n/lang";
 import { getDictionary } from "@/i18n/dictionaries";
 import { OfferScoreCell } from "@/components/offers/offer-score-cell";
+import { OfferDeleteButton } from "@/components/offers/offer-delete-button";
 import { TestSpendCell } from "@/components/offers/test-spend-cell";
 import {
   QuickCalcButton,
@@ -194,6 +195,24 @@ export default async function OffersPage({
   const columns: Array<Column<Offer>> = [
     { header: t.common.misc.name, render: (o) => o.name },
     {
+      header: t.entities.offers.columns.mid,
+      render: (o) => (
+        <span className="text-xs text-ink/60" title={o.merchantId ?? ""}>
+          {o.merchantId ? String(o.merchantId).slice(0, 8) + "…" : "—"}
+        </span>
+      ),
+      className: "whitespace-nowrap",
+    },
+    {
+      header: t.entities.offers.columns.commission,
+      render: (o) => {
+        if (o.commissionValue == null) return "—";
+        const v = String(o.commissionValue);
+        return o.commissionType === "percentage" ? `${v}%` : `$${v}`;
+      },
+      className: "whitespace-nowrap",
+    },
+    {
       header: t.entities.offers.columns.source,
       render: (o) => (
         <SourceBadge
@@ -273,6 +292,21 @@ export default async function OffersPage({
     {
       header: t.common.misc.updated,
       render: (o) => formatDateTime(o.updatedAt),
+      className: "whitespace-nowrap",
+    },
+    {
+      header: t.entities.offers.columns.actions,
+      render: (o) => (
+        <OfferDeleteButton
+          offerId={o.id}
+          offerName={o.name}
+          dict={{
+            delete: t.entities.offers.columns.delete,
+            deleteConfirm: t.entities.offers.columns.deleteConfirm,
+            deleting: t.entities.offers.columns.deleting,
+          }}
+        />
+      ),
       className: "whitespace-nowrap",
     },
   ];

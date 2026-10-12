@@ -100,6 +100,12 @@ export interface Offer {
   endsAt?: string;
   createdAt: string;
   updatedAt: string;
+  /** 商户/网络侧 offer ID（mid）。 */
+  merchantId?: string | null;
+  /** 佣金数值（Decimal 序列化为字符串）。 */
+  commissionValue?: string | number | null;
+  /** 佣金类型：percentage | fixed。 */
+  commissionType?: string | null;
   /** 推荐指数摘要（第三批；无数据时为 null/缺失）。 */
   metricsSummary?: MetricsSummary | null;
 }
@@ -442,6 +448,10 @@ export const entityApi = {
     changeStatus: (id: string, status: string) =>
       post<Offer>(`/api/v1/offers/${encodeURIComponent(id)}/status`, {
         status,
+      }),
+    remove: (id: string) =>
+      apiFetch<{ deleted: boolean }>(`/api/v1/offers/${encodeURIComponent(id)}`, {
+        method: "DELETE",
       }),
     listLandingPages: (offerId: string, page?: number, pageSize?: number) =>
       apiFetch<Paginated<LandingPage>>(

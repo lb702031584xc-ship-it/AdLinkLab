@@ -13,7 +13,7 @@ import type {
   TrackingLinkOfferService,
 } from "@adlinklab/offers";
 import type { OfferStatus } from "@adlinklab/domain";
-import { ValidationError } from "@adlinklab/shared";
+import { NotFoundError, ValidationError } from "@adlinklab/shared";
 import type {
   AdService,
   AuditService,
@@ -331,12 +331,20 @@ export async function registerRoutes(
     );
     // 附带推荐指数摘要（无数据时为 null；memory 模式无 prisma 时跳过）。
     if (!services.prisma || !attachMetricsSummaries) return result;
+    // 排除软删除（archivedAt != null）的 offer。
+    const visibleItems = result.items.filter(
+      (o: { archivedAt?: string | Date | null }) => !o.archivedAt
+    );
     const items = await attachMetricsSummaries(
       services.prisma,
       tenantId,
-      result.items
+      visibleItems
     );
-    return { ...result, items };
+    return {
+      ...result,
+      items,
+      total: result.total - (result.items.length - visibleItems.length),
+    };
   });
 
   app.get<{
@@ -427,6 +435,21 @@ export async function registerRoutes(
       },
       request.body.requestId
     );
+  });
+
+  app.delete<{
+    Params: { id: string };
+    Headers: { "x-tenant-id"?: string };
+  }>("/api/v1/offers/:id", async (request) => {
+    const tenantId = tenantOf(request);
+    if (!services.prisma) throw new NotFoundError("Offer", request.params.id);
+    // 软删除：置 archivedAt，避免破坏 tracking_links 等关联数据。
+    const updated = await services.prisma.offer.updateMany({
+      where: { id: request.params.id, tenantId, archivedAt: null },
+      data: { archivedAt: new Date(), status: "ARCHIVED" },
+    });
+    if (updated.count === 0) throw new NotFoundError("Offer", request.params.id);
+    return { deleted: true, id: request.params.id };
   });
 
   app.post<{

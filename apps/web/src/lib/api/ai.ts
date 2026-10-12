@@ -342,6 +342,27 @@ export async function analyzeTrafficPlan(
   });
 }
 
+/** AI 推荐关键词：输入产品/品类，返回带评分的关键词列表。 */
+export interface RecommendedKeyword {
+  keyword: string;
+  score: number;
+  reason: string;
+}
+
+export async function recommendKeywords(
+  product: string,
+  count = 10,
+  language?: string
+): Promise<{ product: string; keywords: RecommendedKeyword[] }> {
+  return aiFetch<{ product: string; keywords: RecommendedKeyword[] }>(
+    "/api/v1/ai/recommend-keywords",
+    {
+      method: "POST",
+      body: JSON.stringify({ product, count, language }),
+    }
+  );
+}
+
 /** Batch-screen up to 10 offers' terms, ranked go → caution → stop. */
 export async function screenOffers(
   items: AiScreenItemInput[],

@@ -7,6 +7,8 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import type { KeywordStarterDict } from "@/i18n/dict/keyword-starter";
+import { recommendKeywordsAction } from "@/lib/api/ai-actions";
+import type { RecommendedKeyword } from "@/lib/api/ai";
 
 type Trend = "up" | "flat" | "down";
 type Competition = "low" | "medium" | "high";
@@ -100,6 +102,59 @@ export function DemandCheckClient({
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkText, setBulkText] = useState("");
 
+  // AI 推荐关键词
+  const [aiProduct, setAiProduct] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiKeywords, setAiKeywords] = useState<RecommendedKeyword[]>([]);
+
+  const onAiRecommend = async () => {
+    const p = aiProduct.trim();
+    if (!p || aiLoading) return;
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const res = await recommendKeywordsAction(p, 10);
+      if (res.ok) {
+        setAiKeywords(res.data.keywords);
+      } else {
+        setAiError(res.error || d.aiFailed);
+      }
+    } catch {
+      setAiError(d.aiFailed);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const importAiKeyword = (kw: string) => {
+    const t = kw.trim();
+    if (!t) return;
+    setRows((rs) => {
+      const have = new Set(rs.map((r) => r.keyword.trim().toLowerCase()));
+      if (have.has(t.toLowerCase())) return rs;
+      return [...rs, newRow(t)];
+    });
+  };
+
+  const importAllAi = () => {
+    setRows((rs) => {
+      const have = new Set(rs.map((r) => r.keyword.trim().toLowerCase()));
+      const fresh = aiKeywords
+        .map((k) => k.keyword.trim())
+        .filter((w) => w && !have.has(w.toLowerCase()))
+        .map((w) => newRow(w));
+      return [...rs, ...fresh];
+    });
+  };
+
+  const scoreCls = (s: number) =>
+    s >= 80
+      ? "bg-emerald-100 text-emerald-800"
+      : s >= 60
+        ? "bg-amber-100 text-amber-800"
+        : "bg-ink/10 text-ink/60";
+
   // 上方种子词一键导入（去重）
   useEffect(() => {
     if (!importSignal || importSignal.seq === 0) return;
@@ -163,6 +218,75 @@ export function DemandCheckClient({
       <div>
         <h2 className="text-lg font-bold text-ink">📊 {d.demandTitle}</h2>
         <p className="mt-1 text-sm text-ink/60">{d.demandSubtitle}</p>
+      </div>
+
+      {/* AI 推荐关键词 */}
+      <div className="rounded-xl border border-signal/30 bg-signal/[0.04] p-4">
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-ink">🤖 {d.aiRecommendTitle}</h3>
+        </div>
+        <p className="mt-1 text-xs text-ink/50">{d.aiRecommendHint}</p>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <input
+            value={aiProduct}
+            onChange={(e) => setAiProduct(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && onAiRecommend()}
+            placeholder={d.aiProductPlaceholder}
+            className={`${inputCls} max-w-xs`}
+          />
+          <button
+            type="button"
+            onClick={onAiRecommend}
+            disabled={aiLoading || !aiProduct.trim()}
+            className="rounded-lg bg-signal px-3 py-1.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+          >
+            {aiLoading ? d.aiRecommending : d.aiRecommendBtn}
+          </button>
+          {aiKeywords.length > 0 && (
+            <button
+              type="button"
+              onClick={importAllAi}
+              className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink/70 hover:bg-ink/5"
+            >
+              {d.aiImportAll} ({aiKeywords.length})
+            </button>
+          )}
+        </div>
+        {aiError && (
+          <p className="mt-2 text-xs text-red-600">{aiError}</p>
+        )}
+        {aiKeywords.length > 0 && (
+          <div className="mt-3 space-y-1.5">
+            {aiKeywords.map((k) => (
+              <div
+                key={k.keyword}
+                className="flex items-center justify-between gap-2 rounded-lg bg-white px-3 py-2"
+              >
+                <div className="min-w-0">
+                  <span className="text-sm font-medium text-ink">{k.keyword}</span>
+                  {k.reason && (
+                    <p className="truncate text-xs text-ink/50">{k.reason}</p>
+                  )}
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-xs font-bold ${scoreCls(k.score)}`}
+                    title={d.aiScore}
+                  >
+                    {k.score}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => importAiKeyword(k.keyword)}
+                    className="text-xs text-signal hover:underline"
+                  >
+                    {d.aiImportOne}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center gap-2">

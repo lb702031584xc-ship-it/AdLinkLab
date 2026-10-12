@@ -453,6 +453,69 @@ export async function registerAiRoutes(
   });
 
   /**
+   * AI 推荐关键词：输入产品/品类，返回带评分的关键词列表。
+   * 评分 0-100：综合搜索需求、商业意图、竞争可打性。
+   */
+  app.post("/api/v1/ai/recommend-keywords", async (request) => {
+    await requireSession(deps, request);
+    const body = (request.body ?? {}) as {
+      product?: unknown;
+      language?: unknown;
+      count?: unknown;
+    };
+    const product = asTrimmedString(body.product);
+    if (!product || product.length < 2) {
+      throw new ValidationError("product must be at least 2 characters");
+    }
+    const count = Math.min(Math.max(Number(body.count) || 10, 5), 20);
+    const language: AnalysisLanguage = body.language === "en" ? "en" : "zh";
+
+    const settings = await readSettings(prisma);
+    if (!isConfigured(settings)) {
+      throw new AppError("AI is not configured", {
+        code: "AI_NOT_CONFIGURED",
+        statusCode: 400,
+      });
+    }
+    const pepper = assertAiSettingsPepperConfigured();
+    const apiKey = decryptSecret(settings.apiKeyEnc as string, pepper);
+
+    const system =
+      language === "zh"
+        ? "你是20年经验的联盟营销投流专家，擅长 Google Ads 关键词策略。用大白话，只返回 JSON。"
+        : "You are a 20-year affiliate paid-traffic expert specializing in Google Ads keyword strategy. Return JSON only.";
+    const user =
+      language === "zh"
+        ? `为产品/品类"${product}"推荐 ${count} 个适合 Google Ads 投放的英文关键词。要求：覆盖高购买意图词（best/review/vs/discount/buy 修饰）、长尾词；避开纯信息类词。每个词给 0-100 评分（综合搜索需求、商业意图、竞争可打性，分数越高越值得投）。只返回 JSON：{"keywords":[{"keyword":"...","score":85,"reason":"一句话理由"}]}`
+        : `Recommend ${count} English keywords for Google Ads for product/niche "${product}". Cover high-intent modifiers (best/review/vs/discount/buy) and long-tail. Avoid informational-only terms. Score each 0-100 (search demand, commercial intent, beatability; higher = more worth bidding). Return JSON only: {"keywords":[{"keyword":"...","score":85,"reason":"one-line reason"}]}`;
+
+    let result: { keywords?: Array<{ keyword?: unknown; score?: unknown; reason?: unknown }> };
+    try {
+      result = (await chatJsonImpl({
+        baseUrl: settings.baseUrl as string,
+        model: settings.model as string,
+        apiKey,
+        system: system + '\nReturn JSON: {"keywords":[{"keyword":"...","score":0-100,"reason":"..."}]}',
+        user,
+      })) as typeof result;
+    } catch (e) {
+      if (e instanceof AiError) throw e;
+      throw new AiError("LLM request failed");
+    }
+
+    const keywords = (result.keywords ?? [])
+      .filter((k) => typeof k.keyword === "string" && (k.keyword as string).trim())
+      .slice(0, count)
+      .map((k) => ({
+        keyword: (k.keyword as string).trim(),
+        score: Math.min(Math.max(Number(k.score) || 50, 0), 100),
+        reason: typeof k.reason === "string" ? k.reason.trim().slice(0, 120) : "",
+      }));
+
+    return { product, keywords, analyzedAt: new Date().toISOString() };
+  });
+
+  /**
    * P0 anti-ban — parse affiliate offer TERMS into structured restrictions.
    * Conservative by design: the prompt maps ambiguity/silence to "unknown".
    */
