@@ -42,6 +42,25 @@ function parseMatchType(s: string): MatchType {
   return "phrase";
 }
 
+/** 广告组自动分组：去掉修饰词后按核心产品词归组 */
+const GROUP_STOPWORDS = new Set([
+  "best", "buy", "cheap", "cheapest", "review", "reviews", "vs",
+  "for", "home", "sale", "online", "store", "near", "me",
+  "discount", "deals", "deal", "coupon", "price", "prices",
+  "top", "good", "brand", "new", "2026", "2025", "under",
+  "with", "without", "and", "the", "a", "an", "of", "to",
+]);
+function coreGroupName(keyword: string): string {
+  const words = keyword
+    .toLowerCase()
+    .replace(/["[\]]/g, " ")
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w && !GROUP_STOPWORDS.has(w))
+    .slice(0, 3);
+  if (!words.length) return "";
+  return words.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+
 export function LaunchEditorClient({
   dict: d,
   lang,
@@ -114,8 +133,28 @@ export function LaunchEditorClient({
     setBulkOpen(false);
   };
 
-  const copyPlan = async () => {
-    const lines = rows
+  /** 一键自动分组：按核心产品词归组，已有分组的不动 */
+  const autoGroup = () => {
+    setRows((rs) =>
+      rs.map((r) => {
+        if (!r.keyword.trim() || r.adGroup.trim()) return r;
+        const g = coreGroupName(r.keyword);
+        return g ? { ...r, adGroup: g } : r;
+      })
+    );
+  };
+
+  /** 一键填建议出价：优先用参考 CPC，空的填 1.00 起步 */
+  const fillBidSuggestions = () => {
+    setRows((rs) =>
+      rs.map((r) => {
+        if (!r.keyword.trim() || r.bid.trim()) return r;
+        return { ...r, bid: r.refCpc.trim() || "1.00" };
+      })
+    );
+  };
+
+  const copyPlan = async () => {    const lines = rows
       .filter((r) => r.keyword.trim())
       .map((r) =>
         [r.keyword.trim(), r.adGroup.trim() || "-", d.matchOptions[r.matchType], r.bid.trim() || "-", r.refCpc.trim() || "-"].join(" | ")
@@ -191,6 +230,20 @@ export function LaunchEditorClient({
             📋 {d.copyPlan}
           </button>
           {copied && <span className="self-center text-sm text-emerald-600">✓ {d.copied}</span>}
+          <button
+            type="button"
+            onClick={autoGroup}
+            className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink/70 hover:bg-ink/5"
+          >
+            🗂️ {d.autoGroup}
+          </button>
+          <button
+            type="button"
+            onClick={fillBidSuggestions}
+            className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink/70 hover:bg-ink/5"
+          >
+            ⚡ {d.fillBids}
+          </button>
         </div>
 
         {bulkOpen && (
@@ -289,6 +342,29 @@ export function LaunchEditorClient({
           ))}
         </div>
         <p className="text-xs text-ink/50">💡 {d.bidHint}</p>
+
+        {/* 下一步：计划定稿后去投放 */}
+        {rows.some((r) => r.keyword.trim()) && (
+          <div className="rounded-xl border border-signal/30 bg-signal/[0.04] p-4">
+            <p className="text-sm font-semibold text-ink">🚀 {d.nextStepTitle}</p>
+            <p className="mt-1 text-xs text-ink/55">{d.nextStepHint}</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={copyPlan}
+                className="rounded-lg bg-signal px-3 py-1.5 text-sm font-medium text-white hover:opacity-90"
+              >
+                📋 {d.copyPlan}
+              </button>
+              <a
+                href="/ads/auto-create"
+                className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink/70 hover:bg-ink/5"
+              >
+                📢 {d.goAutoAds} →
+              </a>
+            </div>
+          </div>
+        )}
       </section>
 
       {/* 否定词 */}

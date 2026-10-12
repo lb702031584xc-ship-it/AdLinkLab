@@ -71,6 +71,11 @@ export interface KeywordStarterDict {
   bulkPlanPlaceholder: string;
   copyPlan: string;
   bidHint: string;
+  autoGroup: string;
+  fillBids: string;
+  nextStepTitle: string;
+  nextStepHint: string;
+  goAutoAds: string;
   negativesTitle: string;
   negativesSubtitle: string;
   negPlaceholder: string;
@@ -155,6 +160,11 @@ export const zh: KeywordStarterDict = {
     "CSV 格式，每行一个词：关键词, 广告组, 匹配方式(exact/phrase/broad), 出价, 参考CPC\nbest robot vacuum, 通用组, phrase, 1.2, 0.9\nrobot vacuum review, 评测组, exact, 1.5,",
   copyPlan: "复制投放计划",
   bidHint: "出价建议：不超过“目标 CPA × 预期转化率”。比如目标 CPA $20、预期转化率 2%，出价上限就是 $0.4。",
+  autoGroup: "一键自动分组",
+  fillBids: "一键填建议出价",
+  nextStepTitle: "计划定稿，下一步",
+  nextStepHint: "复制计划去 Google Ads 后台建组，或去自动化广告让 AI 生成广告系列结构和 RSA 文案。",
+  goAutoAds: "去自动化广告",
   negativesTitle: "否定关键词",
   negativesSubtitle: "把不带来转化的搜索词提前排除，省预算。先一键加入通用否定词库，再按你的行业补充。",
   negPlaceholder: "输入否定词，如 免费",
@@ -239,6 +249,11 @@ export const en: KeywordStarterDict = {
     "CSV, one keyword per line: keyword, ad group, match type (exact/phrase/broad), bid, ref CPC\nbest robot vacuum, General, phrase, 1.2, 0.9\nrobot vacuum review, Review, exact, 1.5,",
   copyPlan: "Copy launch plan",
   bidHint: "Bid rule of thumb: stay under “target CPA × expected CVR”. E.g. target CPA $20 × 2% CVR = max bid $0.4.",
+  autoGroup: "Auto-group",
+  fillBids: "Fill suggested bids",
+  nextStepTitle: "Plan ready — next step",
+  nextStepHint: "Copy the plan into Google Ads, or head to Automated Ads for AI-generated campaign structure and RSA copy.",
+  goAutoAds: "Automated Ads",
   negativesTitle: "Negative keywords",
   negativesSubtitle: "Exclude searches that never convert to save budget. Add the universal library first, then your niche terms.",
   negPlaceholder: "Enter a negative, e.g. free",
