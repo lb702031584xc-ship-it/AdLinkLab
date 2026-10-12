@@ -21,9 +21,15 @@ function verdictBadge(v: UrlCheckVerdict): string {
 export function ComplianceClient({
   isAdmin,
   initialOwnedDomains,
+  hideHeader,
+  onResult,
 }: {
   isAdmin: boolean;
   initialOwnedDomains: string[];
+  /** Worksheet embedding: hide the page header (the step card provides it). */
+  hideHeader?: boolean;
+  /** Worksheet embedding: report check results upward. */
+  onResult?: (r: AiUrlCheckResult[] | null) => void;
 }) {
   const t = useDict();
   const d = t.ai.compliance;
@@ -65,6 +71,7 @@ export function ComplianceClient({
       const res = await checkUrlsAction(urls, ownedDomains);
       if (res.ok) {
         setResults(res.data.results);
+        onResult?.(res.data.results);
         // Admins persist owned domains to AI settings; members use them per-check only.
         if (isAdmin) {
           await saveAiSettingsAction({ ownedDomains });
@@ -80,11 +87,14 @@ export function ComplianceClient({
   function reset() {
     setResults(null);
     setError(null);
+    onResult?.(null);
   }
 
   return (
     <div>
-      <EntityPageHeader title={d.title} description={d.description} />
+      {hideHeader ? null : (
+        <EntityPageHeader title={d.title} description={d.description} />
+      )}
 
       <div className="mt-6 rounded-xl border border-signal/25 bg-signal/5 p-5">
         <p className="text-sm font-semibold text-ink">{d.explainerTitle}</p>

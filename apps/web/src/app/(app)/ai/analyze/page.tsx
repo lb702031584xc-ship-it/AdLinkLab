@@ -1,31 +1,65 @@
 import { getCurrentUser } from "@/lib/api/auth";
+import { getAiSettingsAction } from "@/lib/api/ai-actions";
+import { entityApi } from "@/lib/api/entities";
 import {
-  getAiSettingsAction,
-  listAnalysesAction,
-} from "@/lib/api/ai-actions";
-import { AnalyzeClient } from "@/components/ai/analyze-client";
+  WorksheetClient,
+  type WorksheetOffer,
+  type WorksheetSource,
+} from "@/components/ai/worksheet-client";
 
 export const dynamic = "force-dynamic";
 
-/** AI offer-analysis workbench. */
-export default async function AiAnalyzePage() {
+/**
+ * AI analysis worksheet: 4 steps in workflow order
+ * (terms → compliance → profit → traffic planning) + overall verdict.
+ * Supports ?offerId= (prefills the subject header) and
+ * ?source=affiliate|amazon|cashback.
+ */
+export default async function AiAnalyzePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ offerId?: string; source?: string }>;
+}) {
+  const sp = await searchParams;
   const user = await getCurrentUser();
   const isAdmin = user?.role === "admin";
 
   let showSetupNudge = false;
+  let initialOwnedDomains: string[] = [];
   if (isAdmin) {
     const settings = await getAiSettingsAction();
-    if (settings.ok && !settings.data.configured) showSetupNudge = true;
+    if (settings.ok) {
+      if (!settings.data.configured) showSetupNudge = true;
+      initialOwnedDomains = settings.data.ownedDomains ?? [];
+    }
   }
 
-  const historyRes = await listAnalysesAction();
-  const history = historyRes.ok ? historyRes.data : [];
+  let initialOffer: WorksheetOffer | null = null;
+  if (sp.offerId) {
+    try {
+      const o = await entityApi.offers.get(sp.offerId);
+      initialOffer = {
+        id: o.id,
+        name: o.name,
+        network: o.network,
+        destinationUrl: o.destinationUrl,
+      };
+    } catch {
+      /* invalid id: render worksheet without a subject */
+    }
+  }
+
+  const s = sp.source;
+  const initialSource: WorksheetSource =
+    s === "amazon" || s === "cashback" ? s : "affiliate";
 
   return (
-    <AnalyzeClient
+    <WorksheetClient
       isAdmin={isAdmin}
       showSetupNudge={showSetupNudge}
-      initialHistory={history}
+      initialOwnedDomains={initialOwnedDomains}
+      initialOffer={initialOffer}
+      initialSource={initialSource}
     />
   );
 }

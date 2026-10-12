@@ -131,8 +131,14 @@ const newKwRow = (): KwRow => ({ id: `kw-${++kwSeq}`, keyword: "" });
 
 export function TrafficPlannerClient({
   showSetupNudge,
+  hideHeader,
+  onResult,
 }: {
   showSetupNudge: boolean;
+  /** Worksheet embedding: hide the page header (the step card provides it). */
+  hideHeader?: boolean;
+  /** Worksheet embedding: report the generated plan upward. */
+  onResult?: (r: TrafficPlanResult | null) => void;
 }) {
   const { lang } = useI18n();
   const d: Dict = lang === "zh" ? tpZh : tpEn;
@@ -299,6 +305,7 @@ export function TrafficPlannerClient({
       if (res.ok) {
         setResult(res.data);
         setMsg(null);
+        onResult?.(res.data);
       } else {
         setMsg(`${d.failed}：${res.error}`);
       }
@@ -335,10 +342,12 @@ export function TrafficPlannerClient({
 
   return (
     <div className="mx-auto max-w-4xl space-y-6 p-4">
-      <div>
-        <h1 className="text-xl font-bold text-ink">{d.title}</h1>
-        <p className="mt-1 text-sm text-ink/60">{d.subtitle}</p>
-      </div>
+      {hideHeader ? null : (
+        <div>
+          <h1 className="text-xl font-bold text-ink">{d.title}</h1>
+          <p className="mt-1 text-sm text-ink/60">{d.subtitle}</p>
+        </div>
+      )}
 
       {showSetupNudge && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">

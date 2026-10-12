@@ -186,9 +186,15 @@ interface BatchRow {
 export function TermsClient({
   isAdmin,
   showSetupNudge,
+  hideHeader,
+  onVerdict,
 }: {
   isAdmin: boolean;
   showSetupNudge: boolean;
+  /** Worksheet embedding: hide the page header (the step card provides it). */
+  hideHeader?: boolean;
+  /** Worksheet embedding: report the step verdict upward. */
+  onVerdict?: (v: "go" | "caution" | "stop" | null) => void;
 }) {
   const t = useDict();
   const d = t.ai.terms;
@@ -224,8 +230,10 @@ export function TermsClient({
     setWorking(true);
     try {
       const res = await analyzeTermsAction(text.trim());
-      if (res.ok) setSingleResult(res.data);
-      else handleActionError(res);
+      if (res.ok) {
+        setSingleResult(res.data);
+        onVerdict?.(res.data.terms.overallVerdict);
+      } else handleActionError(res);
     } finally {
       setWorking(false);
     }
@@ -245,8 +253,13 @@ export function TermsClient({
     setWorking(true);
     try {
       const res = await screenOffersAction(items);
-      if (res.ok) setBatchResults(res.data.results);
-      else handleActionError(res);
+      if (res.ok) {
+        setBatchResults(res.data.results);
+        const vs = res.data.results.map((r) => r.verdict);
+        onVerdict?.(
+          vs.includes("stop") ? "stop" : vs.includes("caution") ? "caution" : "go"
+        );
+      } else handleActionError(res);
     } finally {
       setWorking(false);
     }
@@ -257,6 +270,7 @@ export function TermsClient({
     setBatchResults(null);
     setError(null);
     setNotConfigured(false);
+    onVerdict?.(null);
   }
 
   function updateRow(key: number, patch: Partial<BatchRow>) {
@@ -265,7 +279,9 @@ export function TermsClient({
 
   return (
     <div>
-      <EntityPageHeader title={d.title} description={d.description} />
+      {hideHeader ? null : (
+        <EntityPageHeader title={d.title} description={d.description} />
+      )}
 
       {showSetupNudge ? (
         <div className="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-6">

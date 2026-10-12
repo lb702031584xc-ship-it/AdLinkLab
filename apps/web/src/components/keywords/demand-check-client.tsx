@@ -41,7 +41,7 @@ const inputCls =
   "w-full rounded-lg border border-ink/15 bg-white px-2.5 py-1.5 text-sm text-ink outline-none focus:border-signal";
 const labelCls = "mb-1 block text-xs font-medium text-ink/60";
 
-function plannerUrl(kw: string): string {
+function plannerUrl(): string {
   return "https://ads.google.com/aw/keywordplanner/home";
 }
 function trendsUrl(kw: string): string {
@@ -296,7 +296,7 @@ export function DemandCheckClient({
                   <span>{d.demandLabel}：<b className="text-ink/80">{d.demandLevels[dl]}</b></span>
                   <span>{d.beatableLabel}：<b className="text-ink/80">{d.beatableLevels[b]}</b></span>
                   <span className="ml-auto flex gap-2">
-                    <a href={plannerUrl(r.keyword)} target="_blank" rel="noreferrer" className="text-signal hover:underline">{d.openPlanner} ↗</a>
+                    <a href={plannerUrl()} target="_blank" rel="noreferrer" className="text-signal hover:underline">{d.openPlanner} ↗</a>
                     <a href={trendsUrl(r.keyword)} target="_blank" rel="noreferrer" className="text-signal hover:underline">{d.openTrends} ↗</a>
                     <a href={semrushUrl()} target="_blank" rel="noreferrer" className="text-signal hover:underline">{d.openSemrush} ↗</a>
                   </span>

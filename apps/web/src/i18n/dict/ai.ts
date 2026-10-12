@@ -118,6 +118,62 @@ export const zh = {
       ocrFailed: "截图识别失败",
     },
   },
+  worksheet: {
+    title: "AI 分析工作表",
+    description:
+      "按实战流程四步走完：条款解析 → 合规检查 → 盈利测算 → 投流决策，最后给出综合投放建议。",
+    offerTitle: "分析对象",
+    noOffer:
+      "未指定 offer，可直接开始分析，或从 offer 库选择一个 offer 进入（?offerId=）。",
+    sourceLabel: "来源",
+    sources: {
+      affiliate: "联盟",
+      amazon: "亚马逊",
+      cashback: "返利网",
+    },
+    openOffer: "在 offer 库中查看",
+    cashbackTermsHint:
+      "返利网商家没有传统联盟条款：请把该商家的返利细则 / exclusions 说明文字粘贴到下方文本框进行解析。",
+    steps: {
+      terms: "条款解析",
+      compliance: "合规检查",
+      profit: "盈利测算",
+      traffic: "投流决策",
+    },
+    stepHint: {
+      terms: "先看能不能推：流量限制、品牌词政策、禁推条款。",
+      compliance: "再看会不会被封：直链风险、联盟参数、跳转链。",
+      profit: "再算赚不赚钱：EPC、保本转化率、推荐出价。",
+      traffic: "最后定怎么投：落地页还是直链、关键词与否定词。",
+    },
+    status: {
+      pass: "通过",
+      warn: "警告",
+      fail: "不通过",
+      pending: "待分析",
+    },
+    complianceToggle: "将合规结果计入最终决策",
+    complianceToggleHint:
+      "关闭后，合规检查只展示风险提示，不影响最终去留结论（适合已用独立合规流程的老手）。",
+    complianceExcluded: "未计入最终决策",
+    verdict: {
+      title: "综合决策",
+      go: "建议投放",
+      goWithWarn: "谨慎投放",
+      noGo: "不建议投放",
+      incomplete: "完成全部 4 步后给出综合决策",
+      reasons: "决策依据",
+      expand: "展开",
+      collapse: "收起",
+      trafficDone: "投放方案已生成",
+    },
+    profitStep: {
+      cvrLabel: "预估转化率 %",
+      needInput: "填写 payout、预估 CPC 与转化率后自动测算。",
+      perClickProfit: "单次点击利润",
+      perClickProfitFormula: "单次点击利润 = EPC − CPC",
+    },
+  },
   terms: {
     title: "Offer 条款解析",
     description:
@@ -973,6 +1029,62 @@ export const en: typeof zh = {
       ocrHint: "Upload a screenshot of the product/traffic page; rating, review count, price and monthly sales are recognized as reference for your visits estimate (image is not stored).",
       ocrReviewNote: "Recognized values — please verify",
       ocrFailed: "Screenshot recognition failed",
+    },
+  },
+  worksheet: {
+    title: "AI Analysis Worksheet",
+    description:
+      "Four steps in workflow order: terms screening → compliance check → profitability → traffic planning, ending with an overall go / no-go.",
+    offerTitle: "Subject",
+    noOffer:
+      "No offer selected — you can start directly, or pick an offer from the offer library (?offerId=).",
+    sourceLabel: "Source",
+    sources: {
+      affiliate: "Affiliate",
+      amazon: "Amazon",
+      cashback: "Cashback",
+    },
+    openOffer: "View in offer library",
+    cashbackTermsHint:
+      "Cashback merchants have no traditional affiliate terms: paste the merchant's cashback rules / exclusions text into the box below for analysis.",
+    steps: {
+      terms: "Terms screening",
+      compliance: "Compliance check",
+      profit: "Profitability",
+      traffic: "Traffic planning",
+    },
+    stepHint: {
+      terms: "First: can it be promoted? Traffic limits, brand-bidding policy, forbidden terms.",
+      compliance: "Then: ban risk? Direct-link risk, affiliate params, redirect chains.",
+      profit: "Then: does it pay? EPC, break-even CVR, recommended bid.",
+      traffic: "Finally: how to run it? Landing page vs direct link, keywords and negatives.",
+    },
+    status: {
+      pass: "Pass",
+      warn: "Warning",
+      fail: "Fail",
+      pending: "Pending",
+    },
+    complianceToggle: "Count compliance in the final decision",
+    complianceToggleHint:
+      "When off, the compliance check only shows risk notes and never blocks the final verdict (for veterans with their own compliance flow).",
+    complianceExcluded: "Excluded from final decision",
+    verdict: {
+      title: "Overall decision",
+      go: "Go — recommended",
+      goWithWarn: "Go with caution",
+      noGo: "No-go",
+      incomplete: "Complete all 4 steps to get the overall decision",
+      reasons: "Rationale",
+      expand: "Expand",
+      collapse: "Collapse",
+      trafficDone: "Traffic plan generated",
+    },
+    profitStep: {
+      cvrLabel: "Estimated CVR %",
+      needInput: "Fill in payout, estimated CPC and CVR to calculate automatically.",
+      perClickProfit: "Profit per click",
+      perClickProfitFormula: "profit per click = EPC − CPC",
     },
   },
   terms: {
