@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { entityApi, type LandingPage } from "@/lib/api/entities";
 import {
   formatDateTime,
@@ -16,8 +15,21 @@ import {
 import { OfferSelector } from "@/components/entities/offer-selector";
 import { getLang } from "@/i18n/lang";
 import { getDictionary } from "@/i18n/dictionaries";
+import { landerPipelineDict } from "@/i18n/dict/lander-pipeline";
+import {
+  LanderPipelineClient,
+  type PipelineStep,
+} from "@/components/landing-pages/pipeline-client";
 
 export const dynamic = "force-dynamic";
+
+const VALID_STEPS: PipelineStep[] = [
+  "scrape",
+  "recommend",
+  "generate",
+  "abtest",
+  "pages",
+];
 
 function parsePositiveInt(
   value: string | string[] | undefined,
@@ -28,7 +40,16 @@ function parsePositiveInt(
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
 }
 
-function columnsFor(t: ReturnType<typeof getDictionary>): Array<Column<LandingPage>> {
+function parseStep(value: string | string[] | undefined): PipelineStep {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return (VALID_STEPS as string[]).includes(raw ?? "")
+    ? (raw as PipelineStep)
+    : "scrape";
+}
+
+function columnsFor(
+  t: ReturnType<typeof getDictionary>
+): Array<Column<LandingPage>> {
   return [
     { header: t.common.misc.name, render: (lp) => lp.name },
     {
@@ -45,7 +66,10 @@ function columnsFor(t: ReturnType<typeof getDictionary>): Array<Column<LandingPa
         </a>
       ),
     },
-    { header: t.entities.landingPages.columns.domain, render: (lp) => lp.domain },
+    {
+      header: t.entities.landingPages.columns.domain,
+      render: (lp) => lp.domain,
+    },
     {
       header: t.common.misc.status,
       render: (lp) => <StatusBadge value={lp.status} />,
@@ -76,7 +100,7 @@ function OfferPager({
     return <p className="mt-4 text-sm text-ink/55">{labels.items(total)}</p>;
   }
   const href = (p: number) =>
-    `/landing-pages?offerId=${encodeURIComponent(selectedId)}&page=${p}&pageSize=${pageSize}`;
+    `/landing-pages?step=pages&offerId=${encodeURIComponent(selectedId)}&page=${p}&pageSize=${pageSize}`;
   return (
     <div className="mt-4 flex items-center justify-between text-sm">
       <p className="text-ink/55">
@@ -84,24 +108,24 @@ function OfferPager({
       </p>
       <div className="flex gap-2">
         {page > 1 ? (
-          <Link
+          <a
             href={href(page - 1)}
             className="rounded-lg border border-ink/15 bg-white/70 px-3 py-1.5 font-medium hover:bg-white"
           >
             {labels.previous}
-          </Link>
+          </a>
         ) : (
           <span className="rounded-lg border border-ink/10 px-3 py-1.5 text-ink/35">
             {labels.previous}
           </span>
         )}
         {page < totalPages ? (
-          <Link
+          <a
             href={href(page + 1)}
             className="rounded-lg border border-ink/15 bg-white/70 px-3 py-1.5 font-medium hover:bg-white"
           >
             {labels.next}
-          </Link>
+          </a>
         ) : (
           <span className="rounded-lg border border-ink/10 px-3 py-1.5 text-ink/35">
             {labels.next}
@@ -118,50 +142,56 @@ export default async function LandingPagesPage({
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
   const sp = await searchParams;
-  const page = parsePositiveInt(sp.page, 1);
-  const pageSize = parsePositiveInt(sp.pageSize, 20);
-  const offerIdParam = Array.isArray(sp.offerId) ? sp.offerId[0] : sp.offerId;
+  const step = parseStep(sp.step);
   const lang = await getLang();
   const t = getDictionary(lang);
-  const columns = columnsFor(t);
-  const pagerLabels: PaginationLabels = {
-    items: t.entities.ui.pagination.items,
-    pageOf: t.entities.ui.pagination.pageOf,
-    previous: t.common.pagination.previous,
-    next: t.common.pagination.next,
-  };
+  const pt = landerPipelineDict[lang];
 
-  let offers: Array<{ id: string; name: string }> = [];
-  let error: string | null = null;
-  try {
-    const res = await entityApi.offers.list(1, 100);
-    offers = res.items.map((o) => ({ id: o.id, name: o.name }));
-  } catch (e) {
-    error = mapEntityErrorMessage(e, lang);
-  }
+  // "My landing pages" tab content (server-rendered, unchanged behavior).
+  let pagesContent: React.ReactNode = null;
+  if (step === "pages") {
+    const page = parsePositiveInt(sp.page, 1);
+    const pageSize = parsePositiveInt(sp.pageSize, 20);
+    const offerIdParam = Array.isArray(sp.offerId) ? sp.offerId[0] : sp.offerId;
+    const columns = columnsFor(t);
+    const pagerLabels: PaginationLabels = {
+      items: t.entities.ui.pagination.items,
+      pageOf: t.entities.ui.pagination.pageOf,
+      previous: t.common.pagination.previous,
+      next: t.common.pagination.next,
+    };
 
-  const selectedId =
-    offerIdParam && offers.some((o) => o.id === offerIdParam)
-      ? offerIdParam
-      : offers[0]?.id;
-
-  let data: Awaited<ReturnType<typeof entityApi.offers.listLandingPages>> | null =
-    null;
-  if (!error && selectedId) {
+    let offers: Array<{ id: string; name: string }> = [];
+    let error: string | null = null;
     try {
-      data = await entityApi.offers.listLandingPages(selectedId, page, pageSize);
+      const res = await entityApi.offers.list(1, 100);
+      offers = res.items.map((o) => ({ id: o.id, name: o.name }));
     } catch (e) {
       error = mapEntityErrorMessage(e, lang);
     }
-  }
 
-  return (
-    <div>
-      <EntityPageHeader
-        title={t.common.nav.landingPages}
-        description={t.entities.landingPages.description}
-      />
-      {error || !selectedId ? (
+    const selectedId =
+      offerIdParam && offers.some((o) => o.id === offerIdParam)
+        ? offerIdParam
+        : offers[0]?.id;
+
+    let data: Awaited<
+      ReturnType<typeof entityApi.offers.listLandingPages>
+    > | null = null;
+    if (!error && selectedId) {
+      try {
+        data = await entityApi.offers.listLandingPages(
+          selectedId,
+          page,
+          pageSize
+        );
+      } catch (e) {
+        error = mapEntityErrorMessage(e, lang);
+      }
+    }
+
+    pagesContent =
+      error || !selectedId ? (
         <ErrorState
           message={error ?? t.entities.landingPages.noOffers}
           title={t.common.error.title}
@@ -191,7 +221,20 @@ export default async function LandingPagesPage({
             </>
           )}
         </>
-      )}
+      );
+  }
+
+  return (
+    <div>
+      <EntityPageHeader
+        title={pt.page.title}
+        description={pt.page.description}
+      />
+      <LanderPipelineClient
+        lang={lang}
+        step={step}
+        pagesContent={pagesContent}
+      />
     </div>
   );
 }
