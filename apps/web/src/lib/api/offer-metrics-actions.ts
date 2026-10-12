@@ -64,7 +64,7 @@ export async function fetchOfferMetricsAction(
       `${base}/api/v1/offers/${encodeURIComponent(offerId)}/fetch-metrics`,
       {
         method: "POST",
-        headers: { "content-type": "application/json", ...authHeaders },
+        headers: { ...authHeaders },
         cache: "no-store",
       }
     );
