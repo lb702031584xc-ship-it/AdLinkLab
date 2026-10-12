@@ -40,6 +40,7 @@ export interface KeywordStarterDict {
   beatableLabel: string;
   summaryTitle: string;
   summaryLine: string;
+  importValidatedBtn: string;
   emptyDemand: string;
   remove: string;
   openPlanner: string;
@@ -123,6 +124,7 @@ export const zh: KeywordStarterDict = {
   beatableLabel: "竞争",
   summaryTitle: "验证小结",
   summaryLine: "共 {total} 个关键词：{good} 个值得跟进 · {caution} 个谨慎测试 · {bad} 个建议放弃",
+  importValidatedBtn: "把 {n} 个值得跟进/谨慎测试的词导入投放选词 →",
   emptyDemand: "还没有关键词。先在上方按类目生成种子词，一键导入；或手动添加。",
   remove: "删除",
   openPlanner: "规划师",
@@ -206,6 +208,7 @@ export const en: KeywordStarterDict = {
   beatableLabel: "Competition",
   summaryTitle: "Summary",
   summaryLine: "{total} keywords: {good} worth pursuing · {caution} test cautiously · {bad} drop",
+  importValidatedBtn: "Import {n} worth-pursuing/cautious keywords to launch →",
   emptyDemand: "No keywords yet. Generate seed keywords by category above and import them, or add manually.",
   remove: "Remove",
   openPlanner: "Planner",

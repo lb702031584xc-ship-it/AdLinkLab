@@ -5,9 +5,10 @@
  * 关键词计划（分组 / 匹配方式 / 出价）+ 否定关键词（手动 / 批量 / 通用库 / 导出）。
  * 纯前端，无后端依赖。
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { UNIVERSAL_NEGATIVES } from "@/lib/keywords/negatives";
 import type { KeywordStarterDict } from "@/i18n/dict/keyword-starter";
+import type { SeedImportSignal } from "./demand-check-client";
 
 type MatchType = "exact" | "phrase" | "broad";
 
@@ -44,9 +45,11 @@ function parseMatchType(s: string): MatchType {
 export function LaunchEditorClient({
   dict: d,
   lang,
+  validatedSignal,
 }: {
   dict: KeywordStarterDict;
   lang: "zh" | "en";
+  validatedSignal?: SeedImportSignal | null;
 }) {
   const [rows, setRows] = useState<PlanRow[]>([newRow()]);
   const [bulkOpen, setBulkOpen] = useState(false);
@@ -58,6 +61,22 @@ export function LaunchEditorClient({
   const [negBulkOpen, setNegBulkOpen] = useState(false);
   const [negBulkText, setNegBulkText] = useState("");
   const [negCopied, setNegCopied] = useState(false);
+
+  // 从需求验证导入 ✅值得跟进 / ⚠️谨慎测试 的词（去重追加）
+  useEffect(() => {
+    if (!validatedSignal || validatedSignal.seq === 0) return;
+    setRows((rs) => {
+      const have = new Set(rs.map((r) => r.keyword.trim().toLowerCase()).filter(Boolean));
+      const fresh = validatedSignal.words
+        .map((w) => w.trim())
+        .filter((w) => w && !have.has(w.toLowerCase()))
+        .map((w) => ({ ...newRow(), keyword: w }));
+      if (!fresh.length) return rs;
+      const base = rs.length === 1 && !rs[0].keyword ? [] : rs;
+      return [...base, ...fresh];
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [validatedSignal?.seq]);
 
   /* ----- 关键词计划 ----- */
   const update = (id: string, patch: Partial<PlanRow>) =>

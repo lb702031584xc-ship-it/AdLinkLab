@@ -31,6 +31,9 @@ export function KeywordStarterTabsClient({
   // 种子词 → 需求验证的一次性导入信号
   const [importSignal, setImportSignal] = useState<SeedImportSignal | null>(null);
 
+  // 需求验证结论 → 投放选词的一次性导入信号（只含 ✅值得跟进 / ⚠️谨慎测试）
+  const [validatedSignal, setValidatedSignal] = useState<SeedImportSignal | null>(null);
+
   // Offer 选择：用于 AI 按 offer 生成关键词
   const [offerId, setOfferId] = useState("");
   const [manualOffer, setManualOffer] = useState("");
@@ -39,6 +42,11 @@ export function KeywordStarterTabsClient({
 
   const switchTab = (t: Tab) => {
     router.replace(`/keywords/starter?tab=${t}`, { scroll: false });
+  };
+
+  const importValidatedToLaunch = (words: string[]) => {
+    setValidatedSignal((s) => ({ words, seq: (s?.seq ?? 0) + 1 }));
+    switchTab("launch");
   };
 
   return (
@@ -121,10 +129,10 @@ export function KeywordStarterTabsClient({
               }))
             }
           />
-          <DemandCheckClient dict={d} importSignal={importSignal} aiProduct={aiProduct} />
+          <DemandCheckClient dict={d} importSignal={importSignal} aiProduct={aiProduct} onValidatedReady={importValidatedToLaunch} />
         </div>
       ) : (
-        <LaunchEditorClient dict={d} lang={lang} />
+        <LaunchEditorClient dict={d} lang={lang} validatedSignal={validatedSignal} />
       )}
     </div>
   );

@@ -120,10 +120,12 @@ export function DemandCheckClient({
   dict: d,
   importSignal,
   aiProduct,
+  onValidatedReady,
 }: {
   dict: KeywordStarterDict;
   importSignal: SeedImportSignal | null;
   aiProduct?: string;
+  onValidatedReady?: (words: string[]) => void;
 }) {
   const [rows, setRows] = useState<DemandRow[]>([]);
   const [kwInput, setKwInput] = useState("");
@@ -238,6 +240,17 @@ export function DemandCheckClient({
     .replace("{good}", String(summary.good))
     .replace("{caution}", String(summary.caution))
     .replace("{bad}", String(summary.bad));
+
+  const exportValidated = () => {
+    const words = rows
+      .filter((r) => {
+        const v = verdictOf(r);
+        return v === "good" || v === "caution";
+      })
+      .map((r) => r.keyword.trim())
+      .filter(Boolean);
+    if (words.length && onValidatedReady) onValidatedReady(words);
+  };
 
   return (
     <div className="mt-8 space-y-4">
@@ -464,6 +477,15 @@ export function DemandCheckClient({
         <div className="rounded-xl border border-signal/30 bg-signal/[0.06] p-4">
           <p className="text-sm font-bold text-ink">✅ {d.summaryTitle}</p>
           <p className="mt-1 text-sm text-ink/80">{summaryText}</p>
+          {onValidatedReady && summary.good + summary.caution > 0 && (
+            <button
+              type="button"
+              onClick={exportValidated}
+              className="mt-2 rounded-lg bg-signal px-3 py-1.5 text-sm font-medium text-white hover:opacity-90"
+            >
+              🚀 {d.importValidatedBtn.replace("{n}", String(summary.good + summary.caution))}
+            </button>
+          )}
         </div>
       )}
     </div>
