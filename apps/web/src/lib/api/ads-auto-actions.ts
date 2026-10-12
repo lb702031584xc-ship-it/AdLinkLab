@@ -29,7 +29,7 @@ function mapError(e: unknown, fallback: string): { ok: false; error: string } {
 
 export async function requestAdPlanAction(
   urls: string[],
-  opts: { language?: "zh" | "en"; googleAccountId?: string } = {}
+  opts: { language?: "zh" | "en"; googleAccountId?: string; pageTexts?: Array<string | null> } = {}
 ): Promise<AdsAutoActionResult<AutoCreateResult>> {
   try {
     return { ok: true, data: await requestAdPlan(urls, opts) };

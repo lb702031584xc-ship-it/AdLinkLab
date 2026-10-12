@@ -17,6 +17,9 @@ export const zh = {
     generating: "AI 生成中，请稍候…",
     needUrls: "请至少粘贴一个有效的 http(s) URL。",
     aiNotConfigured: "AI 功能尚未配置，请先在 AI 设置中配置大模型。",
+    manualToggle: "抓取失败？手动粘贴页面文字（Amazon 等反爬站点用）",
+    manualHint: "只填了一个 URL 时有效：去商品页复制标题、价格、卖点文字粘贴到这里，点“生成广告计划”会跳过抓取直接用这段文字。",
+    manualPlaceholder: "粘贴商品标题、价格、五点描述……",
   },
   preview: {
     title: "广告计划预览",
@@ -77,6 +80,9 @@ export const en = {
     generating: "Generating with AI, please wait…",
     needUrls: "Please paste at least one valid http(s) URL.",
     aiNotConfigured: "AI is not configured. Please configure the LLM in AI settings first.",
+    manualToggle: "Fetch failed? Paste the page text manually (for anti-scraping sites like Amazon)",
+    manualHint: "Works when you pasted a single URL: copy the product title, price and bullet points from the product page, paste here, then Generate — the fetch step will be skipped.",
+    manualPlaceholder: "Paste product title, price, bullet points…",
   },
   preview: {
     title: "Ad plan preview",

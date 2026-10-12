@@ -166,6 +166,8 @@ export async function registerAdsAutoRoutes(
       offerId?: unknown;
       googleAccountId?: unknown;
       language?: unknown;
+      /** 可选：与 urls 一一对应的手动页面文字；提供则跳过抓取（Amazon 等反爬站点用） */
+      pageTexts?: unknown;
     };
   }>("/api/v1/ads/auto-create", async (request) => {
     const info = await requireSession(deps, request);
@@ -188,6 +190,12 @@ export async function registerAdsAutoRoutes(
     const offerId = asUuid(body.offerId, "offerId") ?? null;
     const googleAccountId = asUuid(body.googleAccountId, "googleAccountId") ?? null;
     const language: AnalysisLanguage = body.language === "en" ? "en" : "zh";
+    // 手动页面文字：与 urls 一一对应，提供则跳过抓取（Amazon 等反爬站点用）
+    const pageTexts: Array<string | null> = Array.isArray(body.pageTexts)
+      ? body.pageTexts.map((t) =>
+          typeof t === "string" && t.trim() ? t.trim().slice(0, PAGE_TEXT_LIMIT) : null
+        )
+      : [];
 
     const settings = await readLlmSettings(prisma);
     if (!(settings.baseUrl && settings.model && settings.apiKeyEnc)) {
@@ -203,16 +211,24 @@ export async function registerAdsAutoRoutes(
     const drafts: AdPlanUrlDraft[] = [];
     const finalUrls: string[] = [];
     // Sequential per URL: keeps page-fetch + LLM load predictable.
-    for (const url of urls) {
+    for (let i = 0; i < urls.length; i++) {
+      const url = urls[i];
       let pageText: string;
       let finalUrl: string;
-      try {
-        const fetched = await fetchPageImpl(url);
-        pageText = fetched.text.slice(0, PAGE_TEXT_LIMIT);
-        finalUrl = fetched.finalUrl;
-      } catch (e) {
-        if (e instanceof AiError) throw e;
-        throw new AiError("Failed to fetch offer page");
+      const manualText = pageTexts[i];
+      if (manualText) {
+        // 用户手动粘贴的页面文字：跳过抓取（Amazon 等反爬站点）
+        pageText = manualText;
+        finalUrl = url;
+      } else {
+        try {
+          const fetched = await fetchPageImpl(url);
+          pageText = fetched.text.slice(0, PAGE_TEXT_LIMIT);
+          finalUrl = fetched.finalUrl;
+        } catch (e) {
+          if (e instanceof AiError) throw e;
+          throw new AiError("Failed to fetch offer page");
+        }
       }
       let draft: AdPlanUrlDraft;
       try {

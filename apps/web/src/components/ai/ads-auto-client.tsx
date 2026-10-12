@@ -149,6 +149,9 @@ export function AdsAutoClient({ dict, lang }: { dict: AdsAutoDict; lang: "zh" | 
   const [confirming, setConfirming] = useState(false);
   const [busyPack, setBusyPack] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 抓取失败兜底：手动粘贴页面文字（Amazon 等反爬站点）
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualText, setManualText] = useState("");
   // 教练模式（第十三批）
   const [brandTermsText, setBrandTermsText] = useState("");
   const [coachFindings, setCoachFindings] = useState<CoachFinding[]>([]);
@@ -203,15 +206,24 @@ export function AdsAutoClient({ dict, lang }: { dict: AdsAutoDict; lang: "zh" | 
     setConfirm(null);
     setScriptSource(null);
     try {
+      // 只有一个 URL 且用户粘贴了页面文字时，用手动文字跳过抓取（Amazon 等反爬站点）
+      const manual = manualText.trim();
+      const pageTexts =
+        manual && urls.length === 1 ? [manual] : undefined;
       const res = await requestAdPlanAction(urls, {
         language,
         googleAccountId: googleAccountId.trim() || undefined,
+        pageTexts,
       });
       if (res.ok) {
         setPlan(res.data.plan);
         setCoachConfirmed(false);
         void runPlanCoachCheck(res.data.plan, brandTermsText);
-      } else setError(res.error);
+      } else {
+        setError(res.error);
+        // 抓取失败时自动展开手动粘贴区
+        if (/fetch/i.test(res.error)) setManualOpen(true);
+      }
     } finally {
       setGenerating(false);
     }
@@ -358,6 +370,29 @@ export function AdsAutoClient({ dict, lang }: { dict: AdsAutoDict; lang: "zh" | 
           >
             {generating ? d.form.generating : d.form.generate}
           </button>
+        </div>
+
+        {/* 抓取失败兜底：Amazon 等反爬站点手动粘贴页面文字 */}
+        <div className="mt-3">
+          <button
+            type="button"
+            onClick={() => setManualOpen((o) => !o)}
+            className="text-xs text-ink/55 underline-offset-2 hover:underline"
+          >
+            {manualOpen ? "▾" : "▸"} {d.form.manualToggle}
+          </button>
+          {manualOpen && (
+            <div className="mt-2">
+              <p className="text-xs text-ink/55">{d.form.manualHint}</p>
+              <textarea
+                rows={5}
+                value={manualText}
+                onChange={(e) => setManualText(e.target.value)}
+                placeholder={d.form.manualPlaceholder}
+                className={`${inputClass} mt-1 font-mono`}
+              />
+            </div>
+          )}
         </div>
       </div>
 

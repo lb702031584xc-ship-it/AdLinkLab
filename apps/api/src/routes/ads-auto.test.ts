@@ -227,6 +227,33 @@ describe("POST /api/v1/ads/auto-create", () => {
     expect(body.plan.tenantId).toBe(tenantId);
   });
 
+  it("pageTexts skips the page fetch (manual text for anti-scraping sites)", async () => {
+    let fetchCalls = 0;
+    const app = Fastify();
+    app.setErrorHandler(createObservabilityErrorHandler() as any);
+    await registerAdsAutoRoutes(app, {
+      prisma: fake as unknown as PrismaClient,
+      chatJsonImpl: (async () => fakeDraft()) as any,
+      fetchPageImpl: (async (url: string) => {
+        fetchCalls++;
+        return { finalUrl: url, text: "should not be used" };
+      }) as any,
+      planStore: createPlanStore(),
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/ads/auto-create",
+      headers: cookie(token),
+      payload: {
+        urls: ["https://www.amazon.com/dp/EXAMPLE"],
+        pageTexts: ["Manual product title, price $99, great vacuum."],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(fetchCalls).toBe(0);
+    expect(res.json().plan.adGroups).toHaveLength(1);
+  });
+
   it("fails when AI is not configured", async () => {
     const bare = makeFakePrisma();
     const auth = await seedAuth(bare);

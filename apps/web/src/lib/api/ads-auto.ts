@@ -145,7 +145,7 @@ async function apiFetchText(path: string): Promise<string> {
 
 export async function requestAdPlan(
   urls: string[],
-  opts: { language?: "zh" | "en"; googleAccountId?: string } = {}
+  opts: { language?: "zh" | "en"; googleAccountId?: string; pageTexts?: Array<string | null> } = {}
 ): Promise<AutoCreateResult> {
   return apiFetch<AutoCreateResult>("/api/v1/ads/auto-create", {
     method: "POST",
@@ -153,6 +153,7 @@ export async function requestAdPlan(
       urls,
       language: opts.language ?? "en",
       googleAccountId: opts.googleAccountId || undefined,
+      pageTexts: opts.pageTexts,
     }),
   });
 }
