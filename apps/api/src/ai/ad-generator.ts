@@ -98,6 +98,8 @@ language: AnalysisLanguage;
 sourceUrls: string[];
 offerId: string | null;
 googleAccountId: string | null;
+/** 文案口吻：official=官方口吻（Official Site 结构），affiliate=联盟安全口吻 */
+copyStyle: "official" | "affiliate";
 campaign: AdPlanCampaign;
 /** One ad group (+ its own RSA) per input URL. */
 adGroups: AdPlanAdGroupBlock[];
@@ -149,6 +151,13 @@ export interface AdPlanPromptInput {
 url: string;
 pageText: string;
 language: AnalysisLanguage;
+/** 文案口吻：official=官方口吻（Official Site 结构），affiliate=联盟安全口吻 */
+copyStyle: "official" | "affiliate";
+}
+
+/** 规范化 copyStyle 输入，非法值回退到 affiliate（安全口吻）。 */
+export function normalizeCopyStyle(input: unknown): "official" | "affiliate" {
+return input === "official" ? "official" : "affiliate";
 }
 
 export function buildAdPlanPrompt(input: AdPlanPromptInput): {
@@ -157,6 +166,25 @@ user: string;
 } {
 const langName =
 input.language === "en"? "English": "Simplified Chinese";
+// 大品牌 RSA 打法（Nike/Adidas/Macy's/SKIMS）：标题1=品牌+Official Site+品类/促销，
+// 显示路径对齐品类，描述=品类卖点+固定品牌话术+CTA。联盟客用安全版改写。
+const styleRules =
+input.copyStyle === "official"
+? [
+"Copy style: OFFICIAL brand voice (authorized to present as the brand). Follow the proven big-brand RSA structure:",
+"- Headline 1 pattern: '<Brand> Official Site | <category or offer>' (e.g. 'Nike Official Site | Shop Running Shoes').",
+"- You may append the ® / ™ symbol directly after the brand name (single Unicode character — it renders as a small superscript automatically), but ONLY when the landing page text itself already uses ® / ™ for that brand. Otherwise use the plain brand name.",
+"- Display paths (path1/path2, <= 15 chars each) mirror the landing page category, e.g. shop / running-shoes.",
+"- Descriptions: category benefit + one consistent brand tagline repeated across the ad + clear CTA (free shipping threshold, promo code, sale %).",
+"- Every headline/description stays specific to the page's category — one ad group, one category.",
+]
+: [
+"Copy style: AFFILIATE-safe voice. NEVER claim to be the official site/store and NEVER use 'Official Site' phrasing or the ® / ™ symbol after the brand name.",
+"- Use reviewer/deal angles instead: Top Rated, Best Deals, Expert Tested, Compare Prices, <Category> Buying Guide.",
+"- Headline 1 pattern: '<Category> | <benefit or offer>' (e.g. 'Running Shoes | Best Deals Compared').",
+"- Display paths (path1/path2, <= 15 chars each) mirror the landing page category.",
+"- Descriptions: category benefit + trust line (tested, compared, updated regularly) + CTA. Keep every claim supported by the landing page; imply no brand ownership.",
+];
 const system = [
 "You are a Google Ads search campaign builder for an affiliate marketer. Given an offer landing page, produce a complete, policy-safe Search campaign draft.",
 `Write ALL JSON string values (campaign/ad group names, headlines, descriptions, keywords) in ${langName}.`,
@@ -175,6 +203,7 @@ DRAFT_JSON_SPEC,
 "- campaignName / adGroupName: descriptive, professional, 80 characters or fewer.",
 "- path1 / path2: short display-path segments (<= 15 chars each) or null.",
 "- finalUrl is the offer URL below — use it verbatim for the ad group and RSA; do not invent URLs.",
+...styleRules,
 ].join("\n");
 
 const user = [
@@ -426,6 +455,7 @@ tenantId: string;
 language: AnalysisLanguage;
 offerId: string | null;
 googleAccountId: string | null;
+copyStyle: "official" | "affiliate";
 /** Final (post-redirect) URL per draft, in input order. */
 finalUrls: string[];
 }
@@ -562,6 +592,7 @@ language: ctx.language,
 sourceUrls: ctx.finalUrls,
 offerId: ctx.offerId,
 googleAccountId: ctx.googleAccountId,
+copyStyle: ctx.copyStyle,
 campaign,
 adGroups,
 createdAt: new Date().toISOString(),

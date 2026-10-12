@@ -254,7 +254,32 @@ describe("POST /api/v1/ads/auto-create", () => {
     expect(res.json().plan.adGroups).toHaveLength(1);
   });
 
-  it("user keywords override AI-generated keywords", async () => {
+  it("copyStyle=official flows into the plan", async () => {
+    const app = await buildApp(fake);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/ads/auto-create",
+      headers: cookie(token),
+      payload: {
+        urls: ["https://merchant.example/offer1"],
+        copyStyle: "official",
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().plan.copyStyle).toBe("official");
+  });
+
+  it("copyStyle defaults to affiliate", async () => {
+    const app = await buildApp(fake);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/ads/auto-create",
+      headers: cookie(token),
+      payload: { urls: ["https://merchant.example/offer1"] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().plan.copyStyle).toBe("affiliate");
+  });
     const app = await buildApp(fake);
     const res = await app.inject({
       method: "POST",

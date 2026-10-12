@@ -46,6 +46,20 @@ function PlanPreview({ plan, d }: { plan: AdPlan; d: AdsAutoDict }) {
             {d.preview.campaign}: {c.name}
           </h3>
           <DataQualityBadge quality={c.dataQuality} />
+          {plan.copyStyle && (
+            <span
+              className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                plan.copyStyle === "official"
+                  ? "bg-amber-100 text-amber-800"
+                  : "bg-sky-100 text-sky-800"
+              }`}
+              title={d.preview.copyStyleHint}
+            >
+              {plan.copyStyle === "official"
+                ? d.preview.copyStyleOfficial
+                : d.preview.copyStyleAffiliate}
+            </span>
+          )}
         </div>
         <dl className="mt-3 grid grid-cols-2 gap-2 text-sm md:grid-cols-4">
           <div>
@@ -142,15 +156,23 @@ export function AdsAutoClient({ dict, lang }: { dict: AdsAutoDict; lang: "zh" | 
   const d = dict;
   const [urlsText, setUrlsText] = useState("");
   const searchParams = useSearchParams();
-  // ?urls= / ?keywords= 预填（从 AI 工作表 / 投放选词跳过来）
+  // ?urls= / ?keywords= / ?copyStyle= 预填（从 AI 工作表 / 投放选词跳过来）
   useEffect(() => {
     const u = searchParams.get("urls");
     if (u && !urlsText) setUrlsText(u);
     const k = searchParams.get("keywords");
     if (k && !kwText) setKwText(k);
+    const cs = searchParams.get("copyStyle");
+    if (cs === "official" || cs === "affiliate") setCopyStyle(cs);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
   const [language, setLanguage] = useState<"zh" | "en">("en");
+  // 文案口吻：official=官方口吻（Official Site 结构），affiliate=联盟安全口吻
+  const [copyStyle, setCopyStyle] = useState<"official" | "affiliate">("affiliate");
+  // 品牌符号生成器：Nike → Nike®（® 在 Google Ads 里显示为右上角小字）
+  const [brandName, setBrandName] = useState("");
+  const [brandSymbol, setBrandSymbol] = useState<"®" | "™">("®");
+  const [brandCopied, setBrandCopied] = useState(false);
   const [googleAccountId, setGoogleAccountId] = useState("");
   const [googleAccounts, setGoogleAccounts] = useState<
     { id: string; name: string; customerId: string }[]
@@ -242,6 +264,7 @@ export function AdsAutoClient({ dict, lang }: { dict: AdsAutoDict; lang: "zh" | 
         googleAccountId: googleAccountId.trim() || undefined,
         pageTexts,
         keywords: keywords.length ? keywords : undefined,
+        copyStyle,
       });
       if (res.ok) {
         setPlan(res.data.plan);
@@ -341,6 +364,18 @@ export function AdsAutoClient({ dict, lang }: { dict: AdsAutoDict; lang: "zh" | 
     }
   }
 
+  async function onCopyBrand() {
+    const text = `${brandName.trim()}${brandSymbol}`;
+    if (!brandName.trim()) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setBrandCopied(true);
+      setTimeout(() => setBrandCopied(false), 2000);
+    } catch {
+      /* 忽略复制失败 */
+    }
+  }
+
   return (
     <div className="mx-auto max-w-4xl">
       <EntityPageHeader title={d.title} description={d.description} />
@@ -437,6 +472,76 @@ export function AdsAutoClient({ dict, lang }: { dict: AdsAutoDict; lang: "zh" | 
             className={`${inputClass} font-mono`}
           />
           <p className="mt-1 text-xs text-ink/55">{d.form.keywordsHint}</p>
+        </div>
+
+        {/* 文案口吻：官方口吻（Official Site 结构）/ 联盟安全口吻 */}
+        <div className="mt-3">
+          <span className={labelClass}>{d.form.copyStyleLabel}</span>
+          <div className="mt-1 flex flex-wrap gap-2">
+            {(
+              [
+                { value: "official", ...d.form.copyStyleOfficial },
+                { value: "affiliate", ...d.form.copyStyleAffiliate },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setCopyStyle(opt.value)}
+                className={`rounded-lg border px-3 py-1.5 text-sm ${
+                  copyStyle === opt.value
+                    ? "border-signal bg-signal/10 font-medium text-ink"
+                    : "border-ink/15 text-ink/60 hover:bg-ink/5"
+                }`}
+              >
+                <span className="font-medium">{opt.title}</span>
+                <span className="ml-1 text-xs text-ink/55">{opt.desc}</span>
+              </button>
+            ))}
+          </div>
+          {copyStyle === "official" && (
+            <p className="mt-1 text-xs text-amber-700">{d.form.copyStyleOfficialWarn}</p>
+          )}
+        </div>
+
+        {/* 品牌符号生成器：Nike → Nike®（® 在 Google Ads 里显示为右上角小字） */}
+        <div className="mt-3 rounded-lg border border-ink/10 bg-ink/[0.02] p-3">
+          <p className={labelClass}>{d.form.brandSymbolTitle}</p>
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <input
+              value={brandName}
+              onChange={(e) => setBrandName(e.target.value)}
+              placeholder={d.form.brandSymbolPlaceholder}
+              className={`${inputClass} w-40`}
+            />
+            {(["®", "™"] as const).map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => setBrandSymbol(s)}
+                className={`rounded-lg border px-3 py-1.5 text-base ${
+                  brandSymbol === s
+                    ? "border-signal bg-signal/10 font-bold"
+                    : "border-ink/15 hover:bg-ink/5"
+                }`}
+              >
+                {s}
+              </button>
+            ))}
+            <span className="text-ink/40">→</span>
+            <code className="rounded bg-ink/5 px-2 py-1 text-base">
+              {brandName.trim() ? `${brandName.trim()}${brandSymbol}` : "Nike®"}
+            </code>
+            <button
+              type="button"
+              onClick={onCopyBrand}
+              disabled={!brandName.trim()}
+              className="rounded-lg bg-signal px-3 py-1.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-40"
+            >
+              {brandCopied ? d.form.copied : d.form.copy}
+            </button>
+          </div>
+          <p className="mt-1 text-xs text-ink/55">{d.form.brandSymbolHint}</p>
         </div>
       </div>
 

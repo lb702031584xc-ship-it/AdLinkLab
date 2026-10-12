@@ -39,6 +39,7 @@ import {
   buildCopyPack,
   createPlanStore,
   finalizeAdPlan,
+  normalizeCopyStyle,
   normalizeUserKeywords,
   validateAdPlanUrlDraft,
   type AdPlan,
@@ -171,6 +172,8 @@ export async function registerAdsAutoRoutes(
       pageTexts?: unknown;
       /** 可选：用户在投放选词里定好的关键词；提供则广告组用这套词，不再 AI 生成 */
       keywords?: unknown;
+      /** 可选：文案口吻 official=官方口吻 / affiliate=联盟安全口吻（默认） */
+      copyStyle?: unknown;
     };
   }>("/api/v1/ads/auto-create", async (request) => {
     const info = await requireSession(deps, request);
@@ -201,6 +204,7 @@ export async function registerAdsAutoRoutes(
       : [];
     // 用户在投放选词里定好的关键词：有则各广告组统一用这套，不再 AI 生成
     const userKeywords = normalizeUserKeywords(body.keywords);
+    const copyStyle = normalizeCopyStyle(body.copyStyle);
 
     const settings = await readLlmSettings(prisma);
     if (!(settings.baseUrl && settings.model && settings.apiKeyEnc)) {
@@ -242,7 +246,7 @@ export async function registerAdsAutoRoutes(
             baseUrl: settings.baseUrl as string,
             model: settings.model as string,
             apiKey,
-            ...buildAdPlanPrompt({ url: finalUrl, pageText, language }),
+            ...buildAdPlanPrompt({ url: finalUrl, pageText, language, copyStyle }),
           },
           validateAdPlanUrlDraft,
           chatJsonImpl
@@ -266,6 +270,7 @@ export async function registerAdsAutoRoutes(
       language,
       offerId,
       googleAccountId,
+      copyStyle,
       finalUrls,
     });
     planStore.put(plan);

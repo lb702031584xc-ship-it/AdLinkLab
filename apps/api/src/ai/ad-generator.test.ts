@@ -12,6 +12,7 @@ import {
   buildCopyPack,
   createPlanStore,
   finalizeAdPlan,
+  normalizeCopyStyle,
   validateAdPlanUrlDraft,
   type AdPlan,
   type AdPlanUrlDraft,
@@ -56,6 +57,7 @@ function finalizeCtx(overrides: Partial<FinalizeContext> = {}): FinalizeContext 
     language: "en",
     offerId: null,
     googleAccountId: null,
+    copyStyle: "affiliate",
     finalUrls: ["https://merchant.example/offer?a=1"],
     ...overrides,
   };
@@ -67,6 +69,7 @@ describe("buildAdPlanPrompt", () => {
       url: "https://merchant.example/offer",
       pageText: "Great running shoes, $99.",
       language: "en",
+      copyStyle: "affiliate",
     });
     expect(system).toContain("STRICT JSON");
     expect(system).toContain("exactly 15 headlines");
@@ -76,10 +79,24 @@ describe("buildAdPlanPrompt", () => {
   });
 
   it("writes copy in the requested language", () => {
-    const zh = buildAdPlanPrompt({ url: "https://x.example", pageText: "t", language: "zh" });
+    const zh = buildAdPlanPrompt({ url: "https://x.example", pageText: "t", language: "zh", copyStyle: "affiliate" });
     expect(zh.system).toContain("Simplified Chinese");
-    const en = buildAdPlanPrompt({ url: "https://x.example", pageText: "t", language: "en" });
+    const en = buildAdPlanPrompt({ url: "https://x.example", pageText: "t", language: "en", copyStyle: "affiliate" });
     expect(en.system).toContain("English");
+  });
+
+  it("official style uses Official Site structure, affiliate style forbids it", () => {
+    const official = buildAdPlanPrompt({ url: "https://x.example", pageText: "t", language: "en", copyStyle: "official" });
+    expect(official.system).toContain("Official Site");
+    const affiliate = buildAdPlanPrompt({ url: "https://x.example", pageText: "t", language: "en", copyStyle: "affiliate" });
+    expect(affiliate.system).toContain("NEVER claim to be the official site");
+  });
+
+  it("normalizeCopyStyle falls back to affiliate", () => {
+    expect(normalizeCopyStyle("official")).toBe("official");
+    expect(normalizeCopyStyle("affiliate")).toBe("affiliate");
+    expect(normalizeCopyStyle("bogus")).toBe("affiliate");
+    expect(normalizeCopyStyle(undefined)).toBe("affiliate");
   });
 });
 
