@@ -173,6 +173,10 @@ export const zh = {
       expand: "展开",
       collapse: "收起",
       trafficDone: "投放方案已生成",
+      nextSteps: "下一步（带着这个 offer）",
+      toKeywords: "去选关键词",
+      toLanding: "去做落地页",
+      toAds: "去生成广告",
     },
     profitStep: {
       cvrLabel: "预估转化率 %",
@@ -1093,6 +1097,10 @@ export const en: typeof zh = {
       expand: "Expand",
       collapse: "Collapse",
       trafficDone: "Traffic plan generated",
+      nextSteps: "Next steps (with this offer)",
+      toKeywords: "Pick keywords",
+      toLanding: "Build landing page",
+      toAds: "Generate ads",
     },
     profitStep: {
       cvrLabel: "Estimated CVR %",

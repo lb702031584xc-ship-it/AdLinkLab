@@ -616,6 +616,40 @@ export function WorksheetClient({
             </li>
           ))}
         </ul>
+        {/* 下一步：带着当前 offer 跳到物料/投流 */}
+        {offer && (verdict === "go" || verdict === "goWithWarn") && (
+          <div className="mt-4 border-t border-ink/10 pt-4">
+            <p className="text-sm font-semibold text-ink">{w.verdict.nextSteps}</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Link
+                href={
+                  offer.id
+                    ? `/keywords/starter?tab=research&offerId=${encodeURIComponent(offer.id)}`
+                    : "/keywords/starter?tab=research"
+                }
+                className="rounded-lg bg-signal px-3 py-1.5 text-sm font-medium text-white hover:opacity-90"
+              >
+                🔍 {w.verdict.toKeywords}
+              </Link>
+              {offer.id && (
+                <Link
+                  href={`/landing-pages?offerId=${encodeURIComponent(offer.id)}`}
+                  className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink/70 hover:bg-ink/5"
+                >
+                  📄 {w.verdict.toLanding}
+                </Link>
+              )}
+              {offer.destinationUrl && (
+                <Link
+                  href={`/ads/auto-create?urls=${encodeURIComponent(offer.destinationUrl)}`}
+                  className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink/70 hover:bg-ink/5"
+                >
+                  📢 {w.verdict.toAds}
+                </Link>
+              )}
+            </div>
+          </div>
+        )}
       </section>
     </div>
   );

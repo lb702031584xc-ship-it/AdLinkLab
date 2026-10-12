@@ -5,7 +5,7 @@
  * ?tab=research（需求验证，选品用）| ?tab=launch（投放选词，投流用），默认 research。
  * URL 参数是 Tab 状态的唯一来源，切换时 shallow 更新，前进/后退可用。
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { KeywordStarterClient } from "./keyword-starter-client";
 import { DemandCheckClient, type SeedImportSignal } from "./demand-check-client";
@@ -37,6 +37,14 @@ export function KeywordStarterTabsClient({
   // Offer 选择：用于 AI 按 offer 生成关键词
   const [offerId, setOfferId] = useState("");
   const [manualOffer, setManualOffer] = useState("");
+  // ?offerId= 预选（从 AI 工作表下一步跳过来）
+  useEffect(() => {
+    const oid = searchParams.get("offerId");
+    if (oid && offers.some((o) => o.id === oid)) {
+      setOfferId(oid);
+      setManualOffer("");
+    }
+  }, [searchParams, offers]);
   const selectedOffer = offers.find((o) => o.id === offerId);
   const aiProduct = selectedOffer?.name || manualOffer.trim();
 

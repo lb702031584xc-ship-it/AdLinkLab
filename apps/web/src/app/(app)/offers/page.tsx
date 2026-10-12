@@ -297,15 +297,23 @@ export default async function OffersPage({
     {
       header: t.entities.offers.columns.actions,
       render: (o) => (
-        <OfferDeleteButton
-          offerId={o.id}
-          offerName={o.name}
-          dict={{
-            delete: t.entities.offers.columns.delete,
-            deleteConfirm: t.entities.offers.columns.deleteConfirm,
-            deleting: t.entities.offers.columns.deleting,
-          }}
-        />
+        <div className="flex items-center gap-2">
+          <Link
+            href={`/ai/analyze?offerId=${encodeURIComponent(o.id)}`}
+            className="text-xs text-signal hover:underline"
+          >
+            {t.entities.offers.columns.analyze}
+          </Link>
+          <OfferDeleteButton
+            offerId={o.id}
+            offerName={o.name}
+            dict={{
+              delete: t.entities.offers.columns.delete,
+              deleteConfirm: t.entities.offers.columns.deleteConfirm,
+              deleting: t.entities.offers.columns.deleting,
+            }}
+          />
+        </div>
       ),
       className: "whitespace-nowrap",
     },

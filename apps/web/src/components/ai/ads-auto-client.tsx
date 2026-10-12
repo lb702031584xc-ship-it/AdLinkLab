@@ -4,6 +4,7 @@
  * 功能2 — 自动化广告页面：粘贴 URL → 生成预览 → 确认排队 → Script/文案包。
  */
 import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { coachCheckAction, type CoachFinding } from "@/lib/api/coach-actions";
 import { CoachGate, hasCoachBlock } from "@/components/coach/coach-gate";
 import { zh as coachZh, en as coachEn } from "@/i18n/dict/coach";
@@ -135,6 +136,13 @@ function PlanPreview({ plan, d }: { plan: AdPlan; d: AdsAutoDict }) {
 export function AdsAutoClient({ dict, lang }: { dict: AdsAutoDict; lang: "zh" | "en" }) {
   const d = dict;
   const [urlsText, setUrlsText] = useState("");
+  const searchParams = useSearchParams();
+  // ?urls= 预填（从 AI 工作表下一步跳过来时带终链）
+  useEffect(() => {
+    const u = searchParams.get("urls");
+    if (u && !urlsText) setUrlsText(u);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
   const [language, setLanguage] = useState<"zh" | "en">("en");
   const [googleAccountId, setGoogleAccountId] = useState("");
   const [googleAccounts, setGoogleAccounts] = useState<

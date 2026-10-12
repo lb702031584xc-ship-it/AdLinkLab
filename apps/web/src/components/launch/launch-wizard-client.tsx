@@ -503,7 +503,7 @@ export function LaunchWizardClient({ dict: d, offers, initialChecklists, lang }:
           ) : analyses.length === 0 ? (
             <div className="mt-3 text-sm text-ink/60">
               <p>{d.analysisEmpty}</p>
-              <a href="/ai/analyze" className="mt-2 inline-block text-signal underline">
+              <a href={offerId ? `/ai/analyze?offerId=${encodeURIComponent(offerId)}` : "/ai/analyze"} className="mt-2 inline-block text-signal underline">
                 {d.goAnalyze}
               </a>
             </div>
