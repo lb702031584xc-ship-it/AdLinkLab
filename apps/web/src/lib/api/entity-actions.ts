@@ -92,6 +92,10 @@ export async function changeOfferStatusAction(id: string, status: string) {
   ]);
 }
 
+export async function deleteOfferAction(id: string) {
+  return attempt(() => entityApi.offers.remove(id), ["/offers"]);
+}
+
 /* ---------- Tracking Links ---------- */
 
 export async function replaceTrackingLinkBindingsAction(

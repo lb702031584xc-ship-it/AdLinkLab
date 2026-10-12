@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { entityApi } from "@/lib/api/entities";
+import { deleteOfferAction } from "@/lib/api/entity-actions";
 
 export function OfferDeleteButton({
   offerId,
@@ -20,7 +20,11 @@ export function OfferDeleteButton({
     if (!window.confirm(`${dict.deleteConfirm}\n${offerName}`)) return;
     setBusy(true);
     try {
-      await entityApi.offers.remove(offerId);
+      const result = await deleteOfferAction(offerId);
+      if (!result.ok) {
+        alert(result.error);
+        return;
+      }
       router.refresh();
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e));
