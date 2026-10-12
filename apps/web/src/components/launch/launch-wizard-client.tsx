@@ -44,6 +44,26 @@ const btnPrimary =
 const btnGhost =
   "rounded-lg border border-ink/15 px-4 py-2 text-sm text-ink/80 transition hover:bg-ink/5 disabled:opacity-50";
 
+/** 6 个向导步骤归属的 5 阶段（步骤编号保持不变，DB 里 currentStep 仍是 1-6）。 */
+const stepPhase = {
+  1: 1,
+  2: 2,
+  3: 3,
+  4: 3,
+  5: 3,
+  6: 4,
+} as const;
+const phaseKeys = [1, 2, 3, 4, 5] as const;
+
+/** 步骤卡片顶部的阶段眉题。 */
+function PhaseEyebrow({ label }: { label: string }) {
+  return (
+    <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-signal">
+      {label}
+    </p>
+  );
+}
+
 interface Props {
   dict: LaunchDict;
   offers: Offer[];
@@ -362,39 +382,79 @@ export function LaunchWizardClient({ dict: d, offers, initialChecklists, lang }:
         </div>
       )}
 
-      {/* progress */}
+      {/* progress: 5 phases（步骤编号 1-6 保持不变，仅按阶段分组展示） */}
       {detail && (
-        <ol className="flex flex-wrap items-center gap-2">
-          {stepKeys.map((s) => (
-            <li key={s} className="flex items-center gap-2">
-              <button
-                onClick={() => s < step && setStep(s)}
-                disabled={s >= step}
-                className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-semibold ${
-                  s < step
-                    ? "bg-ink text-white"
-                    : s === step
-                      ? "bg-signal text-white"
-                      : "bg-ink/10 text-ink/50"
-                }`}
-                title={d.steps[s]}
-              >
-                {s}
-              </button>
-              <span
-                className={`text-sm ${s === step ? "font-semibold text-ink" : "text-ink/55"}`}
-              >
-                {d.steps[s]}
-              </span>
-              {s < 6 && <span className="mx-1 text-ink/25">→</span>}
-            </li>
-          ))}
-        </ol>
+        <div className="space-y-2">
+          {phaseKeys.map((p) => {
+            if (p === 5) {
+              const done = !!activateResult;
+              return (
+                <div key={p} className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <span
+                    className={`w-36 shrink-0 text-sm font-medium ${done ? "text-ink" : "text-ink/40"}`}
+                  >
+                    {d.phases[p]}
+                  </span>
+                  {done ? (
+                    <a href="/monitoring" className="text-sm text-signal underline">
+                      {d.goMonitor}
+                    </a>
+                  ) : (
+                    <span className="text-xs text-ink/40">{d.monitorHint}</span>
+                  )}
+                </div>
+              );
+            }
+            const inPhase = stepKeys.filter((s) => stepPhase[s] === p);
+            const active = inPhase.some((s) => s === step);
+            const passed = inPhase.every((s) => s < step);
+            return (
+              <div key={p} className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span
+                  className={`w-36 shrink-0 text-sm font-medium ${
+                    active ? "text-ink" : passed ? "text-ink/70" : "text-ink/40"
+                  }`}
+                >
+                  {d.phases[p]}
+                </span>
+                <ol className="flex flex-wrap items-center gap-2">
+                  {inPhase.map((s, i) => (
+                    <li key={s} className="flex items-center gap-2">
+                      <button
+                        onClick={() => s < step && setStep(s)}
+                        disabled={s >= step}
+                        className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-semibold ${
+                          s < step
+                            ? "bg-ink text-white"
+                            : s === step
+                              ? "bg-signal text-white"
+                              : "bg-ink/10 text-ink/50"
+                        }`}
+                        title={d.steps[s]}
+                      >
+                        {s}
+                      </button>
+                      <span
+                        className={`text-sm ${s === step ? "font-semibold text-ink" : "text-ink/55"}`}
+                      >
+                        {d.steps[s]}
+                      </span>
+                      {i < inPhase.length - 1 && (
+                        <span className="mx-1 text-ink/25">→</span>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            );
+          })}
+        </div>
       )}
 
       {/* step 1 */}
       {!detail && (
         <div className={cardClass}>
+          <PhaseEyebrow label={d.phases[1]} />
           <h3 className="text-base font-semibold text-ink">{d.pickOffer}</h3>
           <p className="mt-1 text-sm text-ink/60">{d.pickOfferHint}</p>
           {offers.length === 0 ? (
@@ -436,6 +496,7 @@ export function LaunchWizardClient({ dict: d, offers, initialChecklists, lang }:
       {/* step 2 */}
       {detail && step === 2 && (
         <div className={cardClass}>
+          <PhaseEyebrow label={d.phases[2]} />
           <h3 className="text-base font-semibold text-ink">{d.analysisTitle}</h3>
           {busy === "analyses" ? (
             <p className="mt-3 text-sm text-ink/60">…</p>
@@ -529,6 +590,7 @@ export function LaunchWizardClient({ dict: d, offers, initialChecklists, lang }:
       {/* step 3 */}
       {detail && step === 3 && (
         <div className={cardClass}>
+          <PhaseEyebrow label={d.phases[3]} />
           <h3 className="text-base font-semibold text-ink">{d.trackingTitle}</h3>
           <p className="mt-1 text-sm text-ink/60">{d.trackingHint}</p>
           {activeOffer && (
@@ -565,6 +627,7 @@ export function LaunchWizardClient({ dict: d, offers, initialChecklists, lang }:
       {/* step 4 */}
       {detail && step === 4 && (
         <div className={cardClass}>
+          <PhaseEyebrow label={d.phases[3]} />
           <h3 className="text-base font-semibold text-ink">{d.landingTitle}</h3>
           <div className="mt-3 flex gap-2">
             <button
@@ -625,6 +688,7 @@ export function LaunchWizardClient({ dict: d, offers, initialChecklists, lang }:
       {/* step 5 */}
       {detail && step === 5 && (
         <div className={cardClass}>
+          <PhaseEyebrow label={d.phases[3]} />
           <h3 className="text-base font-semibold text-ink">{d.adTitle}</h3>
           <p className="mt-1 text-sm text-ink/60">{d.adHint}</p>
           {!adPlan ? (
@@ -674,6 +738,7 @@ export function LaunchWizardClient({ dict: d, offers, initialChecklists, lang }:
       {/* step 6 */}
       {detail && step === 6 && (
         <div className={cardClass}>
+          <PhaseEyebrow label={d.phases[4]} />
           <h3 className="text-base font-semibold text-ink">{d.reviewTitle}</h3>
           <dl className="mt-3 space-y-2 text-sm">
             <div className="flex justify-between gap-4">

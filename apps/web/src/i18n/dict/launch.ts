@@ -3,7 +3,17 @@
  */
 export const zh = {
   title: "上线向导",
-  description: "6 步把一个 Offer 从选中送到上线：选品、AI 分析、建追踪链、建落地页、生成广告、一键上线。",
+  description:
+    "按 5 阶段把一个 Offer 从选中送到上线：选品 → 分析判断 → 物料制作 → 投流 → 监控优化，上线后持续看数据复盘。",
+  phases: {
+    1: "阶段一 · 选品",
+    2: "阶段二 · 分析判断",
+    3: "阶段三 · 物料制作",
+    4: "阶段四 · 投流",
+    5: "阶段五 · 监控优化",
+  },
+  goMonitor: "前往监控",
+  monitorHint: "上线后去「流量监控」看点击与转化，每周用周报复盘，把跑得好的打法沉淀回选品。",
   steps: {
     1: "选 Offer",
     2: "AI 分析",
@@ -95,7 +105,18 @@ export const zh = {
 
 export const en = {
   title: "Launch Wizard",
-  description: "Take an offer live in 6 guided steps: pick, AI analysis, tracking link, landing page, ad copy, go live.",
+  description:
+    "Take an offer live in 5 phases: selection → analysis → creatives → launch → monitor & optimize, then keep reviewing data weekly.",
+  phases: {
+    1: "Phase 1 · Selection",
+    2: "Phase 2 · Analysis",
+    3: "Phase 3 · Creatives",
+    4: "Phase 4 · Launch",
+    5: "Phase 5 · Monitor & Optimize",
+  },
+  goMonitor: "Go to monitoring",
+  monitorHint:
+    "After going live, check Monitoring for clicks and conversions, review the weekly report, and feed winning tactics back into selection.",
   steps: {
     1: "Pick Offer",
     2: "AI Analysis",

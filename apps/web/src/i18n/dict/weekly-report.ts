@@ -40,6 +40,22 @@ export const zh = {
     offerRevenue: "收入",
     prevRevenue: "上周收入",
     aiSummaryTitle: "AI 解读",
+    insightsTitle: "选品启示",
+    insightsDescription:
+      "根据本周监控与转化数据自动提炼，供下周选品参考；数据不足时留空，不做推测。",
+    insightEpcKing: "EPC 之王",
+    insightEpcKingHint: "点击 ≥ 10 的 Offer 里，单次点击收入最高",
+    insightBestSource: "表现最佳来源",
+    insightBestSourceHint: "按点击加权的平均 EPC",
+    insightFastestGrowth: "增长最快",
+    insightFastestGrowthHint: "本周收入相对上周增幅最大，值得加量或复用打法",
+    insightKeywords: "关键词洞察",
+    insightKeywordsEmpty:
+      "暂无关键词层级数据：周报目前只收录 Offer 维度的点击 / 转化 / 收入，没有关键词维度的明细，无法提炼。",
+    insightEmpty: "数据不足",
+    insightEmptyHint: "本周暂无满足统计口径的数据，产生投放数据后自动生成。",
+    insightBasis:
+      "数据口径：EPC = 收入 ÷ 点击；来源平均 EPC 按点击加权；增幅要求上周收入 > 0 且本周为正增长。",
     notFound: "周报不存在。",
   },
 };
@@ -82,6 +98,22 @@ export const en = {
     offerRevenue: "Revenue",
     prevRevenue: "Prev-week revenue",
     aiSummaryTitle: "AI analysis",
+    insightsTitle: "Selection Insights",
+    insightsDescription:
+      "Auto-distilled from this week's monitoring and conversion data as input for next week's selection; left blank when data is insufficient — no guessing.",
+    insightEpcKing: "EPC King",
+    insightEpcKingHint: "Highest revenue per click among offers with ≥ 10 clicks",
+    insightBestSource: "Best-performing source",
+    insightBestSourceHint: "Click-weighted average EPC",
+    insightFastestGrowth: "Fastest growing",
+    insightFastestGrowthHint: "Largest week-over-week revenue gain — worth scaling or replicating",
+    insightKeywords: "Keyword insights",
+    insightKeywordsEmpty:
+      "No keyword-level data: the report only carries offer-level clicks / conversions / revenue, with no keyword breakdown to distill.",
+    insightEmpty: "Insufficient data",
+    insightEmptyHint: "No data meets the statistical bar this week; insights generate automatically once there's traffic.",
+    insightBasis:
+      "Basis: EPC = revenue ÷ clicks; source avg EPC is click-weighted; growth requires prev-week revenue > 0 and positive growth.",
     notFound: "Report not found.",
   },
 };
