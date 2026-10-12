@@ -49,6 +49,20 @@ export default async function AiAnalyzePage({
     }
   }
 
+  // Offer 选择器用：拉取 offer 库列表
+  let offers: { id: string; name: string; network: string; destinationUrl: string }[] = [];
+  try {
+    const data = await entityApi.offers.list(1, 200);
+    offers = (data.items ?? []).map((o) => ({
+      id: o.id,
+      name: o.name,
+      network: o.network,
+      destinationUrl: o.destinationUrl,
+    }));
+  } catch {
+    /* page still renders; selector will be empty */
+  }
+
   const s = sp.source;
   const initialSource: WorksheetSource =
     s === "amazon" || s === "cashback" ? s : "affiliate";
@@ -60,6 +74,7 @@ export default async function AiAnalyzePage({
       initialOwnedDomains={initialOwnedDomains}
       initialOffer={initialOffer}
       initialSource={initialSource}
+      offers={offers}
     />
   );
 }

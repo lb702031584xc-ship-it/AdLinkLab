@@ -119,9 +119,11 @@ const verdictCls: Record<Verdict, string> = {
 export function DemandCheckClient({
   dict: d,
   importSignal,
+  aiProduct,
 }: {
   dict: KeywordStarterDict;
   importSignal: SeedImportSignal | null;
+  aiProduct?: string;
 }) {
   const [rows, setRows] = useState<DemandRow[]>([]);
   const [kwInput, setKwInput] = useState("");
@@ -129,13 +131,18 @@ export function DemandCheckClient({
   const [bulkText, setBulkText] = useState("");
 
   // AI 推荐关键词
-  const [aiProduct, setAiProduct] = useState("");
+  const [aiProductInput, setAiProductInput] = useState(aiProduct ?? "");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiKeywords, setAiKeywords] = useState<RecommendedKeyword[]>([]);
 
+  // offer 选择变化时同步到 AI 输入框
+  useEffect(() => {
+    if (aiProduct) setAiProductInput(aiProduct);
+  }, [aiProduct]);
+
   const onAiRecommend = async () => {
-    const p = aiProduct.trim();
+    const p = aiProductInput.trim();
     if (!p || aiLoading) return;
     setAiLoading(true);
     setAiError(null);
@@ -247,8 +254,8 @@ export function DemandCheckClient({
         <p className="mt-1 text-xs text-ink/50">{d.aiRecommendHint}</p>
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <input
-            value={aiProduct}
-            onChange={(e) => setAiProduct(e.target.value)}
+            value={aiProductInput}
+            onChange={(e) => setAiProductInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && onAiRecommend()}
             placeholder={d.aiProductPlaceholder}
             className={`${inputCls} max-w-xs`}
@@ -256,7 +263,7 @@ export function DemandCheckClient({
           <button
             type="button"
             onClick={onAiRecommend}
-            disabled={aiLoading || !aiProduct.trim()}
+            disabled={aiLoading || !aiProductInput.trim()}
             className="rounded-lg bg-signal px-3 py-1.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
           >
             {aiLoading ? d.aiRecommending : d.aiRecommendBtn}

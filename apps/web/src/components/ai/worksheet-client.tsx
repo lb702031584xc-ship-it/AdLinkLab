@@ -216,18 +216,39 @@ export function WorksheetClient({
   initialOwnedDomains,
   initialOffer,
   initialSource,
+  offers,
 }: {
   isAdmin: boolean;
   showSetupNudge: boolean;
   initialOwnedDomains: string[];
   initialOffer: WorksheetOffer | null;
   initialSource: WorksheetSource;
+  offers: WorksheetOffer[];
 }) {
   const t = useDict();
   const w = t.ai.worksheet;
 
   const [source, setSource] = useState<WorksheetSource>(initialSource);
   const [openStep, setOpenStep] = useState<number>(1);
+
+  // 分析对象：可从 offer 库选择，或手动输入
+  const [offer, setOffer] = useState<WorksheetOffer | null>(initialOffer);
+  const [manualOpen, setManualOpen] = useState(false);
+  const [mName, setMName] = useState("");
+  const [mNetwork, setMNetwork] = useState("");
+  const [mUrl, setMUrl] = useState("");
+
+  const applyManualOffer = () => {
+    const name = mName.trim();
+    if (!name) return;
+    setOffer({
+      id: "",
+      name,
+      network: mNetwork.trim(),
+      destinationUrl: mUrl.trim(),
+    });
+    setManualOpen(false);
+  };
 
   const [termsVerdict, setTermsVerdict] = useState<"go" | "caution" | "stop" | null>(null);
   const [complianceResults, setComplianceResults] = useState<AiUrlCheckResult[] | null>(null);
@@ -335,49 +356,121 @@ export function WorksheetClient({
       {/* Offer header */}
       <div className="rounded-xl border border-ink/10 bg-white/70 p-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <p className="text-xs text-ink/55">{w.offerTitle}</p>
-            {initialOffer ? (
+            {offer ? (
               <>
-                <p className="mt-1 truncate text-lg font-semibold text-ink">{initialOffer.name}</p>
+                <p className="mt-1 truncate text-lg font-semibold text-ink">{offer.name}</p>
                 <p className="mt-0.5 text-sm text-ink/60">
-                  {initialOffer.network}
-                  {initialOffer.destinationUrl ? (
+                  {offer.network}
+                  {offer.destinationUrl ? (
                     <>
                       {" · "}
-                      <span className="break-all font-mono text-xs">{initialOffer.destinationUrl}</span>
+                      <span className="break-all font-mono text-xs">{offer.destinationUrl}</span>
                     </>
                   ) : null}
                 </p>
-                <Link
-                  href={`/offers/${initialOffer.id}`}
-                  className="mt-1 inline-block text-xs text-signal underline-offset-2 hover:underline"
-                >
-                  {w.openOffer}
-                </Link>
+                {offer.id && (
+                  <Link
+                    href={`/offers/${offer.id}`}
+                    className="mt-1 inline-block text-xs text-signal underline-offset-2 hover:underline"
+                  >
+                    {w.openOffer}
+                  </Link>
+                )}
               </>
             ) : (
               <p className="mt-1 text-sm text-ink/60">{w.noOffer}</p>
             )}
           </div>
-          <div>
-            <p className="mb-1 text-xs text-ink/55">{w.sourceLabel}</p>
-            <div className="inline-flex rounded-lg bg-ink/5 p-1" role="group" aria-label={w.sourceLabel}>
-              {(["affiliate", "amazon", "cashback"] as const).map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => setSource(s)}
-                  className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
-                    source === s ? "bg-white text-ink shadow-sm" : "text-ink/60 hover:text-ink"
-                  }`}
-                >
-                  {w.sources[s]}
-                </button>
-              ))}
+          <div className="flex flex-col gap-2">
+            <div>
+              <p className="mb-1 text-xs text-ink/55">{w.sourceLabel}</p>
+              <div className="inline-flex rounded-lg bg-ink/5 p-1" role="group" aria-label={w.sourceLabel}>
+                {(["affiliate", "amazon", "cashback"] as const).map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => setSource(s)}
+                    className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
+                      source === s ? "bg-white text-ink shadow-sm" : "text-ink/60 hover:text-ink"
+                    }`}
+                  >
+                    {w.sources[s]}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </div>
+
+        {/* Offer 选择器 + 手动输入 */}
+        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-ink/10 pt-3">
+          <select
+            value={offer?.id ?? ""}
+            onChange={(e) => {
+              const sel = offers.find((o) => o.id === e.target.value);
+              setOffer(sel ?? null);
+              setManualOpen(false);
+            }}
+            className="rounded-lg border border-ink/15 bg-white px-3 py-1.5 text-sm text-ink outline-none focus:border-signal"
+          >
+            <option value="">{w.selectOffer ?? "从 offer 库选择…"}</option>
+            {offers.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.name}（{o.network}）
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => setManualOpen((o) => !o)}
+            className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink/70 hover:bg-ink/5"
+          >
+            {w.manualOffer ?? "手动输入 offer"}
+          </button>
+          {offer && (
+            <button
+              type="button"
+              onClick={() => setOffer(null)}
+              className="text-xs text-ink/40 hover:text-red-600"
+            >
+              {w.clearOffer ?? "清除"}
+            </button>
+          )}
+        </div>
+        {manualOpen && (
+          <div className="mt-2 grid grid-cols-1 gap-2 rounded-lg bg-ink/[0.03] p-3 sm:grid-cols-3">
+            <input
+              value={mName}
+              onChange={(e) => setMName(e.target.value)}
+              placeholder={w.offerNamePh ?? "Offer 名称 *"}
+              className="rounded-lg border border-ink/15 bg-white px-3 py-1.5 text-sm outline-none focus:border-signal"
+            />
+            <input
+              value={mNetwork}
+              onChange={(e) => setMNetwork(e.target.value)}
+              placeholder={w.offerNetworkPh ?? "渠道/网络"}
+              className="rounded-lg border border-ink/15 bg-white px-3 py-1.5 text-sm outline-none focus:border-signal"
+            />
+            <input
+              value={mUrl}
+              onChange={(e) => setMUrl(e.target.value)}
+              placeholder={w.offerUrlPh ?? "目标 URL"}
+              className="rounded-lg border border-ink/15 bg-white px-3 py-1.5 text-sm outline-none focus:border-signal"
+            />
+            <div className="sm:col-span-3">
+              <button
+                type="button"
+                onClick={applyManualOffer}
+                disabled={!mName.trim()}
+                className="rounded-lg bg-signal px-4 py-1.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+              >
+                {w.useOffer ?? "使用这个 offer 分析"}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Stepper */}

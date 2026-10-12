@@ -134,6 +134,13 @@ export const zh = {
     openOffer: "在 offer 库中查看",
     cashbackTermsHint:
       "返利网商家没有传统联盟条款：请把该商家的返利细则 / exclusions 说明文字粘贴到下方文本框进行解析。",
+    selectOffer: "从 offer 库选择…",
+    manualOffer: "手动输入 offer",
+    clearOffer: "清除",
+    offerNamePh: "Offer 名称 *",
+    offerNetworkPh: "渠道/网络",
+    offerUrlPh: "目标 URL",
+    useOffer: "使用这个 offer 分析",
     steps: {
       terms: "条款解析",
       compliance: "合规检查",
@@ -1047,6 +1054,13 @@ export const en: typeof zh = {
     openOffer: "View in offer library",
     cashbackTermsHint:
       "Cashback merchants have no traditional affiliate terms: paste the merchant's cashback rules / exclusions text into the box below for analysis.",
+    selectOffer: "Select from offer library…",
+    manualOffer: "Enter offer manually",
+    clearOffer: "Clear",
+    offerNamePh: "Offer name *",
+    offerNetworkPh: "Network",
+    offerUrlPh: "Destination URL",
+    useOffer: "Analyze this offer",
     steps: {
       terms: "Terms screening",
       compliance: "Compliance check",

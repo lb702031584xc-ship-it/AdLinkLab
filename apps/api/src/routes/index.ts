@@ -377,6 +377,8 @@ export async function registerRoutes(
       endsAt?: string;
       idempotencyKey?: string;
       requestId?: string;
+      commissionValue?: number;
+      commissionType?: string;
     };
   }>("/api/v1/offers", async (request) => {
     const tenantId = tenantOf(request, request.body?.tenantId);
@@ -394,6 +396,8 @@ export async function registerRoutes(
       endsAt: request.body.endsAt ? new Date(request.body.endsAt) : undefined,
       idempotencyKey: request.body.idempotencyKey,
       requestId: request.body.requestId,
+      commissionValue: request.body.commissionValue,
+      commissionType: request.body.commissionType,
     });
   });
 

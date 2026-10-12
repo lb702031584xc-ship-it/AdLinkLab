@@ -34,6 +34,8 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
   const [destinationUrl, setDestinationUrl] = useState("");
   const [status, setStatus] = useState<string>("ACTIVE");
   const [priority, setPriority] = useState("100");
+  const [commissionValue, setCommissionValue] = useState("");
+  const [commissionType, setCommissionType] = useState("percentage");
   const [startsAt, setStartsAt] = useState("");
   const [endsAt, setEndsAt] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -52,6 +54,7 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
     setError(null);
     const priorityNum = Number(priority);
     start(async () => {
+      const cv = Number(commissionValue);
       const result = await createOfferAction({
         name: name.trim(),
         network: network.trim(),
@@ -61,6 +64,8 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
         priority: Number.isFinite(priorityNum) ? Math.floor(priorityNum) : 100,
         startsAt: toIsoInput(startsAt),
         endsAt: toIsoInput(endsAt),
+        commissionValue: commissionValue.trim() !== "" && Number.isFinite(cv) ? cv : undefined,
+        commissionType: commissionValue.trim() !== "" ? commissionType : undefined,
       });
       if (!result.ok) {
         setError(result.error);
@@ -140,6 +145,37 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
         />
         <div className="mt-2">
           <CoachGate dict={t.coach} findings={coachFindings} />
+        </div>
+      </div>
+      <div className="grid gap-5 sm:grid-cols-2">
+        <div>
+          <label htmlFor="offer-commission-value" className={labelClassName}>
+            佣金 {commissionType === "percentage" ? "(%)" : "($)"}
+          </label>
+          <input
+            id="offer-commission-value"
+            type="number"
+            step="0.01"
+            min="0"
+            className={inputClassName}
+            value={commissionValue}
+            onChange={(e) => setCommissionValue(e.target.value)}
+            placeholder={commissionType === "percentage" ? "如 10（表示 10%）" : "如 5（表示 $5）"}
+          />
+        </div>
+        <div>
+          <label htmlFor="offer-commission-type" className={labelClassName}>
+            佣金类型
+          </label>
+          <select
+            id="offer-commission-type"
+            className={inputClassName}
+            value={commissionType}
+            onChange={(e) => setCommissionType(e.target.value)}
+          >
+            <option value="percentage">按比例 (%)</option>
+            <option value="fixed">固定金额 ($)</option>
+          </select>
         </div>
       </div>
       <div className="grid gap-5 sm:grid-cols-2">

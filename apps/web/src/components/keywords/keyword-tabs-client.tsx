@@ -18,9 +18,11 @@ type Tab = "research" | "launch";
 export function KeywordStarterTabsClient({
   dict: d,
   lang,
+  offers,
 }: {
   dict: KeywordStarterDict;
   lang: "zh" | "en";
+  offers: { id: string; name: string; network: string }[];
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -28,6 +30,12 @@ export function KeywordStarterTabsClient({
 
   // 种子词 → 需求验证的一次性导入信号
   const [importSignal, setImportSignal] = useState<SeedImportSignal | null>(null);
+
+  // Offer 选择：用于 AI 按 offer 生成关键词
+  const [offerId, setOfferId] = useState("");
+  const [manualOffer, setManualOffer] = useState("");
+  const selectedOffer = offers.find((o) => o.id === offerId);
+  const aiProduct = selectedOffer?.name || manualOffer.trim();
 
   const switchTab = (t: Tab) => {
     router.replace(`/keywords/starter?tab=${t}`, { scroll: false });
@@ -59,6 +67,50 @@ export function KeywordStarterTabsClient({
 
       {tab === "research" ? (
         <div>
+          {/* Offer 选择器：AI 按 offer 生成关键词 */}
+          <div className="mb-4 rounded-xl border border-ink/10 bg-white p-4">
+            <p className="mb-2 text-sm font-semibold text-ink">
+              {lang === "zh" ? "🎯 针对哪个 offer 选词？" : "🎯 Which offer are keywords for?"}
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={offerId}
+                onChange={(e) => {
+                  setOfferId(e.target.value);
+                  setManualOffer("");
+                }}
+                className="rounded-lg border border-ink/15 bg-white px-3 py-1.5 text-sm outline-none focus:border-signal"
+              >
+                <option value="">
+                  {lang === "zh" ? "从 offer 库选择…" : "Select from library…"}
+                </option>
+                {offers.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.name}（{o.network}）
+                  </option>
+                ))}
+              </select>
+              <span className="text-xs text-ink/40">
+                {lang === "zh" ? "或" : "or"}
+              </span>
+              <input
+                value={manualOffer}
+                onChange={(e) => {
+                  setManualOffer(e.target.value);
+                  setOfferId("");
+                }}
+                placeholder={lang === "zh" ? "手动输入产品/品类，如 robot vacuum" : "Type product/niche, e.g. robot vacuum"}
+                className="rounded-lg border border-ink/15 bg-white px-3 py-1.5 text-sm outline-none focus:border-signal"
+              />
+            </div>
+            {aiProduct && (
+              <p className="mt-1.5 text-xs text-ink/50">
+                {lang === "zh"
+                  ? `AI 将按"${aiProduct}"生成关键词思路`
+                  : `AI will suggest keyword ideas for "${aiProduct}"`}
+              </p>
+            )}
+          </div>
           <KeywordStarterClient
             dict={d}
             lang={lang}
@@ -69,7 +121,7 @@ export function KeywordStarterTabsClient({
               }))
             }
           />
-          <DemandCheckClient dict={d} importSignal={importSignal} />
+          <DemandCheckClient dict={d} importSignal={importSignal} aiProduct={aiProduct} />
         </div>
       ) : (
         <LaunchEditorClient dict={d} lang={lang} />
