@@ -92,6 +92,11 @@ function PlanPreview({ plan, d }: { plan: AdPlan; d: AdsAutoDict }) {
             <div>
               <p className={sectionTitleClass}>
                 {d.preview.keywords}（{block.group.keywords.length}）
+                {block.group.keywordsSource === "user" && (
+                  <span className="ml-2 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
+                    ✨ {d.preview.keywordsFromYou}
+                  </span>
+                )}
               </p>
               <ul className="mt-1 space-y-0.5 font-mono text-[13px] text-ink/85">
                 {block.group.keywords.map((k, i) => (
@@ -137,10 +142,12 @@ export function AdsAutoClient({ dict, lang }: { dict: AdsAutoDict; lang: "zh" | 
   const d = dict;
   const [urlsText, setUrlsText] = useState("");
   const searchParams = useSearchParams();
-  // ?urls= 预填（从 AI 工作表下一步跳过来时带终链）
+  // ?urls= / ?keywords= 预填（从 AI 工作表 / 投放选词跳过来）
   useEffect(() => {
     const u = searchParams.get("urls");
     if (u && !urlsText) setUrlsText(u);
+    const k = searchParams.get("keywords");
+    if (k && !kwText) setKwText(k);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
   const [language, setLanguage] = useState<"zh" | "en">("en");
@@ -160,6 +167,8 @@ export function AdsAutoClient({ dict, lang }: { dict: AdsAutoDict; lang: "zh" | 
   // 抓取失败兜底：手动粘贴页面文字（Amazon 等反爬站点）
   const [manualOpen, setManualOpen] = useState(false);
   const [manualText, setManualText] = useState("");
+  // 投放选词里定好的关键词（可选）：填了就用这套，不再 AI 生成
+  const [kwText, setKwText] = useState("");
   // 教练模式（第十三批）
   const [brandTermsText, setBrandTermsText] = useState("");
   const [coachFindings, setCoachFindings] = useState<CoachFinding[]>([]);
@@ -218,10 +227,21 @@ export function AdsAutoClient({ dict, lang }: { dict: AdsAutoDict; lang: "zh" | 
       const manual = manualText.trim();
       const pageTexts =
         manual && urls.length === 1 ? [manual] : undefined;
+      // 用户在投放选词里定好的关键词：每行一个，可带匹配方式 "词, exact/phrase/broad"
+      const keywords = kwText
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => {
+          const [text, mt] = line.split(",").map((s) => s.trim());
+          return { text, matchType: (mt || "phrase").toUpperCase() };
+        })
+        .filter((k) => k.text);
       const res = await requestAdPlanAction(urls, {
         language,
         googleAccountId: googleAccountId.trim() || undefined,
         pageTexts,
+        keywords: keywords.length ? keywords : undefined,
       });
       if (res.ok) {
         setPlan(res.data.plan);
@@ -401,6 +421,22 @@ export function AdsAutoClient({ dict, lang }: { dict: AdsAutoDict; lang: "zh" | 
               />
             </div>
           )}
+        </div>
+
+        {/* 投放选词里定好的关键词（可选）：填了就用这套，不再 AI 生成 */}
+        <div className="mt-3">
+          <label className={labelClass} htmlFor="ads-auto-keywords">
+            {d.form.keywordsLabel}
+          </label>
+          <textarea
+            id="ads-auto-keywords"
+            rows={3}
+            value={kwText}
+            onChange={(e) => setKwText(e.target.value)}
+            placeholder={d.form.keywordsPlaceholder}
+            className={`${inputClass} font-mono`}
+          />
+          <p className="mt-1 text-xs text-ink/55">{d.form.keywordsHint}</p>
         </div>
       </div>
 

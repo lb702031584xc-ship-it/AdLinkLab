@@ -33,6 +33,8 @@ export interface AdPlanAdGroupBlock {
     negativeKeywords: AdPlanKeyword[];
     maxCpc: AdPlanMoney | null;
     dataQuality: AdPlanDataQuality;
+    /** 关键词来源：user=投放选词里定的词，ai=AI 生成 */
+    keywordsSource?: "user" | "ai";
   };
   rsa: {
     headlines: string[];
@@ -145,7 +147,7 @@ async function apiFetchText(path: string): Promise<string> {
 
 export async function requestAdPlan(
   urls: string[],
-  opts: { language?: "zh" | "en"; googleAccountId?: string; pageTexts?: Array<string | null> } = {}
+  opts: { language?: "zh" | "en"; googleAccountId?: string; pageTexts?: Array<string | null>; keywords?: Array<{ text: string; matchType?: string }> } = {}
 ): Promise<AutoCreateResult> {
   return apiFetch<AutoCreateResult>("/api/v1/ads/auto-create", {
     method: "POST",
@@ -154,6 +156,7 @@ export async function requestAdPlan(
       language: opts.language ?? "en",
       googleAccountId: opts.googleAccountId || undefined,
       pageTexts: opts.pageTexts,
+      keywords: opts.keywords,
     }),
   });
 }

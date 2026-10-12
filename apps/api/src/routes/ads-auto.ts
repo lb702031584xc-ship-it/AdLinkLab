@@ -39,6 +39,7 @@ import {
   buildCopyPack,
   createPlanStore,
   finalizeAdPlan,
+  normalizeUserKeywords,
   validateAdPlanUrlDraft,
   type AdPlan,
   type AdPlanUrlDraft,
@@ -168,6 +169,8 @@ export async function registerAdsAutoRoutes(
       language?: unknown;
       /** 可选：与 urls 一一对应的手动页面文字；提供则跳过抓取（Amazon 等反爬站点用） */
       pageTexts?: unknown;
+      /** 可选：用户在投放选词里定好的关键词；提供则广告组用这套词，不再 AI 生成 */
+      keywords?: unknown;
     };
   }>("/api/v1/ads/auto-create", async (request) => {
     const info = await requireSession(deps, request);
@@ -196,6 +199,8 @@ export async function registerAdsAutoRoutes(
           typeof t === "string" && t.trim() ? t.trim().slice(0, PAGE_TEXT_LIMIT) : null
         )
       : [];
+    // 用户在投放选词里定好的关键词：有则各广告组统一用这套，不再 AI 生成
+    const userKeywords = normalizeUserKeywords(body.keywords);
 
     const settings = await readLlmSettings(prisma);
     if (!(settings.baseUrl && settings.model && settings.apiKeyEnc)) {
@@ -245,6 +250,11 @@ export async function registerAdsAutoRoutes(
       } catch (e) {
         if (e instanceof AiError) throw e;
         throw new AiError("LLM request failed");
+      }
+      // 用户自带关键词：覆盖 AI 生成的词（品牌冲突过滤仍在 finalize 里做）
+      if (userKeywords.length > 0) {
+        draft.keywords = userKeywords;
+        draft.keywordsSource = "user";
       }
       drafts.push(draft);
       finalUrls.push(finalUrl);

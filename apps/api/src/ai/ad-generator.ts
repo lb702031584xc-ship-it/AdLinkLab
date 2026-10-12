@@ -56,6 +56,8 @@ keywords: AdPlanKeyword[];
 negativeKeywords: AdPlanKeyword[];
 maxCpc: AdPlanMoney | null;
 dataQuality: AdPlanDataQuality;
+/** 关键词来源：user=用户在投放选词里定的词，ai=AI 生成的 */
+keywordsSource: "user" | "ai";
 }
 
 export interface AdPlanRsa {
@@ -117,6 +119,8 @@ bidding: { strategy: BiddingStrategy; maxCpc?: number | null};
 brandTerms: string[];
 adGroupName: string;
 keywords: Array<{ text: string; matchType: KeywordMatchType}>;
+/** Set when the caller overrides keywords (from 投放选词）. */
+keywordsSource?: "user" | "ai";
 suggestedNegatives: string[];
 headlines: string[];
 descriptions: string[];
@@ -250,8 +254,38 @@ const MATCH_TYPES = ["EXACT", "PHRASE", "BROAD"] as const;
 * 4 descriptions) and ad-copy length limits — `chatJsonValidated` retries
 * once with targeted feedback when the model gets it wrong.
 */
-export function validateAdPlanUrlDraft(obj: unknown): AdPlanUrlDraft {
-if (!isRecord(obj)) {
+/**
+ * Normalize caller-supplied keywords (from 投放选词） into draft shape.
+ * Accepts plain strings or { text, matchType } objects; matchType defaults to PHRASE.
+ * Returns [] when nothing usable was provided.
+ */
+export function normalizeUserKeywords(input: unknown): Array<{ text: string; matchType: KeywordMatchType }> {
+if (!Array.isArray(input)) return [];
+const out: Array<{ text: string; matchType: KeywordMatchType }> = [];
+const seen = new Set<string>();
+for (const item of input.slice(0, 100)) {
+let text = "";
+let mt: string = "PHRASE";
+if (typeof item === "string") {
+text = item.trim();
+} else if (item && typeof item === "object") {
+const r = item as Record<string, unknown>;
+if (typeof r.text === "string") text = r.text.trim();
+if (typeof r.matchType === "string") mt = r.matchType.trim().toUpperCase();
+}
+if (!text || text.length > 80) continue;
+const key = text.toLowerCase();
+if (seen.has(key)) continue;
+seen.add(key);
+const matchType = (MATCH_TYPES as readonly string[]).includes(mt)
+? (mt as KeywordMatchType)
+: "PHRASE";
+out.push({ text, matchType });
+}
+return out;
+}
+
+export function validateAdPlanUrlDraft(obj: unknown): AdPlanUrlDraft {if (!isRecord(obj)) {
 throw new AiError("LLM returned an unexpected response shape (root)");
 }
 const o = obj as Record<string, unknown>;
@@ -497,6 +531,7 @@ text: k.text,
 matchType: k.matchType,
 dataQuality: AI_GENERATED_QUALITY,
 })),
+keywordsSource: draft.keywordsSource ?? "ai",
 negativeKeywords: negatives.slice(0, 100),
 maxCpc:
 draft.bidding.strategy === "MANUAL_CPC" && draft.bidding.maxCpc

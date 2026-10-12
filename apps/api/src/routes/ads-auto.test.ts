@@ -254,6 +254,30 @@ describe("POST /api/v1/ads/auto-create", () => {
     expect(res.json().plan.adGroups).toHaveLength(1);
   });
 
+  it("user keywords override AI-generated keywords", async () => {
+    const app = await buildApp(fake);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/ads/auto-create",
+      headers: cookie(token),
+      payload: {
+        urls: ["https://merchant.example/offer1"],
+        keywords: [
+          { text: "merach vibration plate", matchType: "phrase" },
+          { text: "vibration plate machine", matchType: "exact" },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const group = res.json().plan.adGroups[0].group;
+    expect(group.keywordsSource).toBe("user");
+    const texts = group.keywords.map((k: any) => k.text);
+    expect(texts).toContain("merach vibration plate");
+    expect(texts).toContain("vibration plate machine");
+    // AI 生成的词不应出现
+    expect(texts).not.toContain("buy test widgets");
+  });
+
   it("fails when AI is not configured", async () => {
     const bare = makeFakePrisma();
     const auth = await seedAuth(bare);

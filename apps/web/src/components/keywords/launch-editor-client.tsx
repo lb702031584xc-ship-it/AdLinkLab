@@ -320,7 +320,12 @@ export function LaunchEditorClient({
                 📋 {d.copyPlan}
               </button>
               <a
-                href="/ads/auto-create"
+                href={`/ads/auto-create?keywords=${encodeURIComponent(
+                  rows
+                    .filter((r) => r.keyword.trim())
+                    .map((r) => `${r.keyword.trim()}, ${r.matchType}`)
+                    .join("\n")
+                )}`}
                 className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink/70 hover:bg-ink/5"
               >
                 📢 {d.goAutoAds} →
