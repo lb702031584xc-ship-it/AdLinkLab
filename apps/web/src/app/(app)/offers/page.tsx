@@ -157,6 +157,11 @@ export default async function OffersPage({
         className: "whitespace-nowrap",
       },
       {
+        header: t.entities.offers.columns.pickedAt,
+        render: (o) => formatDateTime(o.createdAt).slice(0, 10),
+        className: "whitespace-nowrap",
+      },
+      {
         header: t.common.misc.updated,
         render: (o) => formatDateTime(o.createdAt),
         className: "whitespace-nowrap",
@@ -287,6 +292,11 @@ export default async function OffersPage({
     {
       header: t.entities.offers.quickCalc.button,
       render: () => <QuickCalcButton dict={quickCalcDict} />,
+      className: "whitespace-nowrap",
+    },
+    {
+      header: t.entities.offers.columns.pickedAt,
+      render: (o) => (o.pickedAt ? formatDateTime(o.pickedAt).slice(0, 10) : "—"),
       className: "whitespace-nowrap",
     },
     {

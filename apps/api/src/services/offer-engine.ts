@@ -52,6 +52,8 @@ export class OfferService {
     requestId?: string;
     commissionValue?: number;
     commissionType?: string;
+    avgPrice?: number;
+    pickedAt?: Date;
   }): Promise<{ offer: Offer; created: boolean; replayed: boolean }> {
     if (!input.tenantId) throw new ValidationError("tenantId is required");
     if (!input.name?.trim()) throw new ValidationError("name is required");
@@ -103,6 +105,8 @@ export class OfferService {
           endsAt: input.endsAt,
           commissionValue: input.commissionValue,
           commissionType: input.commissionType,
+          avgPrice: input.avgPrice,
+          pickedAt: input.pickedAt,
           idempotencyScope: input.idempotencyKey
             ? OFFER_CREATE_SCOPE
             : undefined,

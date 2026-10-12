@@ -36,6 +36,8 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
   const [priority, setPriority] = useState("100");
   const [commissionValue, setCommissionValue] = useState("");
   const [commissionType, setCommissionType] = useState("percentage");
+  const [avgPrice, setAvgPrice] = useState("");
+  const [pickedAt, setPickedAt] = useState(() => new Date().toISOString().slice(0, 10));
   const [startsAt, setStartsAt] = useState("");
   const [endsAt, setEndsAt] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -55,6 +57,7 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
     const priorityNum = Number(priority);
     start(async () => {
       const cv = Number(commissionValue);
+      const ap = Number(avgPrice);
       const result = await createOfferAction({
         name: name.trim(),
         network: network.trim(),
@@ -66,6 +69,8 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
         endsAt: toIsoInput(endsAt),
         commissionValue: commissionValue.trim() !== "" && Number.isFinite(cv) ? cv : undefined,
         commissionType: commissionValue.trim() !== "" ? commissionType : undefined,
+        avgPrice: avgPrice.trim() !== "" && Number.isFinite(ap) ? ap : undefined,
+        pickedAt: toIsoInput(pickedAt),
       });
       if (!result.ok) {
         setError(result.error);
@@ -80,6 +85,18 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
       onSubmit={onSubmit}
       className="mt-6 space-y-5 rounded-xl border border-ink/10 bg-white/80 p-6 shadow-sm"
     >
+      <div>
+        <label htmlFor="offer-picked" className={labelClassName}>
+          挑选日期
+        </label>
+        <input
+          id="offer-picked"
+          type="date"
+          className={inputClassName}
+          value={pickedAt}
+          onChange={(e) => setPickedAt(e.target.value)}
+        />
+      </div>
       <div>
         <label htmlFor="offer-name" className={labelClassName}>
           {f.name} *
@@ -147,7 +164,7 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
           <CoachGate dict={t.coach} findings={coachFindings} />
         </div>
       </div>
-      <div className="grid gap-5 sm:grid-cols-2">
+      <div className="grid gap-5 sm:grid-cols-3">
         <div>
           <label htmlFor="offer-commission-value" className={labelClassName}>
             佣金 {commissionType === "percentage" ? "(%)" : "($)"}
@@ -176,6 +193,21 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
             <option value="percentage">按比例 (%)</option>
             <option value="fixed">固定金额 ($)</option>
           </select>
+        </div>
+        <div>
+          <label htmlFor="offer-avg-price" className={labelClassName}>
+            产品平均价 ($)
+          </label>
+          <input
+            id="offer-avg-price"
+            type="number"
+            step="0.01"
+            min="0"
+            className={inputClassName}
+            value={avgPrice}
+            onChange={(e) => setAvgPrice(e.target.value)}
+            placeholder="如 49.99"
+          />
         </div>
       </div>
       <div className="grid gap-5 sm:grid-cols-2">

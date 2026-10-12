@@ -18,6 +18,9 @@ export interface WorksheetOffer {
   name: string;
   network: string;
   destinationUrl: string;
+  commissionValue?: string | number | null;
+  commissionType?: string | null;
+  avgPrice?: string | number | null;
 }
 
 function statusBadge(s: StepStatus): string {
@@ -43,12 +46,18 @@ export interface ProfitStepState {
   summary: string;
 }
 
-function ProfitStep({ onChange }: { onChange: (s: ProfitStepState | null) => void }) {
+function ProfitStep({
+  onChange,
+  initialPayout,
+}: {
+  onChange: (s: ProfitStepState | null) => void;
+  initialPayout?: string;
+}) {
   const t = useDict();
   const d = t.ai.profit;
   const w = t.ai.worksheet.profitStep;
 
-  const [payout, setPayout] = useState("");
+  const [payout, setPayout] = useState(initialPayout ?? "");
   const [cpc, setCpc] = useState("");
   const [cvrPct, setCvrPct] = useState("");
   const [refundPct, setRefundPct] = useState("");
@@ -98,6 +107,9 @@ function ProfitStep({ onChange }: { onChange: (s: ProfitStepState | null) => voi
           <label className={labelClass} htmlFor="ws-payout">{d.payoutLabel}</label>
           <input id="ws-payout" inputMode="decimal" value={payout}
             onChange={(e) => setPayout(e.target.value)} placeholder="12.50" className={inputClass} />
+          {initialPayout && payout === initialPayout && (
+            <p className="mt-1 text-xs text-ink/45">✨ {w.payoutFromOffer}</p>
+          )}
         </div>
         <div>
           <label className={labelClass} htmlFor="ws-cpc">{d.cpcLabel}</label>
@@ -254,6 +266,18 @@ export function WorksheetClient({
   const [complianceResults, setComplianceResults] = useState<AiUrlCheckResult[] | null>(null);
   const [complianceCounted, setComplianceCounted] = useState(true);
   const [profitState, setProfitState] = useState<ProfitStepState | null>(null);
+  // offer 盈利字段 → 盈利测算 payout 预填：固定佣金直接用；按比例则 平均价×比例
+  const initialPayout = (() => {
+    if (!offer) return undefined;
+    const cv = Number(offer.commissionValue);
+    if (!Number.isFinite(cv) || cv <= 0) return undefined;
+    if (offer.commissionType === "fixed") return String(cv);
+    const ap = Number(offer.avgPrice);
+    if (offer.commissionType === "percentage" && Number.isFinite(ap) && ap > 0) {
+      return String(Math.round(((ap * cv) / 100) * 100) / 100);
+    }
+    return undefined;
+  })();
   const [trafficResult, setTrafficResult] = useState<TrafficPlanResult | null>(null);
 
   const termsStatus: StepStatus =
@@ -576,7 +600,7 @@ export function WorksheetClient({
         open={openStep === 3}
         onToggle={() => toggleStep(3)}
       >
-        <ProfitStep onChange={setProfitState} />
+        <ProfitStep onChange={setProfitState} initialPayout={initialPayout} key={offer?.id ?? "manual"} />
       </StepCard>
 
       {/* Step ④ traffic */}

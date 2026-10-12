@@ -144,20 +144,11 @@ export function LaunchEditorClient({
     );
   };
 
-  /** 一键填建议出价：优先用参考 CPC，空的填 1.00 起步 */
-  const fillBidSuggestions = () => {
-    setRows((rs) =>
-      rs.map((r) => {
-        if (!r.keyword.trim() || r.bid.trim()) return r;
-        return { ...r, bid: r.refCpc.trim() || "1.00" };
-      })
-    );
-  };
-
-  const copyPlan = async () => {    const lines = rows
+  const copyPlan = async () => {
+    const lines = rows
       .filter((r) => r.keyword.trim())
       .map((r) =>
-        [r.keyword.trim(), r.adGroup.trim() || "-", d.matchOptions[r.matchType], r.bid.trim() || "-", r.refCpc.trim() || "-"].join(" | ")
+        [r.keyword.trim(), r.adGroup.trim() || "-", d.matchOptions[r.matchType]].join(" | ")
       );
     if (!lines.length) return;
     try {
@@ -237,13 +228,6 @@ export function LaunchEditorClient({
           >
             🗂️ {d.autoGroup}
           </button>
-          <button
-            type="button"
-            onClick={fillBidSuggestions}
-            className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink/70 hover:bg-ink/5"
-          >
-            ⚡ {d.fillBids}
-          </button>
         </div>
 
         {bulkOpen && (
@@ -277,7 +261,7 @@ export function LaunchEditorClient({
         <div className="space-y-3">
           {rows.map((r) => (
             <div key={r.id} className="rounded-xl border border-ink/10 bg-white p-4">
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                 <div className="col-span-2 sm:col-span-1">
                   <label className={labelCls}>{d.thKeyword}</label>
                   <input
@@ -296,7 +280,7 @@ export function LaunchEditorClient({
                     className={inputCls}
                   />
                 </div>
-                <div>
+                <div className="col-span-2 sm:col-span-1">
                   <label className={labelCls}>{d.thMatchType}</label>
                   <select
                     value={r.matchType}
@@ -307,26 +291,6 @@ export function LaunchEditorClient({
                       <option key={k} value={k}>{d.matchOptions[k]}</option>
                     ))}
                   </select>
-                </div>
-                <div>
-                  <label className={labelCls}>{d.thBid}</label>
-                  <input
-                    value={r.bid}
-                    onChange={(e) => update(r.id, { bid: e.target.value.replace(/[^\d.]/g, "") })}
-                    inputMode="decimal"
-                    placeholder="1.00"
-                    className={inputCls}
-                  />
-                </div>
-                <div>
-                  <label className={labelCls}>{d.thRefCpc}</label>
-                  <input
-                    value={r.refCpc}
-                    onChange={(e) => update(r.id, { refCpc: e.target.value.replace(/[^\d.]/g, "") })}
-                    inputMode="decimal"
-                    placeholder="—"
-                    className={inputCls}
-                  />
                 </div>
               </div>
               <div className="mt-2 text-right">
@@ -341,7 +305,6 @@ export function LaunchEditorClient({
             </div>
           ))}
         </div>
-        <p className="text-xs text-ink/50">💡 {d.bidHint}</p>
 
         {/* 下一步：计划定稿后去投放 */}
         {rows.some((r) => r.keyword.trim()) && (

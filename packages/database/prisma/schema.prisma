@@ -419,6 +419,10 @@ model Offer {
   /// Money: Decimal(19,4) — never floating point
   commissionValue  Decimal?    @map("commission_value") @db.Decimal(19, 4)
   commissionType   String?     @map("commission_type")
+  /// 产品平均价（用于盈利测算的 payout 推导）
+  avgPrice         Decimal?    @map("avg_price") @db.Decimal(19, 4)
+  /// 挑选日期（选品时记录，offer 多时作参考）
+  pickedAt         DateTime?   @map("picked_at") @db.Timestamptz(3)
   createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt        DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
   archivedAt       DateTime?   @map("archived_at") @db.Timestamptz(3)

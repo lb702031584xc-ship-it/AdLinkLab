@@ -51,11 +51,12 @@ async function t() {
 }
 
 export async function analyzeLandingPageAction(
-  url: string
+  url: string,
+  html?: string
 ): Promise<P1ActionResult<LanderAnalysis>> {
   const d = (await t()).ai.lander;
   try {
-    const data = await analyzeLandingPage(url);
+    const data = await analyzeLandingPage(url, html);
     return { ok: true, data };
   } catch (e) {
     return mapError(e, d.failed);

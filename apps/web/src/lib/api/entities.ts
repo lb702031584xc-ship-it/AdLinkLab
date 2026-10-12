@@ -106,6 +106,10 @@ export interface Offer {
   commissionValue?: string | number | null;
   /** 佣金类型：percentage | fixed。 */
   commissionType?: string | null;
+  /** 产品平均价（Decimal 序列化为字符串）。 */
+  avgPrice?: string | number | null;
+  /** 挑选日期。 */
+  pickedAt?: string | null;
   /** 推荐指数摘要（第三批；无数据时为 null/缺失）。 */
   metricsSummary?: MetricsSummary | null;
 }

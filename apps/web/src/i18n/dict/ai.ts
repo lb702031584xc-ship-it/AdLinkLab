@@ -183,6 +183,7 @@ export const zh = {
       needInput: "填写 payout、预估 CPC 与转化率后自动测算。",
       perClickProfit: "单次点击利润",
       perClickProfitFormula: "单次点击利润 = EPC − CPC",
+      payoutFromOffer: "已按 offer 的佣金/产品均价自动填入",
     },
   },
   terms: {
@@ -804,6 +805,12 @@ export const zh = {
     historyFailed: "加载历史记录失败。",
     needUrl: "请输入落地页 URL。",
     invalidUrl: "请输入有效的 http(s) URL。",
+    modeAuto: "自动抓取",
+    modeManual: "手动粘贴",
+    manualHint: "反爬站点抓取失败时用：在浏览器打开落地页，右键“查看网页源代码”全选复制，粘贴到这里。",
+    manualPlaceholder: "粘贴落地页 HTML 源码……",
+    needManualHtml: "请粘贴落地页 HTML 源码。",
+    tryManualHint: "可以切换到“手动粘贴”模式分析。",
     overallScore: "综合评分",
     dimensions: {
       performance: "加载性能",
@@ -1107,6 +1114,7 @@ export const en: typeof zh = {
       needInput: "Fill in payout, estimated CPC and CVR to calculate automatically.",
       perClickProfit: "Profit per click",
       perClickProfitFormula: "profit per click = EPC − CPC",
+      payoutFromOffer: "Prefilled from the offer's commission/avg price",
     },
   },
   terms: {
@@ -1732,6 +1740,12 @@ export const en: typeof zh = {
     historyFailed: "Failed to load history.",
     needUrl: "Please enter a landing page URL.",
     invalidUrl: "Please enter a valid http(s) URL.",
+    modeAuto: "Auto fetch",
+    modeManual: "Paste manually",
+    manualHint: "When auto fetch is blocked: open the page in your browser, view page source, copy it all and paste here.",
+    manualPlaceholder: "Paste landing page HTML source…",
+    needManualHtml: "Please paste the landing page HTML source.",
+    tryManualHint: "You can switch to “Paste manually” mode.",
     overallScore: "Overall score",
     dimensions: {
       performance: "Performance",

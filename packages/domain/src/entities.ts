@@ -127,6 +127,10 @@ export interface Offer extends Timestamps, SoftDeleteFields {
   commissionValue?: number;
   /** 佣金类型：percentage（%）| fixed（$） */
   commissionType?: string;
+  /** 产品平均价（用于盈利测算推导 payout） */
+  avgPrice?: number;
+  /** 挑选日期（选品时记录） */
+  pickedAt?: Date;
   /** Idempotency for create — scope e.g. OFFER_CREATE */
   idempotencyScope?: string;
   idempotencyKey?: string;

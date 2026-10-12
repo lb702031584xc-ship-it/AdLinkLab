@@ -43,6 +43,9 @@ export default async function AiAnalyzePage({
         name: o.name,
         network: o.network,
         destinationUrl: o.destinationUrl,
+        commissionValue: o.commissionValue,
+        commissionType: o.commissionType,
+        avgPrice: o.avgPrice,
       };
     } catch {
       /* invalid id: render worksheet without a subject */
@@ -50,7 +53,7 @@ export default async function AiAnalyzePage({
   }
 
   // Offer 选择器用：拉取 offer 库列表
-  let offers: { id: string; name: string; network: string; destinationUrl: string }[] = [];
+  let offers: WorksheetOffer[] = [];
   try {
     const data = await entityApi.offers.list(1, 200);
     offers = (data.items ?? []).map((o) => ({
@@ -58,6 +61,9 @@ export default async function AiAnalyzePage({
       name: o.name,
       network: o.network,
       destinationUrl: o.destinationUrl,
+      commissionValue: o.commissionValue,
+      commissionType: o.commissionType,
+      avgPrice: o.avgPrice,
     }));
   } catch {
     /* page still renders; selector will be empty */

@@ -157,7 +157,9 @@ const inputClass =
 export function LanderClient() {
   const t = useDict();
   const d = t.ai.lander;
+  const [mode, setMode] = useState<"auto" | "manual">("auto");
   const [url, setUrl] = useState("");
+  const [manualHtml, setManualHtml] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<LanderAnalysis | null>(null);
@@ -188,15 +190,26 @@ export function LanderClient() {
       setError(d.invalidUrl);
       return;
     }
+    if (mode === "manual" && !manualHtml.trim()) {
+      setError(d.needManualHtml);
+      return;
+    }
     setError(null);
     setAnalyzing(true);
     try {
-      const res = await analyzeLandingPageAction(trimmed);
+      const res = await analyzeLandingPageAction(
+        trimmed,
+        mode === "manual" ? manualHtml.trim() : undefined
+      );
       if (res.ok) {
         setResult(res.data);
         await loadHistory();
       } else {
         setError(res.error);
+        // 自动抓取失败时提示切手动
+        if (mode === "auto" && /fetch|network|403/i.test(res.error)) {
+          setError(`${res.error} ${d.tryManualHint}`);
+        }
       }
     } finally {
       setAnalyzing(false);
@@ -217,11 +230,30 @@ export function LanderClient() {
     <div>
       <EntityPageHeader title={d.title} description={d.description} />
 
+      {/* 自动抓取 / 手动粘贴 */}
+      <div className="mt-6 flex gap-1 rounded-xl bg-ink/[0.05] p-1">
+        {(["auto", "manual"] as const).map((m) => (
+          <button
+            key={m}
+            type="button"
+            onClick={() => setMode(m)}
+            className={`flex-1 rounded-lg px-4 py-2 text-sm font-semibold transition ${
+              mode === m ? "bg-white text-ink shadow-sm" : "text-ink/50 hover:text-ink/80"
+            }`}
+          >
+            {m === "auto" ? `🌐 ${d.modeAuto}` : `📋 ${d.modeManual}`}
+          </button>
+        ))}
+      </div>
+      {mode === "manual" && (
+        <p className="mt-2 text-xs text-ink/55">{d.manualHint}</p>
+      )}
+
       <form
         onSubmit={onAnalyze}
-        className="mt-6 flex flex-col gap-3 sm:flex-row"
+        className="mt-4 flex flex-col gap-3"
       >
-        <div className="flex-1">
+        <div>
           <label htmlFor="lander-url" className="sr-only">
             {d.urlLabel}
           </label>
@@ -234,13 +266,25 @@ export function LanderClient() {
             disabled={analyzing}
           />
         </div>
-        <button
-          type="submit"
-          disabled={analyzing}
-          className="rounded-lg bg-signal px-5 py-2 text-sm font-semibold text-white disabled:opacity-50"
-        >
-          {analyzing ? d.analyzing : d.analyze}
-        </button>
+        {mode === "manual" && (
+          <textarea
+            rows={6}
+            className={`${inputClass} font-mono`}
+            value={manualHtml}
+            onChange={(e) => setManualHtml(e.target.value)}
+            placeholder={d.manualPlaceholder}
+            disabled={analyzing}
+          />
+        )}
+        <div>
+          <button
+            type="submit"
+            disabled={analyzing}
+            className="rounded-lg bg-signal px-5 py-2 text-sm font-semibold text-white disabled:opacity-50"
+          >
+            {analyzing ? d.analyzing : d.analyze}
+          </button>
+        </div>
       </form>
 
       {error ? (

@@ -188,17 +188,31 @@ export async function registerLanderIntelRoutes(
    * persist as LanderAnalysis.
    */
   app.post<{
-    Body: { url?: unknown };
+    Body: { url?: unknown; html?: unknown };
   }>("/api/v1/landing-pages/analyze", async (request) => {
     const info = await requireSession(deps, request);
-    const body = (request.body ?? {}) as { url?: unknown };
+    const body = (request.body ?? {}) as { url?: unknown; html?: unknown };
     const url =
       typeof body.url === "string" ? body.url.trim() : "";
     if (!url) throw new ValidationError("url is required");
     assertHttpUrl(url);
 
-    const fetched = await fetchPageHtmlImpl(url);
-    const result = analyzeLander(fetched.html, fetched.fetchMs);
+    // 手动粘贴模式：直接分析粘贴的 HTML/文字，跳过抓取（反爬站点用）
+    const pastedHtml = typeof body.html === "string" ? body.html.trim() : "";
+    let html: string;
+    let finalUrl: string;
+    let fetchMs: number;
+    if (pastedHtml) {
+      html = pastedHtml.slice(0, 500_000);
+      finalUrl = url;
+      fetchMs = 0;
+    } else {
+      const fetched = await fetchPageHtmlImpl(url);
+      html = fetched.html;
+      finalUrl = fetched.finalUrl;
+      fetchMs = fetched.fetchMs;
+    }
+    const result = analyzeLander(html, fetchMs);
 
     let suggestions: LanderSuggestion[] = [];
     const llm = await optionalLlmConfig(prisma);
@@ -223,13 +237,13 @@ export async function registerLanderIntelRoutes(
       );
     }
 
-    const domain = new URL(fetched.finalUrl).hostname;
+    const domain = new URL(finalUrl).hostname;
     const analyzedAt = new Date();
     const created = await prisma.landerAnalysis.create({
       data: {
         id: randomUUID(),
         tenantId: info.tenantId,
-        url: fetched.finalUrl,
+        url: finalUrl,
         domain,
         overallScore: result.overallScore,
         scores: JSON.parse(JSON.stringify(result.scores)) as never,
@@ -239,7 +253,7 @@ export async function registerLanderIntelRoutes(
       },
     });
     // Automation pack: auto-create optimization task if score < 70
-    await afterAnalysisForUrl(prisma, info.tenantId, fetched.finalUrl, result).catch(
+    await afterAnalysisForUrl(prisma, info.tenantId, finalUrl, result).catch(
       () => undefined
     );
     return toPublicRow({

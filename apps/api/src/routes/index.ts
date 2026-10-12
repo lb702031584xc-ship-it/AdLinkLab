@@ -379,6 +379,8 @@ export async function registerRoutes(
       requestId?: string;
       commissionValue?: number;
       commissionType?: string;
+      avgPrice?: number;
+      pickedAt?: string;
     };
   }>("/api/v1/offers", async (request) => {
     const tenantId = tenantOf(request, request.body?.tenantId);
@@ -398,6 +400,8 @@ export async function registerRoutes(
       requestId: request.body.requestId,
       commissionValue: request.body.commissionValue,
       commissionType: request.body.commissionType,
+      avgPrice: request.body.avgPrice,
+      pickedAt: request.body.pickedAt ? new Date(request.body.pickedAt) : undefined,
     });
   });
 

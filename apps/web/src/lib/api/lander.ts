@@ -112,10 +112,10 @@ export interface LanderAnalysisList {
 // Calls
 // ---------------------------------------------------------------------------
 
-export function analyzeLandingPage(url: string): Promise<LanderAnalysis> {
+export function analyzeLandingPage(url: string, html?: string): Promise<LanderAnalysis> {
   return landerFetch<LanderAnalysis>("/api/v1/landing-pages/analyze", {
     method: "POST",
-    body: JSON.stringify({ url }),
+    body: JSON.stringify({ url, html: html || undefined }),
   });
 }
 
