@@ -342,10 +342,9 @@ export async function analyzeTrafficPlan(
   });
 }
 
-/** AI 推荐关键词：输入产品/品类，返回带评分的关键词列表。 */
+/** AI 推荐关键词思路：只给词和选词理由，不打分（分数必须来自真实数据）。 */
 export interface RecommendedKeyword {
   keyword: string;
-  score: number;
   reason: string;
 }
 

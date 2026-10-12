@@ -453,8 +453,9 @@ export async function registerAiRoutes(
   });
 
   /**
-   * AI 推荐关键词：输入产品/品类，返回带评分的关键词列表。
-   * 评分 0-100：综合搜索需求、商业意图、竞争可打性。
+   * AI 推荐关键词：输入产品/品类，返回关键词思路（不打分）。
+   * 评分必须基于用户填入的真实数据（搜索量/竞争度/意图/趋势），由前端按透明公式计算，
+   * AI 不得凭空编造分数。
    */
   app.post("/api/v1/ai/recommend-keywords", async (request) => {
     await requireSession(deps, request);
@@ -482,20 +483,20 @@ export async function registerAiRoutes(
 
     const system =
       language === "zh"
-        ? "你是20年经验的联盟营销投流专家，擅长 Google Ads 关键词策略。用大白话，只返回 JSON。"
-        : "You are a 20-year affiliate paid-traffic expert specializing in Google Ads keyword strategy. Return JSON only.";
+        ? "你是20年经验的联盟营销投流专家，擅长 Google Ads 关键词策略。用大白话，只返回 JSON。重要：你没有实时搜索量/CPC数据，绝不编造数字评分，只给选词思路。"
+        : "You are a 20-year affiliate paid-traffic expert specializing in Google Ads keyword strategy. Return JSON only. Important: you have no live volume/CPC data; never invent numeric scores, only give keyword ideas.";
     const user =
       language === "zh"
-        ? `为产品/品类"${product}"推荐 ${count} 个适合 Google Ads 投放的英文关键词。要求：覆盖高购买意图词（best/review/vs/discount/buy 修饰）、长尾词；避开纯信息类词。每个词给 0-100 评分（综合搜索需求、商业意图、竞争可打性，分数越高越值得投）。只返回 JSON：{"keywords":[{"keyword":"...","score":85,"reason":"一句话理由"}]}`
-        : `Recommend ${count} English keywords for Google Ads for product/niche "${product}". Cover high-intent modifiers (best/review/vs/discount/buy) and long-tail. Avoid informational-only terms. Score each 0-100 (search demand, commercial intent, beatability; higher = more worth bidding). Return JSON only: {"keywords":[{"keyword":"...","score":85,"reason":"one-line reason"}]}`;
+        ? `为产品/品类"${product}"推荐 ${count} 个值得去 SEMRUSH/关键词规划师查数据的英文关键词思路。要求：覆盖高购买意图词型（best/review/vs/discount/buy 修饰）、长尾词；避开纯信息类词。每个词给一句话选词理由（说明这个词型为什么值得查，不要编造搜索量或评分）。只返回 JSON：{"keywords":[{"keyword":"...","reason":"..."}]}`
+        : `Suggest ${count} English keyword ideas worth checking in SEMRUSH/Keyword Planner for product/niche "${product}". Cover high-intent patterns (best/review/vs/discount/buy modifiers) and long-tail. Avoid informational-only terms. One-line reason per keyword (why this pattern is worth checking; never invent volume or scores). Return JSON only: {"keywords":[{"keyword":"...","reason":"..."}]}`;
 
-    let result: { keywords?: Array<{ keyword?: unknown; score?: unknown; reason?: unknown }> };
+    let result: { keywords?: Array<{ keyword?: unknown; reason?: unknown }> };
     try {
       result = (await chatJsonImpl({
         baseUrl: settings.baseUrl as string,
         model: settings.model as string,
         apiKey,
-        system: system + '\nReturn JSON: {"keywords":[{"keyword":"...","score":0-100,"reason":"..."}]}',
+        system: system + '\nReturn JSON: {"keywords":[{"keyword":"...","reason":"..."}]}',
         user,
       })) as typeof result;
     } catch (e) {
@@ -508,7 +509,6 @@ export async function registerAiRoutes(
       .slice(0, count)
       .map((k) => ({
         keyword: (k.keyword as string).trim(),
-        score: Math.min(Math.max(Number(k.score) || 50, 0), 100),
         reason: typeof k.reason === "string" ? k.reason.trim().slice(0, 120) : "",
       }));
 

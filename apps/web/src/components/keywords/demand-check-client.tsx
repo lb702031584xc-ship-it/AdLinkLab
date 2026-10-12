@@ -84,6 +84,32 @@ function verdictOf(row: DemandRow): Verdict {
   return "good";
 }
 
+/**
+ * 真实数据综合评分 0-100（透明公式，所有输入均为用户填入的真实数据）：
+ * - 搜索量 30 分：≥10000=30, ≥5000=25, ≥1000=18, ≥500=10, ≥100=5, <100=0
+ * - 意图 30 分：buy=30, review=24, compare=16, info=4
+ * - 竞争 25 分：low=25, medium=13, high=3
+ * - 趋势 15 分：up=15, flat=9, down=3
+ */
+export function scoreOf(row: DemandRow): { total: number; parts: string } {
+  const v = Number(row.volume);
+  const volumeScore = !Number.isFinite(v) || v < 100 ? 0
+    : v >= 10000 ? 30 : v >= 5000 ? 25 : v >= 1000 ? 18 : v >= 500 ? 10 : 5;
+  const intentScore = { buy: 30, review: 24, compare: 16, info: 4 }[row.intent];
+  const compScore = { low: 25, medium: 13, high: 3 }[row.competition];
+  const trendScore = { up: 15, flat: 9, down: 3 }[row.trend];
+  const total = volumeScore + intentScore + compScore + trendScore;
+  const parts = `搜索量${volumeScore}+意图${intentScore}+竞争${compScore}+趋势${trendScore}`;
+  return { total, parts };
+}
+
+const scoreCls = (s: number) =>
+  s >= 75
+    ? "bg-emerald-100 text-emerald-800"
+    : s >= 50
+      ? "bg-amber-100 text-amber-800"
+      : "bg-ink/10 text-ink/60";
+
 const verdictCls: Record<Verdict, string> = {
   good: "bg-emerald-100 text-emerald-800",
   caution: "bg-amber-100 text-amber-800",
@@ -147,13 +173,6 @@ export function DemandCheckClient({
       return [...rs, ...fresh];
     });
   };
-
-  const scoreCls = (s: number) =>
-    s >= 80
-      ? "bg-emerald-100 text-emerald-800"
-      : s >= 60
-        ? "bg-amber-100 text-amber-800"
-        : "bg-ink/10 text-ink/60";
 
   // 上方种子词一键导入（去重）
   useEffect(() => {
@@ -257,6 +276,7 @@ export function DemandCheckClient({
         )}
         {aiKeywords.length > 0 && (
           <div className="mt-3 space-y-1.5">
+            <p className="text-xs text-ink/50">{d.aiNoScoreHint}</p>
             {aiKeywords.map((k) => (
               <div
                 key={k.keyword}
@@ -268,21 +288,13 @@ export function DemandCheckClient({
                     <p className="truncate text-xs text-ink/50">{k.reason}</p>
                   )}
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-xs font-bold ${scoreCls(k.score)}`}
-                    title={d.aiScore}
-                  >
-                    {k.score}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => importAiKeyword(k.keyword)}
-                    className="text-xs text-signal hover:underline"
-                  >
-                    {d.aiImportOne}
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => importAiKeyword(k.keyword)}
+                  className="shrink-0 text-xs text-signal hover:underline"
+                >
+                  {d.aiImportOne}
+                </button>
               </div>
             ))}
           </div>
@@ -351,11 +363,21 @@ export function DemandCheckClient({
             const v = verdictOf(r);
             const dl = demandLevel(r.volume);
             const b = beatable(r.competition, r.intent, r.trend);
+            const score = scoreOf(r);
+            const hasData = r.volume.trim() !== "";
             return (
               <div key={r.id} className="rounded-xl border border-ink/10 bg-white p-4">
                 <div className="flex items-center justify-between gap-2">
                   <p className="truncate text-sm font-bold text-ink">{r.keyword}</p>
                   <div className="flex shrink-0 items-center gap-2">
+                    {hasData && (
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-xs font-bold ${scoreCls(score.total)}`}
+                        title={`${d.aiScore}：${score.parts}（基于你填的真实数据）`}
+                      >
+                        {score.total}分
+                      </span>
+                    )}
                     <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${verdictCls[v]}`}>
                       {d.verdictOptions[v]}
                     </span>
