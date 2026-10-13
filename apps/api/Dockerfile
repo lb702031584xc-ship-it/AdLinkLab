@@ -30,7 +30,9 @@ FROM base AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 # 无头浏览器截图：offer-fetch 第二级抓取用（puppeteer-core + 系统 chromium，不下载浏览器）
-RUN apk add --no-cache chromium
+# 阿里云 Alpine 镜像源：HK/CN 服务器直连 dl-cdn.alpinelinux.org 慢或半死不活（2026-10-13 构建卡 50 分钟）
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories && \
+    apk add --no-cache chromium
 COPY --from=build /app /app
 WORKDIR /app/apps/api
 EXPOSE 3001
