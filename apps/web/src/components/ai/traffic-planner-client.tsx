@@ -13,6 +13,7 @@ import {
 } from "@/i18n/dict/traffic-planner";
 import {
   analyzeTrafficPlanAction,
+  parseKeywordCaptureAction,
   type AiActionResult,
 } from "@/lib/api/ai-actions";
 import type {
@@ -20,6 +21,7 @@ import type {
   TrafficPlanResult,
 } from "@/lib/api/ai";
 import { CapturePicker } from "@/components/ai/capture-picker";
+import type { OfferCaptureItem } from "@/lib/api/ai";
 
 type Dict = TrafficPlannerDict;
 type Mode = "landing" | "direct";
@@ -209,8 +211,30 @@ export function TrafficPlannerClient({
   const removeKw = (id: string) =>
     setKeywords((ks) => (ks.length > 1 ? ks.filter((k) => k.id !== id) : ks));
 
-  const importKeywords = () => {
-    const rows: KwRow[] = [];
+  /** 插件抓取填入关键词行：解析 SEMrush/Planner 页面，填首个空行或追加新行 */
+  const fillKwFromCapture = async (c: OfferCaptureItem) => {
+    const r = await parseKeywordCaptureAction(c.id);
+    if (!r.ok) return;
+    const d = r.data;
+    const patch: Partial<KwRow> = {};
+    if (d.keyword) patch.keyword = d.keyword;
+    if (d.volume != null) patch.volume = d.volume;
+    if (d.cpc != null) patch.cpc = d.cpc;
+    if (d.plannerLow != null) patch.plannerLow = d.plannerLow;
+    if (d.plannerHigh != null) patch.plannerHigh = d.plannerHigh;
+    if (d.competition) patch.competition = d.competition;
+    setKeywords((ks) => {
+      const idx = ks.findIndex((k) => !k.keyword.trim());
+      if (idx >= 0) {
+        const next = [...ks];
+        next[idx] = { ...next[idx], ...patch };
+        return next;
+      }
+      return [...ks, { ...newKwRow(), ...patch }];
+    });
+  };
+
+  const importKeywords = () => {    const rows: KwRow[] = [];
     for (const line of kwImportText.split("\n")) {
       const t = line.trim();
       if (!t) continue;
@@ -567,6 +591,7 @@ export function TrafficPlannerClient({
               {d.importKeywords}
             </button>
           </div>
+          <CapturePicker onPick={fillKwFromCapture} />
           {kwImportOpen && (
             <div className="mt-2">
               <textarea
@@ -642,6 +667,12 @@ export function TrafficPlannerClient({
               {d.importNegatives}
             </button>
           </div>
+          <CapturePicker
+            onPick={(c) => {
+              setNegImportText(c.text.slice(0, 2000));
+              setNegImportOpen(true);
+            }}
+          />
           {negImportOpen && (
             <div className="mt-2">
               <textarea
@@ -675,6 +706,7 @@ export function TrafficPlannerClient({
               </select>
             </label>
           </div>
+          <CapturePicker onPick={(c) => setSpyfuKeywords(c.text.slice(0, 2000))} />
         </div>
 
         {/* Transparency */}
@@ -684,6 +716,7 @@ export function TrafficPlannerClient({
             <span className={labelCls}>{d.competitorAds}</span>
             <textarea className={`${inputCls} h-20`} value={competitorAds} onChange={(e) => setCompetitorAds(e.target.value)} placeholder={d.competitorAdsHint} />
           </label>
+          <CapturePicker onPick={(c) => setCompetitorAds(c.text.slice(0, 2000))} />
         </div>
 
         {/* SimilarWeb */}
@@ -693,6 +726,7 @@ export function TrafficPlannerClient({
             <span className={labelCls}>{d.similarwebNotes}</span>
             <textarea className={`${inputCls} h-20`} value={similarwebNotes} onChange={(e) => setSimilarwebNotes(e.target.value)} placeholder={lang === "zh" ? "比如：对手搜索流量占 65%，可复制" : "e.g. 65% search traffic, replicable"} />
           </label>
+          <CapturePicker onPick={(c) => setSimilarwebNotes(c.text.slice(0, 2000))} />
         </div>
 
         {/* 其他 */}

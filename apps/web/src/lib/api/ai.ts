@@ -756,6 +756,23 @@ export interface BrandBiddingResult {
   source: string;
 }
 
+export interface ParsedKeywordData {
+  keyword: string | null;
+  volume: number | null;
+  cpc: number | null;
+  plannerLow: number | null;
+  plannerHigh: number | null;
+  competition: "Low" | "Medium" | "High" | null;
+}
+
+/** 解析插件抓到的 SEMrush / Planner 页面 → 关键词表一行（找不到为 null）。 */
+export async function parseKeywordCapture(captureId: string): Promise<ParsedKeywordData> {
+  return aiFetch<ParsedKeywordData>("/api/v1/ai/parse-keyword-capture", {
+    method: "POST",
+    body: JSON.stringify({ captureId }),
+  });
+}
+
 /** 品牌词投流检查：谁在投这个品牌词（官方 vs 非官方）+ 评估。 */
 export async function checkBrandBidding(
   brandKeyword: string,

@@ -21,6 +21,7 @@ import {
   listOfferCaptures,
   getOfferCapture,
   checkBrandBidding,
+  parseKeywordCapture,
   saveAiSettings,
   screenOffers,
   type AiAnalysis,
@@ -30,6 +31,7 @@ import {
   type AiSettings,
   type AiTermsResult,
   type BrandBiddingResult,
+  type ParsedKeywordData,
   type OfferCaptureDetail,
   type OfferCaptureItem,
   type AiUrlCheckResponse,
@@ -385,6 +387,20 @@ export async function checkBrandBiddingAction(
     return {
       ok: false,
       error: e instanceof AiApiError ? e.message : "品牌词检查失败",
+    };
+  }
+}
+
+/** 解析插件抓到的 SEMrush / Planner 页面 → 关键词表一行。 */
+export async function parseKeywordCaptureAction(
+  captureId: string
+): Promise<AiActionResult<ParsedKeywordData>> {
+  try {
+    return { ok: true, data: await parseKeywordCapture(captureId) };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof AiApiError ? e.message : "解析抓取失败",
     };
   }
 }

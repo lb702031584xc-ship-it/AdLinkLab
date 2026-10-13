@@ -30,6 +30,7 @@ import { fetchPage, fetchPageHtml } from "../ai/fetch-page.js";
 import { ocrImageText, OcrError } from "../offer-metrics/ocr.js";
 import { screenshotPage, PageBlockedError, fetchPageTextWithFallback } from "../ai/page-shot.js";
 import { checkBrandBidding } from "../ai/brand-bidding.js";
+import { parseKeywordCapture } from "../ai/keyword-capture.js";
 import {
   checkUrlVerdict,
   detectAffiliateParams,
@@ -1376,6 +1377,24 @@ export async function registerAiRoutes(
         createdAt: r.createdAt.toISOString(),
       })),
     };
+  });
+
+  /**
+   * 关键词抓取解析：插件抓到的 SEMrush / Keyword Planner 页面，
+   * 启发式解析成关键词表一行。找不到的字段为 null，前端只填解析到的。
+   */
+  app.post("/api/v1/ai/parse-keyword-capture", async (request) => {
+    const info = await requireSession(deps, request);
+    void info;
+    const body = (request.body ?? {}) as { captureId?: unknown };
+    const captureId = typeof body.captureId === "string" ? body.captureId : "";
+    if (!captureId) throw new ValidationError("captureId is required");
+    const row = await deps.prisma.offerCapture.findFirst({
+      where: { id: captureId, tenantId: info.tenantId },
+      select: { title: true, pageText: true },
+    });
+    if (!row) throw new ValidationError("抓取记录不存在");
+    return parseKeywordCapture(row.title, row.pageText ?? "");
   });
 
   /**
