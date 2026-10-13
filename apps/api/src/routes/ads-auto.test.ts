@@ -280,6 +280,8 @@ describe("POST /api/v1/ads/auto-create", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().plan.copyStyle).toBe("affiliate");
   });
+
+  it("user keywords override AI-generated keywords", async () => {
     const app = await buildApp(fake);
     const res = await app.inject({
       method: "POST",

@@ -77,6 +77,11 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
             },
             { href: "/ai/analyze", label: t.ai.nav.analyze, phase: ph.analysis },
             {
+              href: "/ai/blueprint",
+              label: t.ai.nav.blueprint,
+              phase: ph.analysis,
+            },
+            {
               href: "/landing-pages",
               label: t.common.nav.landingPages,
               phase: ph.creative,

@@ -47,6 +47,10 @@ import {
   type TermsShape,
 } from "../ai/prompts.js";
 import { computeProfitability, analyzeProfit } from "../ai/profitability.js";
+import {
+  generateBlueprint,
+  type BlueprintInput,
+} from "../ai/blueprint.js";
 
 /**
  * Phase 11 — AI offer risk analysis (one tenant per user; session auth only).
@@ -1234,5 +1238,82 @@ export async function registerAiRoutes(
       num(body.assumedCvrPct) ?? 2
     );
     return { analysis };
+  });
+
+  /**
+   * Offer 一键推演报告：一次调用产出 7 节推演（条款/盈利/关键词/广告/投流/监控/决策）。
+   * LLM 板块 fail-soft；盈利测算与监控规则纯代码计算。
+   */
+  app.post<{
+    Body: {
+      offerName?: unknown;
+      productDescription?: unknown;
+      avgPrice?: unknown;
+      commissionType?: unknown;
+      commissionValue?: unknown;
+      currency?: unknown;
+      targetMarket?: unknown;
+      termsText?: unknown;
+      offerUrl?: unknown;
+      landingMode?: unknown;
+      brandPolicy?: unknown;
+      language?: unknown;
+      keywordCount?: unknown;
+    };
+  }>("/api/v1/ai/offer-blueprint", async (request) => {
+    const info = await requireSession(deps, request);
+    const body = request.body ?? {};
+    const str = (v: unknown): string =>
+      typeof v === "string" ? v.trim() : "";
+    const num = (v: unknown): number | null => {
+      if (v === null || v === undefined || v === "") return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+    const offerName = str(body.offerName);
+    if (!offerName) throw new ValidationError("offerName is required");
+    const productDescription = str(body.productDescription);
+    if (!productDescription)
+      throw new ValidationError("productDescription is required");
+    const commissionValue = num(body.commissionValue);
+    if (commissionValue == null || commissionValue <= 0)
+      throw new ValidationError("commissionValue must be a positive number");
+    const settings = await readSettings(prisma);
+    if (!isConfigured(settings)) {
+      throw new AppError("AI is not configured", {
+        code: "AI_NOT_CONFIGURED",
+        statusCode: 400,
+      });
+    }
+    const pepper = assertAiSettingsPepperConfigured();
+    const apiKey = decryptSecret(settings.apiKeyEnc as string, pepper);
+    const input: BlueprintInput = {
+      offerName,
+      productDescription,
+      avgPrice: num(body.avgPrice),
+      commissionType: body.commissionType === "fixed" ? "fixed" : "percentage",
+      commissionValue,
+      currency: str(body.currency) || "USD",
+      targetMarket: str(body.targetMarket) || "US",
+      termsText: str(body.termsText) || null,
+      offerUrl: str(body.offerUrl) || null,
+      landingMode: body.landingMode === "direct" ? "direct" : "landing",
+      brandPolicy: body.brandPolicy === "forbidden" ? "forbidden" : "allowed",
+      language: body.language === "en" ? "en" : "zh",
+      keywordCount: num(body.keywordCount) ?? undefined,
+    };
+    const blueprint = await generateBlueprint(
+      {
+        prisma,
+        tenantId: info.tenantId,
+        userId: info.id,
+        baseUrl: settings.baseUrl as string,
+        model: settings.model as string,
+        apiKey,
+        chatJsonImpl: deps.chatJsonImpl,
+      },
+      input
+    );
+    return { blueprint };
   });
 }

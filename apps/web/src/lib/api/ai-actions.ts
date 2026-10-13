@@ -33,6 +33,9 @@ import {
   recommendKeywords,
   testAiConnection,
   type AiConnectionTestResult,
+  generateBlueprint,
+  type BlueprintInput,
+  type BlueprintResult,
 } from "./ai";
 import type {
   ProfitAnalysisInput,
@@ -257,6 +260,23 @@ export async function recommendKeywordsAction(
       e,
       t,
       lang === "zh" ? "AI 推荐关键词失败，请稍后重试。" : "Keyword recommendation failed, please try again."
+    );
+  }
+}
+
+/** Offer 一键推演报告：一次生成 7 节（约 1~2 分钟）。 */
+export async function generateBlueprintAction(
+  input: Omit<BlueprintInput, never>
+): Promise<AiActionResult<{ blueprint: BlueprintResult }>> {
+  const lang = await getLang();
+  try {
+    const data = await generateBlueprint(input, lang);
+    return { ok: true, data };
+  } catch (e) {
+    return mapAiActionError(
+      e,
+      getDictionary(lang),
+      lang === "zh" ? "推演报告生成失败，请稍后重试。" : "Blueprint generation failed, please try again."
     );
   }
 }

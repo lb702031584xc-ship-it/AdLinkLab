@@ -6,6 +6,7 @@
 export const zh = {
   nav: {
     analyze: "AI 分析",
+    blueprint: "一键推演报告",
     terms: "条款解析",
     compliance: "合规检查",
     brandCheck: "品牌检查",
@@ -944,6 +945,7 @@ export const zh = {
 export const en: typeof zh = {
   nav: {
     analyze: "AI Analysis",
+    blueprint: "Offer Blueprint",
     terms: "Terms Screening",
     compliance: "Compliance Check",
     brandCheck: "Brand Check",

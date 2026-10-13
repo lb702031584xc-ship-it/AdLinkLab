@@ -1,0 +1,441 @@
+"use client";
+
+/**
+ * Offer 一键推演报告：输入表单 → 一次生成 7 节推演 → 报告展示 + Markdown 导出。
+ */
+import { useState } from "react";
+import { useI18n } from "@/i18n/I18nProvider";
+import { zh as bpZh, en as bpEn, type AiBlueprintDict } from "@/i18n/dict/ai-blueprint";
+import {
+  generateBlueprintAction,
+  type AiActionResult,
+} from "@/lib/api/ai-actions";
+import type { BlueprintInput, BlueprintResult } from "@/lib/api/ai";
+
+type Dict = AiBlueprintDict;
+
+/* ---------- 轻量 markdown 渲染（标题/加粗/列表/段落） ---------- */
+function renderMarkdown(md: string): React.ReactNode[] {
+  const lines = md.split("\n");
+  const out: React.ReactNode[] = [];
+  let listBuf: string[] = [];
+  const flushList = () => {
+    if (listBuf.length) {
+      out.push(
+        <ul key={`ul-${out.length}`} className="mb-2 list-disc space-y-1 pl-5 text-sm">
+          {listBuf.map((li, i) => (
+            <li key={i} dangerouslySetInnerHTML={{ __html: inline(li) }} />
+          ))}
+        </ul>
+      );
+      listBuf = [];
+    }
+  };
+  const inline = (s: string) =>
+    s
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+      .replace(/`(.+?)`/g, "<code class='rounded bg-ink/10 px-1'>$1</code>");
+  lines.forEach((raw, idx) => {
+    const line = raw.trim();
+    if (/^[-*]\s/.test(line)) {
+      listBuf.push(line.replace(/^[-*]\s/, ""));
+      return;
+    }
+    flushList();
+    if (/^###\s/.test(line)) {
+      out.push(
+        <h4 key={idx} className="mb-1 mt-3 text-sm font-semibold text-ink"
+          dangerouslySetInnerHTML={{ __html: inline(line.slice(4)) }} />
+      );
+    } else if (/^##\s/.test(line)) {
+      out.push(
+        <h3 key={idx} className="mb-1 mt-4 text-base font-semibold text-ink"
+          dangerouslySetInnerHTML={{ __html: inline(line.slice(3)) }} />
+      );
+    } else if (/^#\s/.test(line)) {
+      out.push(
+        <h2 key={idx} className="mb-2 mt-4 text-lg font-bold text-ink"
+          dangerouslySetInnerHTML={{ __html: inline(line.slice(2)) }} />
+      );
+    } else if (line) {
+      out.push(
+        <p key={idx} className="mb-2 text-sm leading-relaxed text-ink/90"
+          dangerouslySetInnerHTML={{ __html: inline(line) }} />
+      );
+    }
+  });
+  flushList();
+  return out;
+}
+
+const inputCls =
+  "w-full rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm text-ink placeholder:text-ink/35 focus:border-signal focus:outline-none";
+const labelCls = "mb-1 block text-sm font-medium text-ink/80";
+const cardCls = "rounded-xl border border-ink/10 bg-white p-4";
+const sectionTitleCls = "mb-2 text-base font-bold text-ink";
+
+function SectionFailed({ d, error }: { d: Dict; error: string | null }) {
+  return (
+    <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+      ⚠️ {d.sectionFailed}{error ? `：${error}` : ""}
+    </p>
+  );
+}
+
+function buildMarkdownExport(bp: BlueprintResult): string {
+  const L: string[] = [];
+  L.push(`# ${bp.offer.name} —— 投放推演报告`);
+  L.push(`> 生成时间：${bp.generatedAt}`);
+  L.push("");
+  L.push("## 0. Offer 档案");
+  L.push(`- 产品均价：${bp.offer.avgPrice ?? "未知"} ${bp.offer.currency}`);
+  L.push(`- 佣金：${bp.offer.commissionType === "percentage" ? `${bp.offer.commissionValue}%` : `${bp.offer.currency} ${bp.offer.commissionValue}`}`);
+  L.push(`- 单均 payout：${bp.payout != null ? `${bp.payoutCurrency} ${bp.payout}` : "未知"}`);
+  L.push(`- 目标市场：${bp.offer.targetMarket} / 投流方式：${bp.offer.landingMode}`);
+  L.push("");
+  L.push("## 1. 条款解析");
+  if (bp.terms.result) {
+    const t = bp.terms.result;
+    L.push(`- 总结论：${t.overallVerdict}`);
+    L.push(`- 搜索广告：${t.traffic.search} / 品牌词竞价：${t.brandBidding} / 直链：${t.directLinking}`);
+    for (const f of t.redFlags) L.push(`- [${f.severity}] ${f.title}：${f.detail}`);
+    L.push(`- ${t.summary}`);
+  } else L.push(bp.terms.skipped ? "未提供条款文本。" : `生成失败：${bp.terms.error ?? ""}`);
+  L.push("");
+  L.push("## 2. 盈利测算");
+  for (const b of bp.profit.breakEven)
+    L.push(`- 转化率 ${b.cvrPct}% → 保本 CPC ${b.breakEvenCpc != null ? `${bp.profit.payoutCurrency} ${b.breakEvenCpc}` : "未知"}`);
+  L.push(`> ${bp.profit.note}`);
+  L.push("");
+  L.push("## 3. 关键词计划");
+  for (const k of bp.keywords.items)
+    L.push(`- ${k.matchType === "exact" ? `[${k.keyword}]` : `"${k.keyword}"`} —— ${k.reason}`);
+  L.push("");
+  L.push("## 4. 广告文案");
+  for (const ag of bp.adPlan.plan?.adGroups ?? []) {
+    L.push(`### ${ag.group.name}`);
+    L.push(`标题：${ag.rsa.headlines.join(" | ")}`);
+    L.push(`描述：${ag.rsa.descriptions.join(" | ")}`);
+  }
+  L.push("");
+  L.push("## 5. 投流决策");
+  L.push(bp.traffic.report ?? `生成失败：${bp.traffic.error ?? ""}`);
+  L.push("");
+  L.push("## 6. 监控规则");
+  const m = bp.monitor;
+  L.push(`- 单关键词止损：${m.currency} ${m.stopLossPerKeyword}（0 转化则暂停）`);
+  L.push(`- 系列止损：${m.currency} ${m.campaignKillSpend}（ROAS<1 则重做）`);
+  L.push(`- 放量线：CPA ≤ ${m.currency} ${m.scaleCpa} 连续 3 天 → 加预算 30~50%`);
+  L.push(`- 测试期日预算：${m.testDailyBudget}`);
+  L.push("");
+  L.push("## 7. 综合决策");
+  L.push(`**${bp.verdict.level.toUpperCase()}**`);
+  for (const r of bp.verdict.reasons) L.push(`- ${r}`);
+  return L.join("\n");
+}
+
+export function BlueprintClient({ showSetupNudge }: { showSetupNudge: boolean }) {
+  const { lang } = useI18n();
+  const d: Dict = lang === "en" ? bpEn : bpZh;
+
+  const [offerName, setOfferName] = useState("");
+  const [productDescription, setProductDescription] = useState("");
+  const [avgPrice, setAvgPrice] = useState("");
+  const [commissionType, setCommissionType] = useState<"percentage" | "fixed">("percentage");
+  const [commissionValue, setCommissionValue] = useState("");
+  const [currency, setCurrency] = useState("USD");
+  const [targetMarket, setTargetMarket] = useState("US");
+  const [offerUrl, setOfferUrl] = useState("");
+  const [termsText, setTermsText] = useState("");
+  const [landingMode, setLandingMode] = useState<"landing" | "direct">("landing");
+  const [brandPolicy, setBrandPolicy] = useState<"allowed" | "forbidden">("forbidden");
+
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<BlueprintResult | null>(null);
+
+  const canSubmit =
+    offerName.trim() && productDescription.trim() && Number(commissionValue) > 0 && !busy;
+
+  async function onGenerate() {
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    const input: BlueprintInput = {
+      offerName: offerName.trim(),
+      productDescription: productDescription.trim(),
+      avgPrice: avgPrice.trim() ? Number(avgPrice) : null,
+      commissionType,
+      commissionValue: Number(commissionValue),
+      currency: currency.trim() || "USD",
+      targetMarket: targetMarket.trim() || "US",
+      offerUrl: offerUrl.trim() || undefined,
+      termsText: termsText.trim() || undefined,
+      landingMode,
+      brandPolicy,
+      keywordCount: 12,
+    };
+    const res: AiActionResult<{ blueprint: BlueprintResult }> = await generateBlueprintAction(input);
+    setBusy(false);
+    if (!res.ok) {
+      setError(res.error);
+      return;
+    }
+    setResult(res.data.blueprint);
+  }
+
+  function onExport() {
+    if (!result) return;
+    const blob = new Blob([buildMarkdownExport(result)], { type: "text/markdown;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `blueprint-${result.offer.name.replace(/[^\w\-]+/g, "_")}.md`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  const verdictColor =
+    result?.verdict.level === "go"
+      ? "border-green-500 bg-green-50 text-green-800"
+      : result?.verdict.level === "stop"
+        ? "border-red-400 bg-red-50 text-red-800"
+        : "border-amber-400 bg-amber-50 text-amber-800";
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h1 className="text-xl font-bold text-ink">{d.title}</h1>
+        <p className="mt-1 text-sm text-ink/60">{d.subtitle}</p>
+      </div>
+
+      {showSetupNudge ? (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+          {d.setupNudge}{" "}
+          <a href="/admin/ai-settings" className="font-medium underline">{d.goSettings}</a>
+        </div>
+      ) : null}
+
+      {/* 输入表单 */}
+      <div className={`${cardCls} grid gap-3 md:grid-cols-2`}>
+        <div>
+          <label className={labelCls}>{d.form.offerName} *</label>
+          <input className={inputCls} value={offerName} onChange={(e) => setOfferName(e.target.value)} placeholder={d.form.offerNamePh} />
+        </div>
+        <div>
+          <label className={labelCls}>{d.form.offerUrl}</label>
+          <input className={inputCls} value={offerUrl} onChange={(e) => setOfferUrl(e.target.value)} placeholder={d.form.offerUrlPh} />
+        </div>
+        <div className="md:col-span-2">
+          <label className={labelCls}>{d.form.productDescription} *</label>
+          <textarea className={inputCls} rows={2} value={productDescription} onChange={(e) => setProductDescription(e.target.value)} placeholder={d.form.productDescriptionPh} />
+        </div>
+        <div>
+          <label className={labelCls}>{d.form.avgPrice}</label>
+          <input className={inputCls} type="number" min="0" step="0.01" value={avgPrice} onChange={(e) => setAvgPrice(e.target.value)} placeholder="65.88" />
+        </div>
+        <div>
+          <label className={labelCls}>{d.form.currency}</label>
+          <input className={inputCls} value={currency} onChange={(e) => setCurrency(e.target.value)} placeholder="USD" />
+        </div>
+        <div>
+          <label className={labelCls}>{d.form.commissionType}</label>
+          <div className="flex gap-2">
+            {(["percentage", "fixed"] as const).map((t) => (
+              <button key={t} type="button" onClick={() => setCommissionType(t)}
+                className={`rounded-lg border px-3 py-2 text-sm ${commissionType === t ? "border-signal bg-signal/10 font-medium text-ink" : "border-ink/15 text-ink/60"}`}>
+                {t === "percentage" ? d.form.pct : d.form.fixed}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <label className={labelCls}>{d.form.commissionValue} *</label>
+          <input className={inputCls} type="number" min="0" step="0.01" value={commissionValue} onChange={(e) => setCommissionValue(e.target.value)} placeholder={d.form.commissionValuePh} />
+        </div>
+        <div>
+          <label className={labelCls}>{d.form.targetMarket}</label>
+          <input className={inputCls} value={targetMarket} onChange={(e) => setTargetMarket(e.target.value)} placeholder="US" />
+        </div>
+        <div>
+          <label className={labelCls}>{d.form.landingMode}</label>
+          <div className="flex gap-2">
+            {(["landing", "direct"] as const).map((m) => (
+              <button key={m} type="button" onClick={() => setLandingMode(m)}
+                className={`rounded-lg border px-3 py-2 text-sm ${landingMode === m ? "border-signal bg-signal/10 font-medium text-ink" : "border-ink/15 text-ink/60"}`}>
+                {m === "landing" ? d.form.modeLanding : d.form.modeDirect}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="md:col-span-2">
+          <label className={labelCls}>{d.form.brandPolicy}</label>
+          <div className="flex gap-2">
+            {(["allowed", "forbidden"] as const).map((b) => (
+              <button key={b} type="button" onClick={() => setBrandPolicy(b)}
+                className={`rounded-lg border px-3 py-2 text-sm ${brandPolicy === b ? "border-signal bg-signal/10 font-medium text-ink" : "border-ink/15 text-ink/60"}`}>
+                {b === "allowed" ? d.form.brandAllowed : d.form.brandForbidden}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="md:col-span-2">
+          <label className={labelCls}>{d.form.termsText}</label>
+          <textarea className={inputCls} rows={3} value={termsText} onChange={(e) => setTermsText(e.target.value)} placeholder={d.form.termsTextPh} />
+        </div>
+        <div className="md:col-span-2">
+          <button type="button" onClick={onGenerate} disabled={!canSubmit}
+            className="rounded-lg bg-ink px-5 py-2.5 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50">
+            {busy ? d.form.generating : d.form.generate}
+          </button>
+        </div>
+      </div>
+
+      {error ? (
+        <div className="rounded-xl border border-red-300 bg-red-50 p-4 text-sm text-red-800">
+          {d.error}：{error}
+        </div>
+      ) : null}
+
+      {/* 报告 */}
+      {result ? (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-bold text-ink">{result.offer.name}</h2>
+            <button type="button" onClick={onExport}
+              className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink hover:bg-ink/5">
+              📥 {d.exportMd}
+            </button>
+          </div>
+
+          {/* 7. 综合决策置顶 */}
+          <div className={`rounded-xl border p-4 ${verdictColor}`}>
+            <p className="text-base font-bold">{d.verdict[result.verdict.level]}</p>
+            <ul className="mt-1 list-disc space-y-1 pl-5 text-sm">
+              {result.verdict.reasons.map((r, i) => <li key={i}>{r}</li>)}
+            </ul>
+          </div>
+
+          {/* 0. Offer 档案 */}
+          <div className={cardCls}>
+            <h3 className={sectionTitleCls}>{d.sections.profile}</h3>
+            <dl className="grid gap-1 text-sm md:grid-cols-2">
+              <div><dt className="inline text-ink/55">{d.profile.payout}：</dt>
+                <dd className="inline font-semibold text-ink">{result.payout != null ? `${result.payoutCurrency} ${result.payout}` : d.profile.unknown}</dd></div>
+              <div><dt className="inline text-ink/55">{d.form.targetMarket}：</dt>
+                <dd className="inline text-ink">{result.offer.targetMarket} / {result.offer.landingMode}</dd></div>
+            </dl>
+          </div>
+
+          {/* 1. 条款解析 */}
+          <div className={cardCls}>
+            <h3 className={sectionTitleCls}>{d.sections.terms}</h3>
+            {result.terms.result ? (
+              <div className="text-sm">
+                <p><span className="font-medium">总结论：</span>{d.verdict[result.terms.result.overallVerdict === "go" ? "go" : result.terms.result.overallVerdict === "stop" ? "stop" : "caution"]}</p>
+                <p className="mt-1 text-ink/70">搜索 {result.terms.result.traffic.search} · 品牌词 {result.terms.result.brandBidding} · 直链 {result.terms.result.directLinking}</p>
+                {result.terms.result.redFlags.length > 0 ? (
+                  <ul className="mt-1 list-disc space-y-1 pl-5">
+                    {result.terms.result.redFlags.map((f, i) => <li key={i}>[{f.severity}] <strong>{f.title}</strong>：{f.detail}</li>)}
+                  </ul>
+                ) : null}
+                <p className="mt-1 text-ink/70">{result.terms.result.summary}</p>
+              </div>
+            ) : result.terms.skipped ? (
+              <p className="text-sm text-ink/60">{d.termsSkipped}</p>
+            ) : (
+              <SectionFailed d={d} error={result.terms.error} />
+            )}
+          </div>
+
+          {/* 2. 盈利测算 */}
+          <div className={cardCls}>
+            <h3 className={sectionTitleCls}>{d.sections.profit}</h3>
+            <table className="w-full max-w-md text-sm">
+              <thead><tr className="text-left text-ink/55">
+                <th className="py-1 pr-3 font-medium">{d.profit.colCvr}</th>
+                <th className="py-1 font-medium">{d.profit.colCpc}</th>
+              </tr></thead>
+              <tbody>
+                {result.profit.breakEven.map((b) => (
+                  <tr key={b.cvrPct} className="border-t border-ink/10">
+                    <td className="py-1 pr-3">{b.cvrPct}%</td>
+                    <td className="py-1 font-medium">{b.breakEvenCpc != null ? `${result.profit.payoutCurrency} ${b.breakEvenCpc}` : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="mt-2 text-xs text-ink/55">{d.profit.note}</p>
+          </div>
+
+          {/* 3. 关键词 */}
+          <div className={cardCls}>
+            <h3 className={sectionTitleCls}>{d.sections.keywords}</h3>
+            {result.keywords.error ? <SectionFailed d={d} error={result.keywords.error} /> : (
+              <>
+                <p className="mb-2 text-xs text-ink/55">{d.keywords.hint}</p>
+                <table className="w-full text-sm">
+                  <thead><tr className="text-left text-ink/55">
+                    <th className="py-1 pr-3 font-medium">{d.keywords.colKeyword}</th>
+                    <th className="py-1 pr-3 font-medium">{d.keywords.colMatch}</th>
+                    <th className="py-1 font-medium">{d.keywords.colReason}</th>
+                  </tr></thead>
+                  <tbody>
+                    {result.keywords.items.map((k, i) => (
+                      <tr key={i} className="border-t border-ink/10">
+                        <td className="py-1 pr-3 font-mono text-xs">{k.matchType === "exact" ? `[${k.keyword}]` : `"${k.keyword}"`}</td>
+                        <td className="py-1 pr-3 text-ink/70">{k.matchType}</td>
+                        <td className="py-1 text-ink/70">{k.reason}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            )}
+          </div>
+
+          {/* 4. 广告文案 */}
+          <div className={cardCls}>
+            <h3 className={sectionTitleCls}>{d.sections.ads}</h3>
+            {result.adPlan.plan ? (
+              <>
+                <p className="mb-2 text-xs text-ink/55">{d.ads.hint}</p>
+                {result.adPlan.plan.adGroups.map((ag, i) => (
+                  <div key={i} className="mb-3 last:mb-0">
+                    <p className="text-sm font-medium text-ink">{ag.group.name}</p>
+                    <p className="mt-1 text-xs font-medium text-ink/55">{d.ads.headlines}</p>
+                    <ol className="list-decimal space-y-0.5 pl-5 text-sm">
+                      {ag.rsa.headlines.map((h, j) => <li key={j}>{h}</li>)}
+                    </ol>
+                    <p className="mt-1 text-xs font-medium text-ink/55">{d.ads.descriptions}</p>
+                    <ol className="list-decimal space-y-0.5 pl-5 text-sm">
+                      {ag.rsa.descriptions.map((x, j) => <li key={j}>{x}</li>)}
+                    </ol>
+                  </div>
+                ))}
+              </>
+            ) : <SectionFailed d={d} error={result.adPlan.error} />}
+          </div>
+
+          {/* 5. 投流决策 */}
+          <div className={cardCls}>
+            <h3 className={sectionTitleCls}>{d.sections.traffic}</h3>
+            {result.traffic.report ? renderMarkdown(result.traffic.report) : <SectionFailed d={d} error={result.traffic.error} />}
+          </div>
+
+          {/* 6. 监控规则 */}
+          <div className={cardCls}>
+            <h3 className={sectionTitleCls}>{d.sections.monitor}</h3>
+            <ul className="space-y-1 text-sm">
+              <li><strong>{d.monitor.stopLoss}</strong>：{result.monitor.currency} {result.monitor.stopLossPerKeyword} <span className="text-ink/55">({d.monitor.stopLossDesc})</span></li>
+              <li><strong>{d.monitor.kill}</strong>：{result.monitor.currency} {result.monitor.campaignKillSpend} <span className="text-ink/55">({d.monitor.killDesc})</span></li>
+              <li><strong>{d.monitor.scale}</strong>：{result.monitor.currency} {result.monitor.scaleCpa} <span className="text-ink/55">({d.monitor.scaleDesc})</span></li>
+              <li><strong>{d.monitor.budget}</strong>：{result.monitor.testDailyBudget}</li>
+            </ul>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}

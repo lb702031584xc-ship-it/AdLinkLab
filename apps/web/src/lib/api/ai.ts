@@ -596,3 +596,105 @@ export async function updateTrafficThresholds(
     body: JSON.stringify(input),
   });
 }
+
+/* ---------- Offer 一键推演报告 ---------- */
+
+export interface BlueprintInput {
+  offerName: string;
+  productDescription: string;
+  avgPrice?: number | null;
+  commissionType: "percentage" | "fixed";
+  commissionValue: number;
+  currency?: string;
+  targetMarket?: string;
+  termsText?: string;
+  offerUrl?: string;
+  landingMode: "landing" | "direct";
+  brandPolicy: "allowed" | "forbidden";
+  keywordCount?: number;
+}
+
+export interface BlueprintKeyword {
+  keyword: string;
+  reason: string;
+  matchType: "exact" | "phrase";
+}
+
+export interface BlueprintResult {
+  offer: {
+    name: string;
+    productDescription: string;
+    avgPrice: number | null;
+    commissionType: "percentage" | "fixed";
+    commissionValue: number;
+    currency: string;
+    targetMarket: string;
+    landingMode: "landing" | "direct";
+    brandPolicy: "allowed" | "forbidden";
+  };
+  payout: number | null;
+  payoutCurrency: string;
+  terms: {
+    skipped: boolean;
+    result: {
+      overallVerdict: "go" | "caution" | "stop";
+      traffic: Record<string, string>;
+      brandBidding: string;
+      directLinking: string;
+      geoRestrictions: string[];
+      caps: string | null;
+      payoutTerms: string | null;
+      redFlags: Array<{ severity: string; title: string; detail: string }>;
+      summary: string;
+    } | null;
+    error: string | null;
+  };
+  profit: {
+    payout: number | null;
+    payoutCurrency: string;
+    breakEven: Array<{ cvrPct: number; breakEvenCpc: number | null }>;
+    note: string;
+  };
+  keywords: { items: BlueprintKeyword[]; error: string | null };
+  adPlan: {
+    plan: {
+      campaign: { name: string };
+      adGroups: Array<{
+        group: {
+          name: string;
+          keywords: Array<{ text: string; matchType: string }>;
+          negativeKeywords: Array<{ text: string; matchType: string }>;
+        };
+        rsa: {
+          headlines: string[];
+          descriptions: string[];
+          finalUrl: string;
+          path1?: string | null;
+          path2?: string | null;
+        };
+      }>;
+    } | null;
+    error: string | null;
+  };
+  traffic: { report: string | null; combo: string | null; error: string | null };
+  monitor: {
+    currency: string;
+    stopLossPerKeyword: number | null;
+    campaignKillSpend: number | null;
+    scaleCpa: number | null;
+    testDailyBudget: string;
+  };
+  verdict: { level: "go" | "caution" | "stop"; reasons: string[] };
+  generatedAt: string;
+}
+
+/** 生成 Offer 一键推演报告（约 1~2 分钟，4 次 AI 调用）。 */
+export async function generateBlueprint(
+  input: BlueprintInput,
+  language?: string
+): Promise<{ blueprint: BlueprintResult }> {
+  return aiFetch<{ blueprint: BlueprintResult }>("/api/v1/ai/offer-blueprint", {
+    method: "POST",
+    body: JSON.stringify({ ...input, language }),
+  });
+}
