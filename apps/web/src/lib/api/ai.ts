@@ -246,6 +246,26 @@ export async function saveAiSettings(
   });
 }
 
+export interface AiConnectionTestResult {
+  ok: boolean;
+  stage: "config" | "dns" | "connect" | "tls" | "http" | "ok";
+  message: string;
+  latencyMs?: number;
+  httpStatus?: number;
+}
+
+/** Admin-only: 一键诊断 LLM 连接，分层定位故障（dns/connect/tls/http）。 */
+export async function testAiConnection(input: {
+  baseUrl?: string;
+  model?: string;
+  apiKey?: string;
+}): Promise<AiConnectionTestResult> {
+  return aiFetch<AiConnectionTestResult>("/api/v1/ai/test-connection", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
 /** Analyze an offer. Throws AiApiError with code "AI_NOT_CONFIGURED" (400) when unset. */
 export async function analyzeOffer(input: AnalyzeInput): Promise<AiAnalysis> {
   return aiFetch<AiAnalysis>("/api/v1/ai/analyze", {

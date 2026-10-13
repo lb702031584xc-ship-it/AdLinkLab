@@ -774,6 +774,8 @@ export const zh = {
       saving: "保存中…",
       saved: "已保存。",
       saveFailed: "保存失败，请重试。",
+      testConnection: "测试连接",
+      testing: "测试中…",
       keyNote:
         "API Key 只保存在服务器端，切勿发给任何人，也不要提交到代码仓库。",
       guide:
@@ -1714,6 +1716,8 @@ export const en: typeof zh = {
       saving: "Saving…",
       saved: "Saved.",
       saveFailed: "Save failed, please try again.",
+      testConnection: "Test connection",
+      testing: "Testing…",
       keyNote:
         "The API key is stored server-side only. Never share it with anyone or commit it to a repository.",
       guide:

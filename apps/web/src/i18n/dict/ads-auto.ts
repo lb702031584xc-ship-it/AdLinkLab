@@ -77,6 +77,8 @@ export const zh = {
   },
   errors: {
     loadFailed: "加载失败，请稍后重试。",
+    networkHint: "服务器连不上大模型服务（可能是机房网络/DNS问题）。去 AI 设置页点「测试连接」可一键定位是哪一层不通：",
+    goTestConnection: "去测试 →",
   },
 };
 
@@ -157,6 +159,8 @@ export const en = {
   },
   errors: {
     loadFailed: "Failed to load. Please try again later.",
+    networkHint: "The server cannot reach the LLM service (likely datacenter network/DNS). Use “Test connection” on the AI settings page to pinpoint the failing layer:",
+    goTestConnection: "Go test →",
   },
 };
 

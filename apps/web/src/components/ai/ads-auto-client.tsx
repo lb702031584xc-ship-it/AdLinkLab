@@ -546,9 +546,17 @@ export function AdsAutoClient({ dict, lang }: { dict: AdsAutoDict; lang: "zh" | 
       </div>
 
       {error ? (
-        <p className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-          {error}
-        </p>
+        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+          <p>{error}</p>
+          {/network error/i.test(error) && (
+            <p className="mt-1">
+              {d.errors.networkHint}{" "}
+              <a href="/admin/ai-settings" className="underline underline-offset-2 hover:opacity-80">
+                {d.errors.goTestConnection}
+              </a>
+            </p>
+          )}
+        </div>
       ) : null}
 
       {plan ? (

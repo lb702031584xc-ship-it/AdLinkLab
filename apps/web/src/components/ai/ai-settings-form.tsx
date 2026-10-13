@@ -3,8 +3,9 @@
 import { useState } from "react";
 import { useDict } from "@/i18n/use-dict";
 import { EntityPageHeader, ErrorState } from "@/components/entities/ui";
-import { saveAiSettingsAction } from "@/lib/api/ai-actions";
+import { saveAiSettingsAction, testAiConnectionAction } from "@/lib/api/ai-actions";
 import type { AiSettings } from "@/lib/api/ai";
+import type { AiConnectionTestResult } from "@/lib/api/ai";
 
 const PRESETS = {
   deepseek: { baseUrl: "https://api.deepseek.com", model: "deepseek-chat" },
@@ -35,6 +36,8 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<AiConnectionTestResult | null>(null);
 
   const inputClass =
     "w-full rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm text-ink placeholder:text-ink/35 focus:border-signal focus:outline-none";
@@ -410,6 +413,42 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
         >
           {saving ? t.ai.admin.settings.saving : t.ai.admin.settings.save}
         </button>
+        <button
+          type="button"
+          disabled={testing}
+          onClick={async () => {
+            setTesting(true);
+            setTestResult(null);
+            try {
+              // 用当前表单值测试（key 为空则用已保存的 key），不用先点保存
+              const res = await testAiConnectionAction({
+                baseUrl: baseUrl.trim() || undefined,
+                model: model.trim() || undefined,
+                apiKey: apiKey.trim() || undefined,
+              });
+              setTestResult(
+                res.ok ? res.data : { ok: false, stage: "config", message: res.error }
+              );
+            } finally {
+              setTesting(false);
+            }
+          }}
+          className="ml-2 mt-5 rounded-lg border border-ink/20 px-5 py-2 text-sm font-medium text-ink hover:bg-ink/5 disabled:opacity-50"
+        >
+          {testing ? t.ai.admin.settings.testing : t.ai.admin.settings.testConnection}
+        </button>
+
+        {testResult && (
+          <div
+            className={`mt-3 rounded-lg border px-3 py-2 text-sm ${
+              testResult.ok
+                ? "border-green-200 bg-green-50 text-green-800"
+                : "border-red-200 bg-red-50 text-red-800"
+            }`}
+          >
+            {testResult.ok ? "✅" : "❌"} {testResult.message}
+          </div>
+        )}
 
         <p className="mt-5 text-xs text-ink/55">
           {t.ai.admin.settings.keyNote}

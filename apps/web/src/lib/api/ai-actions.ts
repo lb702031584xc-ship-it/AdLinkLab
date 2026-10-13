@@ -31,6 +31,8 @@ import {
   type RecommendedKeyword,
   analyzeTrafficPlan,
   recommendKeywords,
+  testAiConnection,
+  type AiConnectionTestResult,
 } from "./ai";
 import type {
   ProfitAnalysisInput,
@@ -130,6 +132,22 @@ export async function saveAiSettingsAction(
         e instanceof Error && e.message
           ? e.message
           : t.ai.admin.settings.saveFailed,
+    };
+  }
+}
+
+/** 测试 LLM 连接（可用当前表单值测试保存前的新配置）。 */
+export async function testAiConnectionAction(input: {
+  baseUrl?: string;
+  model?: string;
+  apiKey?: string;
+}): Promise<AiActionResult<AiConnectionTestResult>> {
+  try {
+    return { ok: true, data: await testAiConnection(input) };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof Error && e.message ? e.message : "测试失败",
     };
   }
 }

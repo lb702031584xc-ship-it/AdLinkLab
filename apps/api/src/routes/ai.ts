@@ -342,6 +342,153 @@ export async function registerAiRoutes(
     };
   });
 
+  /**
+   * Admin-only: 测试 LLM 连接，一步步定位故障层级。
+   * 可传 { baseUrl?, model?, apiKey? } 测试"保存前"的值；不传则用已保存的配置。
+   * 返回 { ok, stage, message, latencyMs?, httpStatus? }，stage 之一：
+   * config | dns | connect | tls | http | ok
+   */
+  app.post("/api/v1/ai/test-connection", async (request) => {
+    const hostOf = (u: string): string => {
+      try {
+        return new URL(u).host;
+      } catch {
+        return u;
+      }
+    };
+    const snippet = async (r: Response): Promise<string> => {
+      try {
+        return (await r.text()).trim().slice(0, 200).replace(/\s+/g, " ");
+      } catch {
+        return "";
+      }
+    };
+    await requireAdmin(deps, request);
+    const body = (request.body ?? {}) as {
+      baseUrl?: unknown;
+      model?: unknown;
+      apiKey?: unknown;
+    };
+    const s = await readSettings(prisma);
+    const baseUrl =
+      (typeof body.baseUrl === "string" && body.baseUrl.trim()) || s.baseUrl || "";
+    const model = (typeof body.model === "string" && body.model.trim()) || s.model || "";
+    let apiKey: string | null = null;
+    if (typeof body.apiKey === "string" && body.apiKey.trim()) {
+      apiKey = body.apiKey.trim();
+    } else if (s.apiKeyEnc) {
+      try {
+        apiKey = decryptSecret(s.apiKeyEnc, assertAiSettingsPepperConfigured());
+      } catch {
+        apiKey = null;
+      }
+    }
+
+    if (!baseUrl || !/^https?:\/\//i.test(baseUrl)) {
+      return {
+        ok: false,
+        stage: "config",
+        message: "baseUrl 未配置或格式不对（应为 http(s):// 开头）",
+      };
+    }
+    if (!apiKey) {
+      return {
+        ok: false,
+        stage: "config",
+        message: "API Key 未配置",
+      };
+    }
+    const cleanBase = baseUrl.replace(/\/+$/, "");
+    const url = `${cleanBase}/models`;
+    const started = Date.now();
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(15_000),
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+      const cause = (e as { cause?: { code?: string } })?.cause;
+      const code = cause?.code ?? "";
+      const latencyMs = Date.now() - started;
+      if (/ENOTFOUND|EAI_AGAIN/i.test(code + msg)) {
+        return {
+          ok: false,
+          stage: "dns",
+          latencyMs,
+          message: `DNS 解析失败：服务器解析不了 ${hostOf(cleanBase)}。检查服务器 DNS 设置或该域名是否可访问。`,
+        };
+      }
+      if (/CERT|TLS|SSL/i.test(code + msg)) {
+        return {
+          ok: false,
+          stage: "tls",
+          latencyMs,
+          message: `TLS 握手失败（${code || msg.slice(0, 80)}）。可能是服务器时间不对或中间设备劫持 HTTPS。`,
+        };
+      }
+      if (/ECONNREFUSED/i.test(code + msg)) {
+        return {
+          ok: false,
+          stage: "connect",
+          latencyMs,
+          message: `连接被拒绝：${hostOf(cleanBase)} 拒绝了连接。检查 baseUrl 是否写错、服务商是否屏蔽了机房 IP。`,
+        };
+      }
+      if (/TimeoutError|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT/i.test(code + msg)) {
+        return {
+          ok: false,
+          stage: "connect",
+          latencyMs,
+          message: `连接超时（15 秒）：服务器连不上 ${hostOf(cleanBase)}。可能是机房网络问题、IPv6 路由不通或被防火墙拦截。`,
+        };
+      }
+      return {
+        ok: false,
+        stage: "connect",
+        latencyMs,
+        message: `网络错误：${msg.slice(0, 120)}`,
+      };
+    }
+    const latencyMs = Date.now() - started;
+    if (res.status === 401) {
+      return {
+        ok: false,
+        stage: "http",
+        httpStatus: 401,
+        latencyMs,
+        message: "网络通了，但 API Key 无效（401）。请检查 key 是否复制完整、是否被轮换。",
+      };
+    }
+    if (res.status === 404) {
+      return {
+        ok: false,
+        stage: "http",
+        httpStatus: 404,
+        latencyMs,
+        message: `网络通了，但地址不对（404）。检查 baseUrl 是否多了 /v1 或少了路径，当前：${cleanBase}`,
+      };
+    }
+    if (!res.ok) {
+      return {
+        ok: false,
+        stage: "http",
+        httpStatus: res.status,
+        latencyMs,
+        message: `网络通了，但服务商返回 ${res.status}。${(await snippet(res)).slice(0, 120)}`,
+      };
+    }
+    return {
+      ok: true,
+      stage: "ok",
+      httpStatus: 200,
+      latencyMs,
+      message: `连接正常（${latencyMs}ms）。baseUrl 与 key 都没问题${model ? `，model 为 ${model}` : ""}。`,
+    };
+  });
+
   /** Analyze an offer (URL or pasted text) with the configured LLM. */
   app.post("/api/v1/ai/analyze", async (request) => {
     const info = await requireSession(deps, request);
