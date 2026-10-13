@@ -54,3 +54,74 @@ describe("screenshotPage", () => {
     ).rejects.toBeInstanceOf(PageShotError);
   });
 });
+
+describe("fetchPageTextWithFallback", () => {
+  it("直抓成功 → 用 HTML 文本", async () => {
+    const { fetchPageTextWithFallback } = await import("./page-shot.js");
+    const r = await fetchPageTextWithFallback("https://example.com/", {
+      fetchImpl: (async () => ({
+        finalUrl: "https://example.com/",
+        html: "<html></html>",
+        text: "hello world",
+        fetchMs: 10,
+      })) as never,
+      screenshotImpl: async () => {
+        throw new Error("should not be called");
+      },
+    });
+    expect(r.source).toBe("html");
+    expect(r.text).toBe("hello world");
+  });
+
+  it("直抓被反爬 → 截图+OCR 降级", async () => {
+    const { fetchPageTextWithFallback } = await import("./page-shot.js");
+    const { AiError } = await import("./llm.js");
+    const r = await fetchPageTextWithFallback("https://example.com/", {
+      fetchImpl: (async () => {
+        throw new AiError("blocked", 403);
+      }) as never,
+      screenshotImpl: (async () => ({
+        png: Buffer.from("fake"),
+        title: "Example",
+        finalUrl: "https://example.com/",
+      })) as never,
+      ocrImpl: async () => ({ text: "OCR 识别的正文 $9.99", confidence: 80 }),
+    });
+    expect(r.source).toBe("screenshot");
+    expect(r.text).toContain("$9.99");
+  });
+
+  it("非 AiError（SSRF 等）直接抛出，不降级", async () => {
+    const { fetchPageTextWithFallback } = await import("./page-shot.js");
+    const { PageShotError } = await import("./page-shot.js");
+    await expect(
+      fetchPageTextWithFallback("http://127.0.0.1/", {
+        fetchImpl: (async () => {
+          throw new PageShotError("URL target is not allowed");
+        }) as never,
+        screenshotImpl: (async () => {
+          throw new Error("should not be called");
+        }) as never,
+      })
+    ).rejects.toBeInstanceOf(PageShotError);
+  });
+
+  it("OCR 无文字 → 抛原始抓取错误", async () => {
+    const { fetchPageTextWithFallback } = await import("./page-shot.js");
+    const { AiError } = await import("./llm.js");
+    const original = new AiError("blocked", 403);
+    await expect(
+      fetchPageTextWithFallback("https://example.com/", {
+        fetchImpl: (async () => {
+          throw original;
+        }) as never,
+        screenshotImpl: (async () => ({
+          png: Buffer.from("fake"),
+          title: null,
+          finalUrl: "https://example.com/",
+        })) as never,
+        ocrImpl: async () => ({ text: "   ", confidence: null }),
+      })
+    ).rejects.toBe(original);
+  });
+});

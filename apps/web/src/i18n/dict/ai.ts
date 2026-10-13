@@ -819,6 +819,11 @@ export const zh = {
     manualPlaceholder: "粘贴落地页 HTML 源码……",
     needManualHtml: "请粘贴落地页 HTML 源码。",
     tryManualHint: "可以切换到“手动粘贴”模式分析。",
+    capturesToggle: "浏览器插件抓取记录",
+    capturesLoading: "加载中…",
+    capturesEmpty: "暂无插件抓取记录。先在 Chrome 里装插件抓一页，回来这里选用。",
+    useCapture: "选用",
+    captureNoHtml: "该抓取没有 HTML，用插件重新抓一次（新版插件会发送 HTML）。",
     overallScore: "综合评分",
     dimensions: {
       performance: "加载性能",
@@ -1762,6 +1767,11 @@ export const en: typeof zh = {
     manualPlaceholder: "Paste landing page HTML source…",
     needManualHtml: "Please paste the landing page HTML source.",
     tryManualHint: "You can switch to “Paste manually” mode.",
+    capturesToggle: "Browser extension captures",
+    capturesLoading: "Loading…",
+    capturesEmpty: "No extension captures yet. Capture a page with the Chrome extension first.",
+    useCapture: "Use",
+    captureNoHtml: "This capture has no HTML. Re-capture with the updated extension (it now sends HTML).",
     overallScore: "Overall score",
     dimensions: {
       performance: "Performance",

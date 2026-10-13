@@ -718,6 +718,12 @@ export interface OfferMetaResult {
 export interface OfferCaptureItem extends OfferMetaResult {
   id: string;
   createdAt: string;
+  /** 是否带有插件发来的真实 HTML（落地页拆解用） */
+  hasHtml: boolean;
+}
+
+export interface OfferCaptureDetail extends OfferCaptureItem {
+  html: string | null;
 }
 
 /** 浏览器插件抓取记录（最近 10 条）。 */
@@ -726,6 +732,13 @@ export async function listOfferCaptures(): Promise<OfferCaptureItem[]> {
     method: "GET",
   });
   return res.items ?? [];
+}
+
+/** 单条抓取记录详情（含 HTML）。 */
+export async function getOfferCapture(id: string): Promise<OfferCaptureDetail> {
+  return aiFetch<OfferCaptureDetail>(`/api/v1/ai/offer-captures/${encodeURIComponent(id)}`, {
+    method: "GET",
+  });
 }
 
 /** 抓取 offer 页面：标题/描述/价格自动提取，抓不到返回 null。 */

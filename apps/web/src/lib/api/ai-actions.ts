@@ -19,6 +19,7 @@ import {
   getAnalysis,
   listAnalyses,
   listOfferCaptures,
+  getOfferCapture,
   saveAiSettings,
   screenOffers,
   type AiAnalysis,
@@ -27,6 +28,7 @@ import {
   type AiScreenResponse,
   type AiSettings,
   type AiTermsResult,
+  type OfferCaptureDetail,
   type OfferCaptureItem,
   type AiUrlCheckResponse,
   type AnalyzeInput,
@@ -348,6 +350,20 @@ export async function listOfferCapturesAction(): Promise<
 > {
   try {
     return { ok: true, data: await listOfferCaptures() };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof AiApiError ? e.message : "加载抓取记录失败",
+    };
+  }
+}
+
+/** 单条抓取记录详情（含 HTML）。 */
+export async function getOfferCaptureAction(
+  id: string
+): Promise<AiActionResult<OfferCaptureDetail>> {
+  try {
+    return { ok: true, data: await getOfferCapture(id) };
   } catch (e) {
     return {
       ok: false,

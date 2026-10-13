@@ -9,6 +9,11 @@ import {
   getLanderAnalysisAction,
   listLanderAnalysesAction,
 } from "@/lib/api/lander-actions";
+import {
+  listOfferCapturesAction,
+  getOfferCaptureAction,
+} from "@/lib/api/ai-actions";
+import type { OfferCaptureItem } from "@/lib/api/ai";
 import type { P1ActionResult } from "@/lib/api/p1-actions";
 import type {
   LanderAnalysis,
@@ -165,6 +170,34 @@ export function LanderClient() {
   const [result, setResult] = useState<LanderAnalysis | null>(null);
   const [history, setHistory] = useState<LanderAnalysis[]>([]);
   const [historyTotal, setHistoryTotal] = useState(0);
+  const [captures, setCaptures] = useState<OfferCaptureItem[]>([]);
+  const [capturesLoading, setCapturesLoading] = useState(false);
+  const [capturesLoaded, setCapturesLoaded] = useState(false);
+  const [showCaptures, setShowCaptures] = useState(false);
+  const [captureApplying, setCaptureApplying] = useState(false);
+
+  async function loadCaptures() {
+    setCapturesLoading(true);
+    const res = await listOfferCapturesAction();
+    setCapturesLoading(false);
+    setCapturesLoaded(true);
+    if (res.ok) setCaptures(res.data);
+  }
+
+  async function useCapture(c: OfferCaptureItem) {
+    if (captureApplying) return;
+    setCaptureApplying(true);
+    const res = await getOfferCaptureAction(c.id);
+    setCaptureApplying(false);
+    if (!res.ok || !res.data.html) {
+      setError(d.captureNoHtml);
+      return;
+    }
+    setUrl(res.data.finalUrl);
+    setManualHtml(res.data.html.slice(0, 500000));
+    setMode("manual");
+    setShowCaptures(false);
+  }
 
   async function loadHistory() {
     const res: P1ActionResult<{ items: LanderAnalysis[]; total: number }> =
@@ -248,6 +281,44 @@ export function LanderClient() {
       {mode === "manual" && (
         <p className="mt-2 text-xs text-ink/55">{d.manualHint}</p>
       )}
+
+      {/* 浏览器插件抓取：反爬站点用插件抓真实 HTML，一键填入手动模式 */}
+      <div className="mt-2">
+        <button
+          type="button"
+          onClick={() => { setShowCaptures((v) => !v); if (!capturesLoaded) loadCaptures(); }}
+          className="text-xs text-ink/60 hover:text-ink"
+        >
+          🧩 {d.capturesToggle} {showCaptures ? "▲" : "▼"}
+        </button>
+        {showCaptures ? (
+          <div className="mt-2 space-y-1.5 rounded-lg border border-ink/10 bg-ink/[0.02] p-2">
+            {capturesLoading ? (
+              <p className="text-xs text-ink/50">{d.capturesLoading}</p>
+            ) : captures.length === 0 ? (
+              <p className="text-xs text-ink/50">{d.capturesEmpty}</p>
+            ) : captures.map((c) => (
+              <div key={c.id} className="flex items-center justify-between gap-2 rounded-md bg-white/60 px-2 py-1.5">
+                <div className="min-w-0 text-xs">
+                  <p className="truncate font-medium text-ink">{c.title || c.finalUrl}</p>
+                  <p className="truncate text-ink/50">
+                    {c.hasHtml ? "📄 HTML ✓ · " : ""}
+                    {new Date(c.createdAt).toLocaleString()}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => useCapture(c)}
+                  disabled={captureApplying || !c.hasHtml}
+                  className="shrink-0 rounded-md border border-ink/15 px-2 py-1 text-xs text-ink hover:bg-ink/5 disabled:opacity-40"
+                >
+                  {d.useCapture}
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
 
       <form
         onSubmit={onAnalyze}

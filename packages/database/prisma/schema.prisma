@@ -1973,6 +1973,7 @@ model OfferCapture {
   price       Decimal? @db.Decimal
   currency    String?
   pageText    String   @map("page_text")
+  pageHtml    String?  @map("page_html")
   source      String   @default("extension")
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 

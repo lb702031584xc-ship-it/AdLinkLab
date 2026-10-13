@@ -12,7 +12,9 @@
 import { lookup } from "node:dns/promises";
 import puppeteer from "puppeteer-core";
 import { AppError } from "@adlinklab/shared";
-import { isBlockedIp } from "./fetch-page.js";
+import { isBlockedIp, fetchPage } from "./fetch-page.js";
+import { AiError } from "./llm.js";
+import { ocrImageText } from "../offer-metrics/ocr.js";
 
 export class PageShotError extends AppError {
   constructor(message: string) {
@@ -148,5 +150,43 @@ export async function screenshotPage(
         // 忽略清理失败
       }
     }
+  }
+}
+
+export interface PageTextResult {
+  text: string;
+  finalUrl: string;
+  /** html=直接抓取，screenshot=无头浏览器截图+OCR */
+  source: "html" | "screenshot";
+}
+
+export interface PageTextFallbackDeps {
+  fetchImpl?: typeof fetchPage;
+  screenshotImpl?: typeof screenshotPage;
+  ocrImpl?: typeof ocrImageText;
+}
+
+/**
+ * 取页面正文（带截图降级）：先 fetchPage，失败（AiError：反爬/超时/SSRF 拒绝）
+ * 则无头浏览器截图 + tesseract OCR。SSRF 校验失败等非 AiError 直接抛出。
+ * 给 AI 分析、官网品牌词验证等"只需要正文"的场景共用。
+ */
+export async function fetchPageTextWithFallback(
+  url: string,
+  deps: PageTextFallbackDeps = {}
+): Promise<PageTextResult> {
+  const fetchImpl = deps.fetchImpl ?? fetchPage;
+  try {
+    const page = await fetchImpl(url);
+    return { text: page.text, finalUrl: page.finalUrl, source: "html" };
+  } catch (e) {
+    if (!(e instanceof AiError)) throw e;
+    const screenshotImpl = deps.screenshotImpl ?? screenshotPage;
+    const ocrImpl = deps.ocrImpl ?? ocrImageText;
+    const shot = await screenshotImpl(url);
+    const ocr = await ocrImpl(shot.png);
+    const text = ocr.text.replace(/\s+/g, " ").trim();
+    if (!text) throw e; // OCR 无文字 → 抛原始抓取错误（信息更准确）
+    return { text, finalUrl: shot.finalUrl, source: "screenshot" };
   }
 }

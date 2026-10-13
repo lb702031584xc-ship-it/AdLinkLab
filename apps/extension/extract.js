@@ -15,10 +15,17 @@ function __adlinklab_extract() {
   } catch (e) {
     bodyText = "";
   }
+  var html = "";
+  try {
+    html = document.documentElement ? document.documentElement.outerHTML || "" : "";
+  } catch (e) {
+    html = "";
+  }
   return {
     url: location.href,
     title: title,
     description: description,
     text: bodyText.slice(0, 20000),
+    html: html.slice(0, 200000),
   };
 }

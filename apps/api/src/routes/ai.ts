@@ -28,7 +28,7 @@ import {
 } from "../ai/traffic-planner.js";
 import { fetchPage, fetchPageHtml } from "../ai/fetch-page.js";
 import { ocrImageText, OcrError } from "../offer-metrics/ocr.js";
-import { screenshotPage, PageBlockedError } from "../ai/page-shot.js";
+import { screenshotPage, PageBlockedError, fetchPageTextWithFallback } from "../ai/page-shot.js";
 import {
   checkUrlVerdict,
   detectAffiliateParams,
@@ -528,7 +528,8 @@ export async function registerAiRoutes(
     let inputKind: "url" | "text";
     let inputRef: string;
     if (url) {
-      const fetched = await fetchPageImpl(url); // AiError on SSRF/fetch failure
+      // 直抓失败自动降级：无头浏览器截图 + OCR（反爬站点也能分析）
+      const fetched = await fetchPageTextWithFallback(url, { fetchImpl: fetchPageImpl });
       pageText = fetched.text;
       inputKind = "url";
       inputRef = fetched.finalUrl;
@@ -1332,6 +1333,7 @@ export async function registerAiRoutes(
         price: meta.price ?? undefined,
         currency: meta.currency,
         pageText: cleanText.slice(0, 20000),
+        pageHtml: html || undefined,
         source: "extension",
       },
     });
@@ -1356,7 +1358,7 @@ export async function registerAiRoutes(
       take: 10,
       select: {
         id: true, url: true, title: true, description: true,
-        price: true, currency: true, pageText: true, createdAt: true,
+        price: true, currency: true, pageText: true, pageHtml: true, createdAt: true,
       },
     });
     return {
@@ -1368,9 +1370,36 @@ export async function registerAiRoutes(
         price: r.price == null ? null : Number(r.price),
         currency: r.currency,
         text: (r.pageText ?? "").slice(0, 4000),
+        hasHtml: !!(r.pageHtml && r.pageHtml.length > 0),
         source: "extension" as const,
         createdAt: r.createdAt.toISOString(),
       })),
+    };
+  });
+
+  /** 单条抓取记录详情（含插件发来的真实 HTML，给落地页拆解用）。 */
+  app.get("/api/v1/ai/offer-captures/:id", async (request) => {
+    const info = await requireSession(deps, request);
+    const { id } = request.params as { id: string };
+    const row = await deps.prisma.offerCapture.findFirst({
+      where: { id, tenantId: info.tenantId },
+      select: {
+        id: true, url: true, title: true, description: true,
+        price: true, currency: true, pageText: true, pageHtml: true, createdAt: true,
+      },
+    });
+    if (!row) throw new ValidationError("抓取记录不存在");
+    return {
+      id: row.id,
+      finalUrl: row.url,
+      title: row.title,
+      description: row.description,
+      price: row.price == null ? null : Number(row.price),
+      currency: row.currency,
+      text: (row.pageText ?? "").slice(0, 4000),
+      html: row.pageHtml ?? null,
+      source: "extension" as const,
+      createdAt: row.createdAt.toISOString(),
     };
   });
 

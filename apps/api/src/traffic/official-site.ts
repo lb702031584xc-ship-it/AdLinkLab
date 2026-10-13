@@ -10,7 +10,7 @@
  * 任何异常 → { found:false, confidence:'low' }，绝不抛错。
  */
 import { registrableDomain } from "../ai/compliance.js";
-import { fetchPageHtml } from "../ai/fetch-page.js";
+import { fetchPageTextWithFallback } from "../ai/page-shot.js";
 import type { OfficialSiteInfo } from "./types.js";
 
 const DDG_HTML_SEARCH = "https://html.duckduckgo.com/html/?q=";
@@ -186,13 +186,14 @@ function parseResultDomains(html: string): string[] {
   return domains;
 }
 
-/** 首页验证：SSRF-safe 抓取官网首页，标题/正文含品牌词（大小写不敏感）即确认。 */
+/** 首页验证：SSRF-safe 抓取官网首页，标题/正文含品牌词（大小写不敏感）即确认。
+ * 直抓失败（反爬/JS 渲染）自动降级无头截图 + OCR，仍失败返回 false。 */
 async function verifyBrandMention(
   domain: string,
   brand: string
 ): Promise<boolean> {
   try {
-    const page = await fetchPageHtml("https://" + domain);
+    const page = await fetchPageTextWithFallback("https://" + domain);
     return page.text.toLowerCase().includes(brand.trim().toLowerCase());
   } catch {
     return false;
