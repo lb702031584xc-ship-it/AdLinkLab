@@ -38,6 +38,10 @@ export const zh = {
       biddingStrategy: "出价策略",
     },
     empty: "尚未同步任何广告系列",
+    nextTitle: "广告跑起来后，下一步",
+    nextHint: "建 TrackingLink 做归因，再去流量监控看点击和转化数据。",
+    toTracking: "去建 TrackingLink",
+    toMonitoring: "去流量监控",
   },
   adGroups: {
     description: "已同步广告系列下的广告组。",
@@ -459,6 +463,10 @@ export const en: typeof zh = {
       biddingStrategy: "Bidding Strategy",
     },
     empty: "No campaigns synced yet",
+    nextTitle: "Campaigns live — next",
+    nextHint: "Create TrackingLinks for attribution, then watch clicks and conversions in monitoring.",
+    toTracking: "TrackingLinks",
+    toMonitoring: "Monitoring",
   },
   adGroups: {
     description: "Ad groups under synced campaigns.",

@@ -77,6 +77,9 @@ export interface LanderPipelineDict {
   abtest: {
     intro: string;
     openExperiments: string;
+    nextStepTitle: string;
+    nextStepHint: string;
+    nextStepAds: string;
   };
 }
 
@@ -213,6 +216,9 @@ const zh: LanderPipelineDict = {
     intro:
       "新页面上线别凭感觉：建一个 A/B 实验，让新旧版本各分一半流量，用点击和转化数据判定胜者。",
     openExperiments: "打开实验管理页 →",
+    nextStepTitle: "落地页就绪，下一步",
+    nextStepHint: "页面定稿后，去自动化广告生成广告系列结构和 RSA 文案，开始投流。",
+    nextStepAds: "去自动化广告 →",
   },
 };
 
@@ -353,6 +359,9 @@ const en: LanderPipelineDict = {
     intro:
       "Don't guess on a new page: create an A/B experiment, split traffic 50/50 between old and new, and let click and conversion data crown the winner.",
     openExperiments: "Open experiments →",
+    nextStepTitle: "Landing page ready — next",
+    nextStepHint: "With the page finalized, generate the campaign structure and RSA copy in Auto Ads.",
+    nextStepAds: "Go to Auto Ads →",
   },
 };
 

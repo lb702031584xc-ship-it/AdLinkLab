@@ -75,6 +75,13 @@ export const zh = {
     description: "Amazon 没有 Script 自动建广告机制，请下载文案包后手动创建。",
     download: "下载文案包",
   },
+  nextStep: {
+    title: "计划已生成，下一步",
+    hint: "去 Google Ads 后台按计划建广告（或等 Script 任务执行），回来建 TrackingLink 做归因，再去流量监控看数据。",
+    toCampaigns: "去广告系列",
+    toTracking: "去建 TrackingLink",
+    toMonitoring: "去流量监控",
+  },
   errors: {
     loadFailed: "加载失败，请稍后重试。",
     networkHint: "服务器连不上大模型服务（可能是机房网络/DNS问题）。去 AI 设置页点「测试连接」可一键定位是哪一层不通：",
@@ -156,6 +163,13 @@ export const en = {
     title: "Copy pack (Amazon / manual placement)",
     description: "Amazon has no Script mechanism for auto-creating ads — download the copy pack and create manually.",
     download: "Download copy pack",
+  },
+  nextStep: {
+    title: "Plan ready — next steps",
+    hint: "Build the ads in Google Ads (or wait for the Script task), create TrackingLinks for attribution, then watch traffic.",
+    toCampaigns: "Campaigns",
+    toTracking: "TrackingLinks",
+    toMonitoring: "Monitoring",
   },
   errors: {
     loadFailed: "Failed to load. Please try again later.",

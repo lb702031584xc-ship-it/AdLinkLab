@@ -731,6 +731,32 @@ export function AdsAutoClient({ dict, lang }: { dict: AdsAutoDict; lang: "zh" | 
               {d.copyPack.download}
             </button>
           </div>
+
+          {/* 下一步：计划已生成，继续走完投流 */}
+          <div className="mt-4 rounded-xl border border-signal/30 bg-signal/[0.04] p-4">
+            <p className="text-sm font-semibold text-ink">🚀 {d.nextStep.title}</p>
+            <p className="mt-1 text-xs text-ink/55">{d.nextStep.hint}</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <a
+                href="/campaigns"
+                className="rounded-lg bg-signal px-3 py-1.5 text-sm font-medium text-white hover:opacity-90"
+              >
+                📢 {d.nextStep.toCampaigns} →
+              </a>
+              <a
+                href="/tracking-links"
+                className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink/70 hover:bg-ink/5"
+              >
+                🔗 {d.nextStep.toTracking} →
+              </a>
+              <a
+                href="/monitoring"
+                className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink/70 hover:bg-ink/5"
+              >
+                📊 {d.nextStep.toMonitoring} →
+              </a>
+            </div>
+          </div>
         </>
       ) : null}
     </div>

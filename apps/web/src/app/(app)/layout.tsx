@@ -57,8 +57,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     : [
         {
           title: s.start,
-          pinned: true,
-          items: [
+                    items: [
             { href: "/launch", label: `① ${t.launch.title}` },
             { href: "/dashboard", label: t.common.nav.dashboard },
             { href: "/quickstart", label: t.quickstart.pageTitle },
@@ -66,15 +65,14 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         },
         {
           title: s.affiliate,
-          pinned: true,
-          items: [
+                    items: [
             { href: "/affiliate/beginner-sop", label: ni.affiliateBeginnerSop },
             { href: "/networks", label: ni.connectNetworks, phase: ph.selection },
             { href: "/offers", label: ni.offerList, phase: ph.selection },
             { href: "/offers/new", label: ni.offerNewImport, phase: ph.selection },
             {
               href: "/keywords/starter?tab=research",
-              label: ni.keywordResearch,
+              label: ni.keywords,
               phase: ph.selection,
             },
             { href: "/ai/analyze", label: t.ai.nav.analyze, phase: ph.analysis },
@@ -83,12 +81,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
               label: t.common.nav.landingPages,
               phase: ph.creative,
             },
-            { href: "/ads/auto-create", label: ni.launchAds, phase: ph.creative },
-            {
-              href: "/keywords/starter?tab=launch",
-              label: ni.keywordLaunch,
-              phase: ph.traffic,
-            },
+            { href: "/ads/auto-create", label: ni.launchAds, phase: ph.traffic },
             { href: "/campaigns", label: t.common.nav.campaigns, phase: ph.traffic },
             { href: "/monitoring", label: ni.trafficMonitoring, phase: ph.monitor },
             {
@@ -105,8 +98,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         },
         {
           title: s.amazon,
-          pinned: true,
-          items: [
+                    items: [
             { href: "/amazon/manual-guide", label: ni.amazonManualGuide },
             // PA-API config page: admin-only (API credentials), hidden from members.
             ...(isAdmin
@@ -136,8 +128,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         },
         {
           title: s.cashback,
-          pinned: true,
-          items: [
+                    items: [
             { href: "/cashback/quickstart", label: ni.cashbackQuickstart },
             { href: "/cashback/offers", label: ni.cashbackOffers, phase: ph.selection },
             { href: "/cashback/monitor", label: ni.cashbackMonitor, phase: ph.selection },
@@ -175,8 +166,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         },
         {
           title: s.reports,
-          pinned: true,
-          items: [
+                    items: [
             { href: "/tracking-links", label: t.common.nav.trackingLinks },
             { href: "/clicks", label: t.common.nav.clicks },
             { href: "/conversions", label: t.common.nav.conversions },

@@ -193,6 +193,17 @@ export function LanderPipelineClient({
             >
               {t.abtest.openExperiments}
             </a>
+            {/* 下一步：落地页定稿 → 自动化广告 */}
+            <div className="rounded-xl border border-signal/30 bg-signal/[0.04] p-4">
+              <p className="text-sm font-semibold text-ink">🚀 {t.abtest.nextStepTitle}</p>
+              <p className="mt-1 text-xs text-ink/55">{t.abtest.nextStepHint}</p>
+              <a
+                href="/ads/auto-create"
+                className="mt-2 inline-block rounded-lg bg-signal px-3 py-1.5 text-sm font-medium text-white hover:opacity-90"
+              >
+                📢 {t.abtest.nextStepAds}
+              </a>
+            </div>
           </div>
         ) : null}
 

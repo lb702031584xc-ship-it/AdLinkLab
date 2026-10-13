@@ -143,6 +143,25 @@ export default async function CampaignsPage({
         basePath="/campaigns"
         labels={paginationLabels(t)}
       />
+      {/* 下一步：广告跑起来后做归因和监控 */}
+      <div className="mt-4 rounded-xl border border-signal/30 bg-signal/[0.04] p-4">
+        <p className="text-sm font-semibold text-ink">🚀 {t.entities.campaigns.nextTitle}</p>
+        <p className="mt-1 text-xs text-ink/55">{t.entities.campaigns.nextHint}</p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <a
+            href="/tracking-links"
+            className="rounded-lg bg-signal px-3 py-1.5 text-sm font-medium text-white hover:opacity-90"
+          >
+            🔗 {t.entities.campaigns.toTracking} →
+          </a>
+          <a
+            href="/monitoring"
+            className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink/70 hover:bg-ink/5"
+          >
+            📊 {t.entities.campaigns.toMonitoring} →
+          </a>
+        </div>
+      </div>
     </div>
   );
 }
