@@ -14,6 +14,7 @@ import {
 import { TermsClient } from "./terms-client";
 import { ComplianceClient } from "./compliance-client";
 import { TrafficPlannerClient } from "./traffic-planner-client";
+import { BrandBiddingClient } from "./brand-bidding-client";
 import type { AiUrlCheckResult, TrafficPlanResult } from "@/lib/api/ai";
 
 export type WorksheetSource = "affiliate" | "amazon" | "cashback";
@@ -782,6 +783,17 @@ export function WorksheetClient({
         onToggle={() => toggleStep(4)}
       >
         <TrafficPlannerClient showSetupNudge={false} hideHeader onResult={setTrafficResult} />
+        <BrandBiddingClient
+          initialKeyword={offer?.name ?? mName}
+          initialDomain={(() => {
+            try {
+              const u = offer?.destinationUrl || mUrl;
+              return u ? new URL(u).hostname.replace(/^www\./, "") : "";
+            } catch {
+              return "";
+            }
+          })()}
+        />
       </StepCard>
 
       {/* Final verdict */}

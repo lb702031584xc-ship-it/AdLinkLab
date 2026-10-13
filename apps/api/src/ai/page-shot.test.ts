@@ -125,3 +125,21 @@ describe("fetchPageTextWithFallback", () => {
     ).rejects.toBe(original);
   });
 });
+
+describe("fetchPageTextWithFallback 400 不降级", () => {
+  it("SSRF 类 400 错误直接抛出，不截图", async () => {
+    const { fetchPageTextWithFallback } = await import("./page-shot.js");
+    const { AiError } = await import("./llm.js");
+    const ssrf = new AiError("URL target is not allowed", 400);
+    await expect(
+      fetchPageTextWithFallback("http://127.0.0.1/evil", {
+        fetchImpl: (async () => {
+          throw ssrf;
+        }) as never,
+        screenshotImpl: (async () => {
+          throw new Error("should not be called");
+        }) as never,
+      })
+    ).rejects.toBe(ssrf);
+  });
+});

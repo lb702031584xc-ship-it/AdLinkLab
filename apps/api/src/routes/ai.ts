@@ -29,6 +29,7 @@ import {
 import { fetchPage, fetchPageHtml } from "../ai/fetch-page.js";
 import { ocrImageText, OcrError } from "../offer-metrics/ocr.js";
 import { screenshotPage, PageBlockedError, fetchPageTextWithFallback } from "../ai/page-shot.js";
+import { checkBrandBidding } from "../ai/brand-bidding.js";
 import {
   checkUrlVerdict,
   detectAffiliateParams,
@@ -1375,6 +1376,20 @@ export async function registerAiRoutes(
         createdAt: r.createdAt.toISOString(),
       })),
     };
+  });
+
+  /**
+   * 品牌词投流检查：查某品牌词在 Google 上的广告主（官方 vs 非官方），
+   * 给出投流评估。数据源 DataForSEO SERP（凭证：AI 设置 → 流量信号凭证）；
+   * 无凭证时返回 unavailable + 手动核查指引，绝不编造。
+   */
+  app.post("/api/v1/ai/brand-bidding", async (request) => {
+    const info = await requireSession(deps, request);
+    void info;
+    const body = (request.body ?? {}) as { brandKeyword?: unknown; officialDomain?: unknown };
+    const brandKeyword = typeof body.brandKeyword === "string" ? body.brandKeyword.trim() : "";
+    const officialDomain = typeof body.officialDomain === "string" ? body.officialDomain.trim() : "";
+    return checkBrandBidding(brandKeyword, officialDomain, { prisma: deps.prisma });
   });
 
   /** 单条抓取记录详情（含插件发来的真实 HTML，给落地页拆解用）。 */

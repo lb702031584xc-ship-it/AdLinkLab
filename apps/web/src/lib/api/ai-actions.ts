@@ -20,6 +20,7 @@ import {
   listAnalyses,
   listOfferCaptures,
   getOfferCapture,
+  checkBrandBidding,
   saveAiSettings,
   screenOffers,
   type AiAnalysis,
@@ -28,6 +29,7 @@ import {
   type AiScreenResponse,
   type AiSettings,
   type AiTermsResult,
+  type BrandBiddingResult,
   type OfferCaptureDetail,
   type OfferCaptureItem,
   type AiUrlCheckResponse,
@@ -368,6 +370,21 @@ export async function getOfferCaptureAction(
     return {
       ok: false,
       error: e instanceof AiApiError ? e.message : "加载抓取记录失败",
+    };
+  }
+}
+
+/** 品牌词投流检查：谁在投这个品牌词（官方 vs 非官方）+ 评估。 */
+export async function checkBrandBiddingAction(
+  brandKeyword: string,
+  officialDomain: string
+): Promise<AiActionResult<BrandBiddingResult>> {
+  try {
+    return { ok: true, data: await checkBrandBidding(brandKeyword, officialDomain) };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof AiApiError ? e.message : "品牌词检查失败",
     };
   }
 }

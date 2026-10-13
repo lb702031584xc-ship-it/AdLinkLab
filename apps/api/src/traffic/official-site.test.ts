@@ -3,20 +3,20 @@
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-vi.mock("../ai/fetch-page.js", async (importOriginal) => {
+vi.mock("../ai/page-shot.js", async (importOriginal) => {
   const orig =
-    await importOriginal<typeof import("../ai/fetch-page.js")>();
-  return { ...orig, fetchPageHtml: vi.fn() };
+    await importOriginal<typeof import("../ai/page-shot.js")>();
+  return { ...orig, fetchPageTextWithFallback: vi.fn() };
 });
 
-import { fetchPageHtml } from "../ai/fetch-page.js";
+import { fetchPageTextWithFallback } from "../ai/page-shot.js";
 import {
   detectOfficialSite,
   extractDdgTargetDomain,
   isMarketplaceDomain,
 } from "./official-site.js";
 
-const mockFetchPageHtml = vi.mocked(fetchPageHtml);
+const mockFetchText = vi.mocked(fetchPageTextWithFallback);
 
 function ddgFetch(html: string, ok = true): typeof fetch {
   return (async () => ({
@@ -71,13 +71,10 @@ describe("extractDdgTargetDomain", () => {
 
 describe("detectOfficialSite", () => {
   it("品牌匹配 high：过滤平台域名并经首页验证确认", async () => {
-    mockFetchPageHtml.mockResolvedValue({
+    mockFetchText.mockResolvedValue({
       finalUrl: "https://www.anker.com/",
-      html: "<html></html>",
       text: "Anker Official Website - Charge Faster",
-      statusCode: 200,
-      redirectChain: [],
-      fetchMs: 10,
+      source: "html" as const,
     });
     const info = await detectOfficialSite("Anker", ddgFetch(ANKER_HTML));
     expect(info).toEqual({
@@ -86,17 +83,14 @@ describe("detectOfficialSite", () => {
       confidence: "high",
     });
     // amazon.com / facebook.com 应被过滤，首个候选即 anker.com
-    expect(mockFetchPageHtml).toHaveBeenCalledWith("https://anker.com");
+    expect(mockFetchText).toHaveBeenCalledWith("https://anker.com");
   });
 
   it("无品牌匹配时取首个非平台结果为 medium", async () => {
-    mockFetchPageHtml.mockResolvedValue({
+    mockFetchText.mockResolvedValue({
       finalUrl: "https://someblog.com/",
-      html: "",
       text: "Anker review blog, anker mentioned here",
-      statusCode: 200,
-      redirectChain: [],
-      fetchMs: 10,
+      source: "html" as const,
     });
     const html = link(enc("https://someblog.com/anker-review"), "review");
     const info = await detectOfficialSite("Anker", ddgFetch(html));
@@ -106,13 +100,10 @@ describe("detectOfficialSite", () => {
   });
 
   it("high 匹配但首页无品牌词 → 降级为 medium，found 仍 true", async () => {
-    mockFetchPageHtml.mockResolvedValue({
+    mockFetchText.mockResolvedValue({
       finalUrl: "https://www.anker.com/",
-      html: "",
       text: "Welcome to our store", // JS 渲染站可能抓不到文本
-      statusCode: 200,
-      redirectChain: [],
-      fetchMs: 10,
+      source: "screenshot" as const,
     });
     const info = await detectOfficialSite("Anker", ddgFetch(ANKER_HTML));
     expect(info).toEqual({
@@ -123,12 +114,10 @@ describe("detectOfficialSite", () => {
   });
 
   it("medium 匹配但首页无品牌词 → 保守判定 found=false", async () => {
-    mockFetchPageHtml.mockResolvedValue({
+    mockFetchText.mockResolvedValue({
       finalUrl: "https://someblog.com/",
-      html: "",
       text: "unrelated content",
-      statusCode: 200,
-      redirectChain: [],
+      source: "html" as const,
       fetchMs: 10,
     });
     const html = link(enc("https://someblog.com/anker-review"), "review");
@@ -145,7 +134,7 @@ describe("detectOfficialSite", () => {
     ].join("\n");
     const info = await detectOfficialSite("Anker", ddgFetch(html));
     expect(info).toEqual({ found: false, domain: null, confidence: "low" });
-    expect(mockFetchPageHtml).not.toHaveBeenCalled();
+    expect(mockFetchText).not.toHaveBeenCalled();
   });
 
   it("品牌为空 → low，不发起请求", async () => {
@@ -175,7 +164,7 @@ describe("detectOfficialSite", () => {
       detectOfficialSite("Anker", ddgFetch("", false))
     ).resolves.toEqual({ found: false, domain: null, confidence: "low" });
     // 首页抓取抛错 → 降级路径同样不抛错
-    mockFetchPageHtml.mockRejectedValue(new Error("dns fail"));
+    mockFetchText.mockRejectedValue(new Error("dns fail"));
     const info = await detectOfficialSite("Anker", ddgFetch(ANKER_HTML));
     expect(info.found).toBe(true); // high 降级 medium
     expect(info.confidence).toBe("medium");

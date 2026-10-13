@@ -180,7 +180,9 @@ export async function fetchPageTextWithFallback(
     const page = await fetchImpl(url);
     return { text: page.text, finalUrl: page.finalUrl, source: "html" };
   } catch (e) {
-    if (!(e instanceof AiError)) throw e;
+    // 只有服务端抓取失败（502 类：反爬/超时/网络）才降级截图；
+    // 400 类客户端错误（SSRF/非法 URL/页面过大）直接抛出。
+    if (!(e instanceof AiError) || e.statusCode === 400) throw e;
     const screenshotImpl = deps.screenshotImpl ?? screenshotPage;
     const ocrImpl = deps.ocrImpl ?? ocrImageText;
     const shot = await screenshotImpl(url);

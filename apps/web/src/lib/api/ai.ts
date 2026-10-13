@@ -734,6 +734,39 @@ export async function listOfferCaptures(): Promise<OfferCaptureItem[]> {
   return res.items ?? [];
 }
 
+export interface BrandBidder {
+  domain: string;
+  title: string | null;
+  isOfficial: boolean;
+}
+
+export type BrandBiddingVerdict = "no_ads" | "official_only" | "non_official_present";
+
+export interface BrandBiddingResult {
+  status: "ok" | "unavailable" | "error";
+  keyword: string;
+  officialDomain: string;
+  adsFound: number;
+  officialAds: number;
+  nonOfficialAds: number;
+  nonOfficial: BrandBidder[];
+  verdict: BrandBiddingVerdict | null;
+  assessment: string[];
+  checkedAt: string;
+  source: string;
+}
+
+/** 品牌词投流检查：谁在投这个品牌词（官方 vs 非官方）+ 评估。 */
+export async function checkBrandBidding(
+  brandKeyword: string,
+  officialDomain: string
+): Promise<BrandBiddingResult> {
+  return aiFetch<BrandBiddingResult>("/api/v1/ai/brand-bidding", {
+    method: "POST",
+    body: JSON.stringify({ brandKeyword, officialDomain }),
+  });
+}
+
 /** 单条抓取记录详情（含 HTML）。 */
 export async function getOfferCapture(id: string): Promise<OfferCaptureDetail> {
   return aiFetch<OfferCaptureDetail>(`/api/v1/ai/offer-captures/${encodeURIComponent(id)}`, {
