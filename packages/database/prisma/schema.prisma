@@ -227,6 +227,7 @@ model Tenant {
   offerMetrics          OfferMetrics[]
   /// 选品流水线运行记录（第五批，additive）
   productPipelineRuns   ProductPipelineRun[]
+  offerCaptures         OfferCapture[]
   denylistEntries       DenylistEntry[]
   comboTestRuns         ComboTestRun[]
   asinWatches           AsinWatch[]
@@ -1961,4 +1962,22 @@ model ProductPipelineRun {
   tenant Tenant @relation(fields: [tenantId], references: [id])
 
   @@map("product_pipeline_runs")
+}
+
+model OfferCapture {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  url         String
+  title       String?
+  description String?
+  price       Decimal? @db.Decimal
+  currency    String?
+  pageText    String   @map("page_text")
+  source      String   @default("extension")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, createdAt(sort: Desc)], map: "offer_captures_tenant_created_idx")
+  @@map("offer_captures")
 }

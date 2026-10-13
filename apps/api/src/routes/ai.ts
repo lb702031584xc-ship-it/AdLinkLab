@@ -1293,6 +1293,88 @@ export async function registerAiRoutes(
   });
 
   /**
+   * 浏览器插件抓取：用户在自己真实浏览器（Chrome 插件）里打开 offer 页
+   * （Amazon 等反爬站点也能抓），插件提取渲染后正文 POST 到这里。
+   * 插件带网站登录态 cookie（credentials:include），走 session 认证，
+   * 无需 API Key。抓取记录存 offer_captures，供一键推演报告选用。
+   */
+  app.post("/api/v1/ai/offer-capture", async (request) => {
+    const info = await requireSession(deps, request);
+    const body = (request.body ?? {}) as {
+      url?: unknown;
+      title?: unknown;
+      text?: unknown;
+      html?: unknown;
+    };
+    const url = typeof body.url === "string" ? body.url.trim() : "";
+    if (!url) throw new ValidationError("url is required");
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw new ValidationError("url 无效");
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new ValidationError("只支持 http(s) 链接");
+    }
+    const text = typeof body.text === "string" ? body.text.slice(0, 20000) : "";
+    if (!text.trim()) throw new ValidationError("页面正文为空，抓取失败");
+    const html = typeof body.html === "string" ? body.html.slice(0, 200000) : "";
+    const title = typeof body.title === "string" && body.title.trim() ? body.title.trim().slice(0, 500) : null;
+    const meta = extractOfferMeta(html, text);
+    const cleanText = text.replace(/\s+/g, " ").trim();
+    const saved = await deps.prisma.offerCapture.create({
+      data: {
+        tenantId: info.tenantId,
+        url: parsed.toString(),
+        title,
+        description: meta.description ?? cleanText.slice(0, 300) ?? null,
+        price: meta.price ?? undefined,
+        currency: meta.currency,
+        pageText: cleanText.slice(0, 20000),
+        source: "extension",
+      },
+    });
+    return {
+      id: saved.id,
+      finalUrl: parsed.toString(),
+      title,
+      description: meta.description ?? cleanText.slice(0, 300) ?? null,
+      price: meta.price,
+      currency: meta.currency,
+      text: cleanText.slice(0, 4000),
+      source: "extension" as const,
+    };
+  });
+
+  /** 插件抓取记录（本租户最近 10 条），供一键推演报告选用。 */
+  app.get("/api/v1/ai/offer-captures", async (request) => {
+    const info = await requireSession(deps, request);
+    const rows = await deps.prisma.offerCapture.findMany({
+      where: { tenantId: info.tenantId },
+      orderBy: { createdAt: "desc" },
+      take: 10,
+      select: {
+        id: true, url: true, title: true, description: true,
+        price: true, currency: true, pageText: true, createdAt: true,
+      },
+    });
+    return {
+      items: rows.map((r) => ({
+        id: r.id,
+        finalUrl: r.url,
+        title: r.title,
+        description: r.description,
+        price: r.price == null ? null : Number(r.price),
+        currency: r.currency,
+        text: (r.pageText ?? "").slice(0, 4000),
+        source: "extension" as const,
+        createdAt: r.createdAt.toISOString(),
+      })),
+    };
+  });
+
+  /**
    * 截图 OCR 兜底：offer 页抓不到（反爬）时，用户上传截图，
    * tesseract 识别全文 → 提取价格 → 返回正文给推演报告用。
    * multipart 单图 ≤8MB；图片只在内存处理，不落盘。

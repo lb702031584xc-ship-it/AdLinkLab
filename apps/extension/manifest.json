@@ -1,0 +1,1 @@
+{"action":{"default_popup":"popup.html","default_title":"抓取当前 offer 页面"},"description":"在任意 offer 页面一键抓取，发送到 AdLinkLab 一键推演报告。Amazon 等反爬站点也能抓，因为用的是你自己的浏览器。","host_permissions":["https://adtlab.xyz/*"],"manifest_version":3,"name":"AdLinkLab Offer 抓取","options_page":"options.html","permissions":["activeTab","scripting","storage"],"version":"1.0.0"}

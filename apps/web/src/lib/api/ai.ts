@@ -711,8 +711,21 @@ export interface OfferMetaResult {
   currency: string | null;
   /** 广告生成用的正文（随 blueprint 请求带回后端） */
   text: string;
-  /** html=直接抓取，screenshot=无头浏览器截图+OCR */
-  source: "html" | "screenshot";
+  /** html=直接抓取，screenshot=无头浏览器截图+OCR，extension=浏览器插件 */
+  source: "html" | "screenshot" | "extension";
+}
+
+export interface OfferCaptureItem extends OfferMetaResult {
+  id: string;
+  createdAt: string;
+}
+
+/** 浏览器插件抓取记录（最近 10 条）。 */
+export async function listOfferCaptures(): Promise<OfferCaptureItem[]> {
+  const res = await aiFetch<{ items: OfferCaptureItem[] }>("/api/v1/ai/offer-captures", {
+    method: "GET",
+  });
+  return res.items ?? [];
 }
 
 /** 抓取 offer 页面：标题/描述/价格自动提取，抓不到返回 null。 */

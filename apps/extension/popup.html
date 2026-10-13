@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<style>
+  body { width: 320px; padding: 14px; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; font-size: 13px; color: #1a1a1a; }
+  h1 { font-size: 15px; margin: 0 0 8px; }
+  .url { color: #666; word-break: break-all; margin-bottom: 10px; font-size: 12px; }
+  button { width: 100%; padding: 10px; font-size: 14px; border: none; border-radius: 8px; background: #1a73e8; color: #fff; cursor: pointer; }
+  button:disabled { background: #aaa; cursor: default; }
+  .result { margin-top: 10px; padding: 10px; border-radius: 8px; background: #f1f8e9; display: none; }
+  .error { margin-top: 10px; padding: 10px; border-radius: 8px; background: #fdecea; display: none; }
+  .row { margin: 4px 0; }
+  .label { color: #666; }
+  a { color: #1a73e8; }
+  .foot { margin-top: 10px; font-size: 12px; color: #888; text-align: center; }
+</style>
+</head>
+<body>
+  <h1>📥 AdLinkLab Offer 抓取</h1>
+  <div class="url" id="pageUrl">读取当前页面…</div>
+  <button id="capture">抓取本页并发送</button>
+  <div class="result" id="result"></div>
+  <div class="error" id="error"></div>
+  <div class="foot"><a href="#" id="openSite">去网站打开一键推演报告 →</a></div>
+  <script src="popup.js"></script>
+</body>
+</html>

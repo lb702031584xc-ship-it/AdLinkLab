@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>AdLinkLab Offer 抓取 - 设置</title>
+<style>
+  body { max-width: 520px; margin: 40px auto; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; font-size: 14px; color: #1a1a1a; padding: 0 16px; }
+  h1 { font-size: 18px; }
+  label { display: block; margin: 16px 0 6px; color: #555; }
+  input { width: 100%; padding: 10px; font-size: 14px; border: 1px solid #ccc; border-radius: 8px; box-sizing: border-box; }
+  button { margin-top: 16px; padding: 10px 24px; font-size: 14px; border: none; border-radius: 8px; background: #1a73e8; color: #fff; cursor: pointer; }
+  .tip { margin-top: 16px; color: #666; font-size: 13px; line-height: 1.7; }
+  .saved { color: #2e7d32; margin-top: 10px; display: none; }
+</style>
+</head>
+<body>
+  <h1>⚙️ AdLinkLab Offer 抓取 - 设置</h1>
+  <label for="siteUrl">AdLinkLab 网站地址</label>
+  <input id="siteUrl" placeholder="https://adtlab.xyz" />
+  <button id="save">保存</button>
+  <div class="saved" id="saved">✓ 已保存</div>
+  <div class="tip">
+    插件用你浏览器里 AdLinkLab 的登录态发送抓取结果，无需配置 API Key。<br />
+    如果换了域名/自建站点，在这里改成你的网站地址即可（注意 manifest.json 的 host_permissions 也要对应加上该域名）。
+  </div>
+  <script src="options.js"></script>
+</body>
+</html>

@@ -10,9 +10,10 @@ import {
   generateBlueprintAction,
   fetchOfferMetaAction,
   fetchOfferOcrAction,
+  listOfferCapturesAction,
   type AiActionResult,
 } from "@/lib/api/ai-actions";
-import type { BlueprintInput, BlueprintResult, OfferMetaResult } from "@/lib/api/ai";
+import type { BlueprintInput, BlueprintResult, OfferCaptureItem, OfferMetaResult } from "@/lib/api/ai";
 
 type Dict = AiBlueprintDict;
 
@@ -161,6 +162,23 @@ export function BlueprintClient({ showSetupNudge }: { showSetupNudge: boolean })
   const [fetchMsg, setFetchMsg] = useState<string | null>(null);
   const [fetchOk, setFetchOk] = useState(false);
   const [pageText, setPageText] = useState<string | null>(null);
+  const [captures, setCaptures] = useState<OfferCaptureItem[]>([]);
+  const [capturesLoading, setCapturesLoading] = useState(false);
+  const [capturesLoaded, setCapturesLoaded] = useState(false);
+  const [showCaptures, setShowCaptures] = useState(false);
+
+  async function loadCaptures() {
+    setCapturesLoading(true);
+    const res = await listOfferCapturesAction();
+    setCapturesLoading(false);
+    setCapturesLoaded(true);
+    if (res.ok) setCaptures(res.data);
+  }
+
+  function useCapture(c: OfferCaptureItem) {
+    setOfferUrl(c.finalUrl);
+    applyMeta(c);
+  }
 
   const canSubmit =
     offerName.trim() && productDescription.trim() && Number(commissionValue) > 0 && !busy;
@@ -187,7 +205,11 @@ export function BlueprintClient({ showSetupNudge }: { showSetupNudge: boolean })
     if (meta.currency && currency === "USD") setCurrency(meta.currency);
     if (meta.text) setPageText(meta.text);
     setFetchOk(true);
-    setFetchMsg(meta.source === "screenshot" ? d.form.fetchedByScreenshot : d.form.fetched);
+    setFetchMsg(
+      meta.source === "screenshot" ? d.form.fetchedByScreenshot
+      : meta.source === "extension" ? d.form.capturedUsed
+      : d.form.fetched
+    );
   }
 
   async function onOcrFile(file: File | undefined) {
@@ -291,6 +313,34 @@ export function BlueprintClient({ showSetupNudge }: { showSetupNudge: boolean })
           {pageText ? (
             <p className="mt-1 text-xs text-ink/50">📄 {d.form.pageTextNote}</p>
           ) : null}
+          <div className="mt-2">
+            <button type="button" onClick={() => { setShowCaptures((v) => !v); if (!capturesLoaded) loadCaptures(); }}
+              className="text-xs text-ink/60 hover:text-ink">
+              🧩 {d.form.capturesToggle} {showCaptures ? "▲" : "▼"}
+            </button>
+            {showCaptures ? (
+              <div className="mt-2 space-y-1.5 rounded-lg border border-ink/10 bg-ink/[0.02] p-2">
+                {capturesLoading ? (
+                  <p className="text-xs text-ink/50">{d.form.capturesLoading}</p>
+                ) : captures.length === 0 ? (
+                  <p className="text-xs text-ink/50">{d.form.capturesEmpty}</p>
+                ) : captures.map((c) => (
+                  <div key={c.id} className="flex items-center justify-between gap-2 rounded-md bg-white/60 px-2 py-1.5">
+                    <div className="min-w-0 text-xs">
+                      <p className="truncate font-medium text-ink">{c.title || c.finalUrl}</p>
+                      <p className="truncate text-ink/50">
+                        {c.price != null ? `${c.price} ${c.currency ?? ""} · ` : ""}{new Date(c.createdAt).toLocaleString()}
+                      </p>
+                    </div>
+                    <button type="button" onClick={() => useCapture(c)}
+                      className="shrink-0 rounded-md border border-ink/15 px-2 py-1 text-xs text-ink hover:bg-ink/5">
+                      {d.form.useCapture}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
         </div>
         <div className="md:col-span-2">
           <label className={labelCls}>{d.form.productDescription} *</label>
