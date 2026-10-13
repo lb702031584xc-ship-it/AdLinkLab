@@ -27,6 +27,7 @@ import {
   type TrafficPlanInput,
 } from "../ai/traffic-planner.js";
 import { fetchPage, fetchPageHtml } from "../ai/fetch-page.js";
+import { ocrImageText, OcrError } from "../offer-metrics/ocr.js";
 import {
   checkUrlVerdict,
   detectAffiliateParams,
@@ -1266,6 +1267,54 @@ export async function registerAiRoutes(
       ...meta,
       /** 广告生成用的正文（前端随 blueprint 请求带回） */
       text: page.text.slice(0, 4000),
+    };
+  });
+
+  /**
+   * 截图 OCR 兜底：offer 页抓不到（反爬）时，用户上传截图，
+   * tesseract 识别全文 → 提取价格 → 返回正文给推演报告用。
+   * multipart 单图 ≤8MB；图片只在内存处理，不落盘。
+   */
+  app.post("/api/v1/ai/offer-ocr", async (request) => {
+    const info = await requireSession(deps, request);
+    void info;
+    let part: Awaited<ReturnType<FastifyRequest["file"]>>;
+    try {
+      part = await request.file();
+    } catch {
+      throw new ValidationError("请上传一张 offer 页截图（multipart/form-data）");
+    }
+    if (!part) throw new ValidationError("请上传一张 offer 页截图");
+    const mimetype = part.mimetype ?? "";
+    if (!mimetype.startsWith("image/")) {
+      throw new ValidationError(`只接受图片文件，收到：${mimetype || "未知类型"}`);
+    }
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const chunk of part.file) {
+      size += (chunk as Buffer).length;
+      if (size > 8 * 1024 * 1024) throw new ValidationError("图片超过 8MB 上限");
+      chunks.push(chunk as Buffer);
+    }
+    const buf = Buffer.concat(chunks);
+    if (buf.length === 0) throw new ValidationError("图片为空，无法识别");
+    let ocr: { text: string; confidence: number | null };
+    try {
+      ocr = await ocrImageText(buf);
+    } catch (e) {
+      if (e instanceof OcrError) throw e;
+      throw new ValidationError("截图识别失败，请换一张更清晰的截图重试");
+    }
+    const text = ocr.text.replace(/\s+/g, " ").trim();
+    const meta = extractOfferMeta("", text);
+    return {
+      finalUrl: "",
+      title: null,
+      description: text.slice(0, 300) || null,
+      price: meta.price,
+      currency: meta.currency,
+      text: text.slice(0, 4000),
+      confidence: ocr.confidence,
     };
   });
 

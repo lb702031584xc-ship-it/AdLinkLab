@@ -7,6 +7,7 @@ import {
   extractMetricsFromText,
   ocrImageMetrics,
   OcrError,
+  OcrError,
 } from "./ocr.js";
 
 describe("extractMetricsFromText", () => {
@@ -89,5 +90,25 @@ describe("ocrImageMetrics", () => {
 
   it("空 buffer → OcrError", async () => {
     await expect(ocrImageMetrics(Buffer.alloc(0))).rejects.toBeInstanceOf(OcrError);
+  });
+});
+
+describe("ocrImageText", () => {
+  it("返回识别全文与置信度", async () => {
+    const { ocrImageText } = await import("./ocr.js");
+    const r = await ocrImageText(Buffer.from("fake"), {
+      recognizeImpl: async () => ({ text: "NordVPN $65.88", confidence: 90 }),
+    });
+    expect(r.text).toBe("NordVPN $65.88");
+    expect(r.confidence).toBe(90);
+  });
+
+  it("无文字 → OcrError", async () => {
+    const { ocrImageText } = await import("./ocr.js");
+    await expect(
+      ocrImageText(Buffer.from("fake"), {
+        recognizeImpl: async () => ({ text: "   ", confidence: null }),
+      })
+    ).rejects.toBeInstanceOf(OcrError);
   });
 });

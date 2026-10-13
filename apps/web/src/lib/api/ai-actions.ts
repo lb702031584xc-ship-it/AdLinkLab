@@ -6,6 +6,9 @@
  */
 import { getLang } from "@/i18n/lang";
 import { getDictionary } from "@/i18n/dictionaries";
+import { redirect } from "next/navigation";
+import { getApiBaseUrl } from "./entities-config";
+import { sessionHeaders } from "./session";
 import {
   AiApiError,
   analyzeOffer,
@@ -298,4 +301,41 @@ export async function fetchOfferMetaAction(
       lang === "zh" ? "页面抓取失败，该站可能屏蔽了服务器抓取，请手动填写。" : "Page fetch failed; the site may block server-side fetching. Fill in manually."
     );
   }
+}
+
+/** 截图 OCR 兜底：offer 页抓不到时上传截图识别（multipart）。 */
+export async function fetchOfferOcrAction(
+  formData: FormData
+): Promise<AiActionResult<OfferMetaResult>> {
+  const lang = await getLang();
+  const file = formData.get("screenshot");
+  if (!(file instanceof File) || file.size === 0) {
+    return { ok: false, error: lang === "zh" ? "请先选择一张截图。" : "Please choose a screenshot first." };
+  }
+  if (file.size > 8 * 1024 * 1024) {
+    return { ok: false, error: lang === "zh" ? "图片超过 8MB 上限。" : "Image exceeds the 8MB limit." };
+  }
+  const out = new FormData();
+  out.append("screenshot", file, file.name || "screenshot.png");
+  let res: Response;
+  try {
+    res = await fetch(`${getApiBaseUrl()}/api/v1/ai/offer-ocr`, {
+      method: "POST",
+      headers: { ...(await sessionHeaders()) },
+      body: out,
+      cache: "no-store",
+    });
+  } catch {
+    return { ok: false, error: lang === "zh" ? "网络请求失败，请稍后重试。" : "Network request failed, please try again." };
+  }
+  if (res.status === 401) redirect("/login");
+  if (!res.ok) {
+    let message = lang === "zh" ? `截图识别失败（${res.status}）` : `OCR failed (${res.status})`;
+    try {
+      const body = (await res.json()) as { message?: string; error?: string };
+      message = body.message ?? body.error ?? message;
+    } catch { /* ignore */ }
+    return { ok: false, error: message };
+  }
+  return { ok: true, data: (await res.json()) as OfferMetaResult };
 }

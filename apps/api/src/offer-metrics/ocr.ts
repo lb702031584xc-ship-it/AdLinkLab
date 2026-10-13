@@ -112,6 +112,32 @@ async function recognizeWithTesseract(image: Buffer): Promise<{
 }
 
 /**
+ * 对图片做 OCR，只返回识别全文与置信度（不提取指标）。
+ * 给一键推演报告的截图兜底用：全文喂给 extractOfferMeta 做价格提取、
+ * 取前几百字当产品描述、全文（截断）喂给广告生成。
+ */
+export async function ocrImageText(
+  image: Buffer,
+  deps: OcrDeps = {}
+): Promise<{ text: string; confidence: number | null }> {
+  if (!image || image.length === 0) {
+    throw new OcrError("图片为空，无法识别");
+  }
+  const recognize = deps.recognizeImpl ?? recognizeWithTesseract;
+  try {
+    const r = await recognize(image);
+    if (!r.text || !r.text.trim()) {
+      throw new OcrError("截图中未识别出任何文字，请换一张更清晰的截图重试");
+    }
+    return { text: r.text, confidence: r.confidence };
+  } catch (e) {
+    if (e instanceof OcrError) throw e;
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new OcrError(`截图识别失败（${msg}），请换一张更清晰的截图重试`);
+  }
+}
+
+/**
  * 对图片做 OCR 并提取指标。图片只在内存里处理，不落盘、不存库。
  * 全文识别失败 → 抛 OcrError（422）。
  */

@@ -9,6 +9,7 @@ import { zh as bpZh, en as bpEn, type AiBlueprintDict } from "@/i18n/dict/ai-blu
 import {
   generateBlueprintAction,
   fetchOfferMetaAction,
+  fetchOfferOcrAction,
   type AiActionResult,
 } from "@/lib/api/ai-actions";
 import type { BlueprintInput, BlueprintResult } from "@/lib/api/ai";
@@ -176,7 +177,10 @@ export function BlueprintClient({ showSetupNudge }: { showSetupNudge: boolean })
       setFetchMsg(d.form.fetchFailed + (res.error ? `：${res.error}` : ""));
       return;
     }
-    const meta = res.data;
+    applyMeta(res.data);
+  }
+
+  function applyMeta(meta: { title: string | null; description: string | null; price: number | null; currency: string | null; text: string }) {
     if (meta.title && !offerName.trim()) setOfferName(meta.title);
     if (meta.description && !productDescription.trim()) setProductDescription(meta.description);
     if (meta.price != null && !avgPrice.trim()) setAvgPrice(String(meta.price));
@@ -184,6 +188,22 @@ export function BlueprintClient({ showSetupNudge }: { showSetupNudge: boolean })
     if (meta.text) setPageText(meta.text);
     setFetchOk(true);
     setFetchMsg(d.form.fetched);
+  }
+
+  async function onOcrFile(file: File | undefined) {
+    if (!file || fetching) return;
+    setFetching(true);
+    setFetchMsg(null);
+    setFetchOk(false);
+    const fd = new FormData();
+    fd.append("screenshot", file);
+    const res = await fetchOfferOcrAction(fd);
+    setFetching(false);
+    if (!res.ok) {
+      setFetchMsg((lang === "en" ? "Screenshot OCR failed: " : "截图识别失败：") + res.error);
+      return;
+    }
+    applyMeta(res.data);
   }
 
   async function onGenerate() {
@@ -259,6 +279,11 @@ export function BlueprintClient({ showSetupNudge }: { showSetupNudge: boolean })
               className="shrink-0 rounded-lg border border-ink/15 px-3 py-2 text-sm text-ink hover:bg-ink/5 disabled:opacity-50">
               {fetching ? d.form.fetching : d.form.fetch}
             </button>
+            <label className={`shrink-0 cursor-pointer rounded-lg border border-ink/15 px-3 py-2 text-sm text-ink hover:bg-ink/5 ${fetching ? "pointer-events-none opacity-50" : ""}`}>
+              📷 {d.form.ocr}
+              <input type="file" accept="image/*" className="hidden"
+                onChange={(e) => { onOcrFile(e.target.files?.[0]); e.target.value = ""; }} />
+            </label>
           </div>
           {fetchMsg ? (
             <p className={`mt-1 text-xs ${fetchOk ? "text-green-700" : "text-amber-700"}`}>{fetchMsg}</p>
