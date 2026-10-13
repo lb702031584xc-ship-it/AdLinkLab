@@ -119,6 +119,12 @@ export const zh = {
       ocrFailed: "截图识别失败",
     },
   },
+  captures: {
+    toggle: "浏览器插件抓取记录",
+    loading: "加载中…",
+    empty: "暂无插件抓取记录。先在 Chrome 里装插件抓一页，回来这里选用。",
+    use: "选用",
+  },
   brandBidding: {
     title: "品牌词投流检查",
     description: "查这个品牌词在 Google 上谁在投广告：官方独占，还是有非官方（affiliate）在投。数据源自 DataForSEO SERP（美国/桌面端）。",
@@ -1076,6 +1082,12 @@ export const en: typeof zh = {
       ocrReviewNote: "Recognized values — please verify",
       ocrFailed: "Screenshot recognition failed",
     },
+  },
+  captures: {
+    toggle: "Browser extension captures",
+    loading: "Loading…",
+    empty: "No extension captures yet. Capture a page with the Chrome extension first.",
+    use: "Use",
   },
   brandBidding: {
     title: "Brand keyword ad check",

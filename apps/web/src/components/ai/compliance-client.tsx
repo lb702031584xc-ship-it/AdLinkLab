@@ -8,6 +8,7 @@ import {
   saveAiSettingsAction,
 } from "@/lib/api/ai-actions";
 import type { AiUrlCheckResult, UrlCheckVerdict } from "@/lib/api/ai";
+import { CapturePicker } from "@/components/ai/capture-picker";
 
 const MAX_URLS = 20;
 
@@ -194,6 +195,11 @@ export function ComplianceClient({
           <label className={labelClass} htmlFor="check-urls">
             {d.urlsLabel}
           </label>
+          <CapturePicker
+            onPick={(c) => {
+              setUrlsText((prev) => (prev.trim() ? `${prev.trim()}\n${c.finalUrl}` : c.finalUrl));
+            }}
+          />
           <textarea
             id="check-urls"
             rows={8}

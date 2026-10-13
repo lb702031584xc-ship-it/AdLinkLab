@@ -19,6 +19,7 @@ import type {
   TrafficPlanKeywordInput,
   TrafficPlanResult,
 } from "@/lib/api/ai";
+import { CapturePicker } from "@/components/ai/capture-picker";
 
 type Dict = TrafficPlannerDict;
 type Mode = "landing" | "direct";
@@ -428,6 +429,11 @@ export function TrafficPlannerClient({
         <div className={cardCls}>
           <div className="mb-3">
             <h3 className="text-sm font-semibold text-ink">{d.offerSection}</h3>
+            <CapturePicker
+              onPick={(c) => {
+                if (c.title) setOfferName(c.title);
+              }}
+            />
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="block">

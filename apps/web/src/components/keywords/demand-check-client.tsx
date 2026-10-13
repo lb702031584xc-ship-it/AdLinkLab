@@ -10,6 +10,7 @@ import type { KeywordStarterDict } from "@/i18n/dict/keyword-starter";
 import { useWorkState } from "@/lib/use-work-state";
 import { recommendKeywordsAction } from "@/lib/api/ai-actions";
 import type { RecommendedKeyword } from "@/lib/api/ai";
+import { CapturePicker } from "@/components/ai/capture-picker";
 
 type Trend = "up" | "flat" | "down";
 type Competition = "low" | "medium" | "high";
@@ -359,6 +360,12 @@ export function DemandCheckClient({
           <h3 className="text-sm font-semibold text-ink">🤖 {d.aiRecommendTitle}</h3>
         </div>
         <p className="mt-1 text-xs text-ink/50">{d.aiRecommendHint}</p>
+        <CapturePicker
+          onPick={(c) => {
+            const v = [c.title, c.description].filter(Boolean).join(" ").slice(0, 500);
+            if (v) setAiProductInput(v);
+          }}
+        />
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <input
             value={aiProductInput}

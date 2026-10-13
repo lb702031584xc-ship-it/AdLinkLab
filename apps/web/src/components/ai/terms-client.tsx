@@ -5,7 +5,8 @@ import Link from "next/link";
 import { useDict } from "@/i18n/use-dict";
 import { formatDateTime } from "@/lib/api/entities-config";
 import { EntityPageHeader } from "@/components/entities/ui";
-import { analyzeTermsAction, screenOffersAction } from "@/lib/api/ai-actions";
+import { analyzeTermsAction, screenOffersAction, getOfferCaptureAction } from "@/lib/api/ai-actions";
+import { CapturePicker } from "@/components/ai/capture-picker";
 import type {
   AiScreenResultItem,
   AiTermsResult,
@@ -369,6 +370,12 @@ export function TermsClient({
             <label className={labelClass} htmlFor="terms-text">
               {d.textLabel}
             </label>
+            <CapturePicker
+              onPick={async (c) => {
+                const r = await getOfferCaptureAction(c.id);
+                if (r.ok && r.data.text) setText(r.data.text);
+              }}
+            />
             <textarea
               id="terms-text"
               rows={10}

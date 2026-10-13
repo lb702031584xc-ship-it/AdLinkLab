@@ -1411,7 +1411,7 @@ export async function registerAiRoutes(
       description: row.description,
       price: row.price == null ? null : Number(row.price),
       currency: row.currency,
-      text: (row.pageText ?? "").slice(0, 4000),
+      text: (row.pageText ?? "").slice(0, 12000),
       html: row.pageHtml ?? null,
       source: "extension" as const,
       createdAt: row.createdAt.toISOString(),
