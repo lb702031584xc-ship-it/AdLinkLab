@@ -166,6 +166,7 @@ export function BlueprintClient({ showSetupNudge }: { showSetupNudge: boolean })
   const [capturesLoading, setCapturesLoading] = useState(false);
   const [capturesLoaded, setCapturesLoaded] = useState(false);
   const [showCaptures, setShowCaptures] = useState(false);
+  const [showExtHelp, setShowExtHelp] = useState(false);
 
   async function loadCaptures() {
     setCapturesLoading(true);
@@ -306,7 +307,27 @@ export function BlueprintClient({ showSetupNudge }: { showSetupNudge: boolean })
               <input type="file" accept="image/*" className="hidden"
                 onChange={(e) => { onOcrFile(e.target.files?.[0]); e.target.value = ""; }} />
             </label>
+            <button type="button" onClick={() => setShowExtHelp((v) => !v)}
+              className="shrink-0 rounded-lg border border-ink/15 px-3 py-2 text-sm text-ink hover:bg-ink/5"
+              title={d.form.extHelpTitle}>
+              🧩 {d.form.extBtn}
+            </button>
           </div>
+          {showExtHelp ? (
+            <div className="mt-2 rounded-lg border border-ink/10 bg-ink/[0.02] p-3 text-xs leading-6 text-ink/70">
+              <p className="font-medium text-ink">{d.form.extHelpTitle}</p>
+              <p>{d.form.extHelpBody}</p>
+              <ol className="list-decimal pl-4">
+                <li>{d.form.extStep1}</li>
+                <li>{d.form.extStep2}</li>
+                <li>{d.form.extStep3}</li>
+                <li>{d.form.extStep4}</li>
+              </ol>
+              <a className="text-blue-700 underline" href="https://github.com/lb702031584xc-ship-it/adsgoogleHL/tree/main/apps/extension" target="_blank" rel="noreferrer">
+                {d.form.extRepoLink}
+              </a>
+            </div>
+          ) : null}
           {fetchMsg ? (
             <p className={`mt-1 text-xs ${fetchOk ? "text-green-700" : "text-amber-700"}`}>{fetchMsg}</p>
           ) : null}
