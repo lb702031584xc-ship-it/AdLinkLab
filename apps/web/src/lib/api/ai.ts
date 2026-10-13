@@ -711,6 +711,8 @@ export interface OfferMetaResult {
   currency: string | null;
   /** 广告生成用的正文（随 blueprint 请求带回后端） */
   text: string;
+  /** html=直接抓取，screenshot=无头浏览器截图+OCR */
+  source: "html" | "screenshot";
 }
 
 /** 抓取 offer 页面：标题/描述/价格自动提取，抓不到返回 null。 */

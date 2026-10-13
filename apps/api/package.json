@@ -28,6 +28,7 @@
     "bullmq": "^5.34.0",
     "fastify": "^5.2.0",
     "ioredis": "^5.4.2",
+    "puppeteer-core": "^25.13.0",
     "tesseract.js": "^7.0.0"
   },
   "devDependencies": {

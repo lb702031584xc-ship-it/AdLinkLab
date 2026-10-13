@@ -12,7 +12,7 @@ import {
   fetchOfferOcrAction,
   type AiActionResult,
 } from "@/lib/api/ai-actions";
-import type { BlueprintInput, BlueprintResult } from "@/lib/api/ai";
+import type { BlueprintInput, BlueprintResult, OfferMetaResult } from "@/lib/api/ai";
 
 type Dict = AiBlueprintDict;
 
@@ -180,14 +180,14 @@ export function BlueprintClient({ showSetupNudge }: { showSetupNudge: boolean })
     applyMeta(res.data);
   }
 
-  function applyMeta(meta: { title: string | null; description: string | null; price: number | null; currency: string | null; text: string }) {
+  function applyMeta(meta: OfferMetaResult) {
     if (meta.title && !offerName.trim()) setOfferName(meta.title);
     if (meta.description && !productDescription.trim()) setProductDescription(meta.description);
     if (meta.price != null && !avgPrice.trim()) setAvgPrice(String(meta.price));
     if (meta.currency && currency === "USD") setCurrency(meta.currency);
     if (meta.text) setPageText(meta.text);
     setFetchOk(true);
-    setFetchMsg(d.form.fetched);
+    setFetchMsg(meta.source === "screenshot" ? d.form.fetchedByScreenshot : d.form.fetched);
   }
 
   async function onOcrFile(file: File | undefined) {

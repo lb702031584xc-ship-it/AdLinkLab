@@ -28,6 +28,7 @@ import {
 } from "../ai/traffic-planner.js";
 import { fetchPage, fetchPageHtml } from "../ai/fetch-page.js";
 import { ocrImageText, OcrError } from "../offer-metrics/ocr.js";
+import { screenshotPage, PageBlockedError } from "../ai/page-shot.js";
 import {
   checkUrlVerdict,
   detectAffiliateParams,
@@ -1254,20 +1255,41 @@ export async function registerAiRoutes(
     const body = request.body ?? {};
     const url = typeof body.url === "string" ? body.url.trim() : "";
     if (!url) throw new ValidationError("url is required");
-    let page;
+    // Tier 1：HTML 直抓（快）
     try {
-      page = await fetchPageHtml(url);
+      const page = await fetchPageHtml(url);
+      const meta = extractOfferMeta(page.html, page.text);
+      return {
+        finalUrl: page.finalUrl,
+        ...meta,
+        /** 广告生成用的正文（前端随 blueprint 请求带回） */
+        text: page.text.slice(0, 4000),
+        source: "html" as const,
+      };
     } catch (e) {
-      if (e instanceof AiError) throw e;
-      throw new AiError("Page fetch failed: the site may block server-side fetching; paste the product info manually.");
+      if (!(e instanceof AiError)) throw e;
+      // Tier 2：无头浏览器截图 + OCR（JS 渲染站 / 简单反爬）
+      try {
+        const shot = await screenshotPage(url);
+        const ocr = await ocrImageText(shot.png);
+        const text = ocr.text.replace(/\s+/g, " ").trim();
+        const meta = extractOfferMeta("", text);
+        return {
+          finalUrl: shot.finalUrl,
+          title: shot.title,
+          description: text.slice(0, 300) || null,
+          price: meta.price,
+          currency: meta.currency,
+          text: text.slice(0, 4000),
+          source: "screenshot" as const,
+        };
+      } catch (e2) {
+        // 站点明确拦截自动化（验证码/拒绝页）→ 告诉用户手动传截图
+        if (e2 instanceof PageBlockedError || e2 instanceof OcrError) throw e2;
+        // 截图也失败 → 抛最初的抓取错误（更准确）
+        throw e;
+      }
     }
-    const meta = extractOfferMeta(page.html, page.text);
-    return {
-      finalUrl: page.finalUrl,
-      ...meta,
-      /** 广告生成用的正文（前端随 blueprint 请求带回） */
-      text: page.text.slice(0, 4000),
-    };
   });
 
   /**
@@ -1315,6 +1337,7 @@ export async function registerAiRoutes(
       currency: meta.currency,
       text: text.slice(0, 4000),
       confidence: ocr.confidence,
+      source: "screenshot" as const,
     };
   });
 

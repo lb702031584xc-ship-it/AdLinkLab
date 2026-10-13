@@ -29,6 +29,8 @@ RUN pnpm --filter @adlinklab/shared build \
 FROM base AS runner
 WORKDIR /app
 ENV NODE_ENV=production
+# 无头浏览器截图：offer-fetch 第二级抓取用（puppeteer-core + 系统 chromium，不下载浏览器）
+RUN apk add --no-cache chromium
 COPY --from=build /app /app
 WORKDIR /app/apps/api
 EXPOSE 3001
