@@ -7,6 +7,7 @@
  */
 import { useEffect, useState } from "react";
 import { UNIVERSAL_NEGATIVES } from "@/lib/keywords/negatives";
+import { useWorkState } from "@/lib/use-work-state";
 import type { KeywordStarterDict } from "@/i18n/dict/keyword-starter";
 import type { SeedImportSignal } from "./demand-check-client";
 
@@ -65,10 +66,14 @@ export function LaunchEditorClient({
   dict: d,
   lang,
   validatedSignal,
+  offerId,
+  offerName,
 }: {
   dict: KeywordStarterDict;
   lang: "zh" | "en";
   validatedSignal?: SeedImportSignal | null;
+  offerId?: string | null;
+  offerName?: string | null;
 }) {
   const [rows, setRows] = useState<PlanRow[]>([newRow()]);
   const [bulkOpen, setBulkOpen] = useState(false);
@@ -80,6 +85,53 @@ export function LaunchEditorClient({
   const [negBulkOpen, setNegBulkOpen] = useState(false);
   const [negBulkText, setNegBulkText] = useState("");
   const [negCopied, setNegCopied] = useState(false);
+
+  /* 自动保存：刷新/隔夜后可恢复（租户隔离） */
+  const { historyOpen, historyItems, restoredAt, toggleHistory, restoreFromHistory } =
+    useWorkState({
+      page: "keyword-launch",
+      offerId: offerId ?? null,
+      label: offerName ?? null,
+      buildSnapshot: () => ({ version: 1, rows, negatives }),
+      isMeaningful: (s) => {
+        const rs = s.rows as PlanRow[] | undefined;
+        const ns = s.negatives as string[] | undefined;
+        return (
+          (Array.isArray(rs) && rs.some((r) => r.keyword?.trim())) ||
+          (Array.isArray(ns) && ns.length > 0)
+        );
+      },
+      applySnapshot: (s) => {
+        // 合并语义：刚从需求验证导入的词不能丢，快照里的词去重追加
+        const rs = s.rows as PlanRow[] | undefined;
+        const ns = s.negatives as string[] | undefined;
+        if (Array.isArray(rs) && rs.length > 0) {
+          const clean = rs.filter((r) => r && typeof r.keyword === "string" && r.keyword.trim());
+          if (clean.length > 0) {
+            setRows((cur) => {
+              const have = new Set(
+                cur.map((r) => r.keyword.trim().toLowerCase()).filter(Boolean)
+              );
+              const base = cur.length === 1 && !cur[0].keyword.trim() ? [] : cur;
+              const fresh = clean
+                .filter((r) => !have.has(r.keyword.trim().toLowerCase()))
+                .map((r) => ({ ...newRow(), ...r }));
+              return [...base, ...fresh];
+            });
+          }
+        }
+        if (Array.isArray(ns) && ns.length > 0) {
+          const cleanN = ns.filter((n) => typeof n === "string" && n.trim());
+          if (cleanN.length > 0) {
+            setNegatives((cur) => {
+              const have = new Set(cur);
+              return [...cur, ...cleanN.filter((n) => !have.has(n))];
+            });
+          }
+        }
+      },
+      watch: [offerId, rows, negatives],
+    });
 
   // 从需求验证导入 ✅值得跟进 / ⚠️谨慎测试 的词（去重追加）
   useEffect(() => {
@@ -197,6 +249,49 @@ export function LaunchEditorClient({
           <h2 className="text-lg font-bold text-ink">🎯 {d.planTitle}</h2>
           <p className="mt-1 text-sm text-ink/60">{d.planSubtitle}</p>
         </div>
+
+        {/* 自动保存 + 历史记录 */}
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={toggleHistory}
+            className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink/70 hover:bg-ink/5"
+          >
+            🕘 {d.history} {historyOpen ? "▾" : "▸"}
+          </button>
+          {restoredAt && (
+            <span className="text-xs text-emerald-700">
+              ✓ {d.restoredNote.replace("{time}", new Date(restoredAt).toLocaleString())}
+            </span>
+          )}
+          <span className="text-xs text-ink/45">{d.autosaveHint}</span>
+        </div>
+        {historyOpen && (
+          <div className="rounded-xl border border-ink/10 bg-white/70 p-3">
+            {historyItems.length === 0 ? (
+              <p className="text-sm text-ink/55">{d.historyEmpty}</p>
+            ) : (
+              <ul className="divide-y divide-ink/5">
+                {historyItems.map((h) => (
+                  <li key={h.id}>
+                    <button
+                      type="button"
+                      onClick={() => restoreFromHistory(h)}
+                      className="flex w-full items-center justify-between gap-2 py-2 text-left hover:bg-ink/[0.03]"
+                    >
+                      <span className="truncate text-sm font-medium text-ink">
+                        {h.label || d.historyUntitled}
+                      </span>
+                      <span className="shrink-0 text-xs text-ink/50">
+                        {new Date(h.updatedAt).toLocaleString()}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
 
         <div className="flex flex-wrap gap-2">
           <button

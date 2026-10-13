@@ -1,10 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useDict } from "@/i18n/use-dict";
 import { EntityPageHeader } from "@/components/entities/ui";
 import { calcProfit } from "@/lib/profit-calc";
+import {
+  listWorkStateHistoryAction,
+  loadWorkStateAction,
+  saveWorkStateAction,
+  type WorkStateHistoryItem,
+} from "@/lib/api/work-state-actions";
 import { TermsClient } from "./terms-client";
 import { ComplianceClient } from "./compliance-client";
 import { TrafficPlannerClient } from "./traffic-planner-client";
@@ -280,6 +286,125 @@ export function WorksheetClient({
   })();
   const [trafficResult, setTrafficResult] = useState<TrafficPlanResult | null>(null);
 
+  /* ----- 工作台自动保存：刷新/隔夜后可恢复（租户隔离，存 work_states 表） ----- */
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyItems, setHistoryItems] = useState<WorkStateHistoryItem[]>([]);
+  const [restoredAt, setRestoredAt] = useState<string | null>(null);
+  const loadedRef = useRef(false);
+  const lastSavedRef = useRef("");
+
+  const buildSnapshot = (): Record<string, unknown> => ({
+    version: 1,
+    source,
+    openStep,
+    offer,
+    manual: { name: mName, network: mNetwork, url: mUrl },
+    termsVerdict,
+    complianceResults,
+    complianceCounted,
+    profitState,
+    trafficResult,
+  });
+
+  const snapshotMeaningful = (s: Record<string, unknown>): boolean =>
+    s.offer != null ||
+    s.termsVerdict != null ||
+    s.complianceResults != null ||
+    s.profitState != null ||
+    s.trafficResult != null;
+
+  const applySnapshot = (s: Record<string, unknown>) => {
+    if (s.source === "affiliate" || s.source === "amazon" || s.source === "cashback") {
+      setSource(s.source);
+    }
+    if (typeof s.openStep === "number") setOpenStep(s.openStep);
+    if (s.offer && typeof s.offer === "object") setOffer(s.offer as WorksheetOffer);
+    const m = s.manual as { name?: string; network?: string; url?: string } | undefined;
+    if (m) {
+      if (typeof m.name === "string") setMName(m.name);
+      if (typeof m.network === "string") setMNetwork(m.network);
+      if (typeof m.url === "string") setMUrl(m.url);
+    }
+    if (s.termsVerdict === "go" || s.termsVerdict === "caution" || s.termsVerdict === "stop") {
+      setTermsVerdict(s.termsVerdict);
+    }
+    if (Array.isArray(s.complianceResults)) {
+      setComplianceResults(s.complianceResults as AiUrlCheckResult[]);
+    }
+    if (typeof s.complianceCounted === "boolean") setComplianceCounted(s.complianceCounted);
+    if (s.profitState && typeof s.profitState === "object") {
+      setProfitState(s.profitState as ProfitStepState);
+    }
+    if (s.trafficResult && typeof s.trafficResult === "object") {
+      setTrafficResult(s.trafficResult as TrafficPlanResult);
+    }
+  };
+
+  // 挂载时恢复：?offerId= 带来的 offer 优先恢复该 offer 的快照
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await loadWorkStateAction("ai-worksheet", initialOffer?.id ?? null);
+        if (cancelled || !res.ok || !res.data.state) return;
+        if (!snapshotMeaningful(res.data.state)) return;
+        applySnapshot(res.data.state);
+        setRestoredAt(res.data.updatedAt);
+        lastSavedRef.current = JSON.stringify(res.data.state);
+      } catch {
+        /* 恢复失败不打断页面 */
+      } finally {
+        if (!cancelled) loadedRef.current = true;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 防抖自动保存（2.5s）：只在有实质内容且变化时保存
+  useEffect(() => {
+    if (!loadedRef.current) return;
+    const snap = buildSnapshot();
+    if (!snapshotMeaningful(snap)) return;
+    const json = JSON.stringify(snap);
+    if (json === lastSavedRef.current) return;
+    const timer = setTimeout(async () => {
+      try {
+        const oid = (snap.offer as WorksheetOffer | null)?.id || null;
+        const res = await saveWorkStateAction("ai-worksheet", snap, {
+          offerId: oid,
+          label: (snap.offer as WorksheetOffer | null)?.name ?? null,
+        });
+        if (res.ok) lastSavedRef.current = json;
+      } catch {
+        /* 自动保存失败静默 */
+      }
+    }, 2500);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [source, openStep, offer, mName, mNetwork, mUrl, termsVerdict, complianceResults, complianceCounted, profitState, trafficResult]);
+
+  const openHistory = async () => {
+    setHistoryOpen((o) => !o);
+    if (!historyOpen && historyItems.length === 0) {
+      const res = await listWorkStateHistoryAction("ai-worksheet", { limit: 20 });
+      if (res.ok) setHistoryItems(res.data);
+    }
+  };
+
+  const restoreFromHistory = async (item: WorkStateHistoryItem) => {
+    // history 列表不返回 state 全量，这里按 offerId 取最新快照
+    const res = await loadWorkStateAction("ai-worksheet", item.offerId);
+    if (res.ok && res.data.state && snapshotMeaningful(res.data.state)) {
+      applySnapshot(res.data.state);
+      setRestoredAt(res.data.updatedAt);
+      lastSavedRef.current = JSON.stringify(res.data.state);
+    }
+    setHistoryOpen(false);
+  };
+
   const termsStatus: StepStatus =
     termsVerdict === "go" ? "pass" : termsVerdict === "caution" ? "warn" : termsVerdict === "stop" ? "fail" : null;
 
@@ -363,6 +488,49 @@ export function WorksheetClient({
   return (
     <div className="space-y-5">
       <EntityPageHeader title={w.title} description={w.description} />
+
+      {/* 自动保存状态 + 历史记录入口 */}
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={openHistory}
+          className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink/70 hover:bg-ink/5"
+        >
+          🕘 {w.history} {historyOpen ? "▾" : "▸"}
+        </button>
+        {restoredAt && (
+          <span className="text-xs text-emerald-700">
+            ✓ {w.restoredNote.replace("{time}", new Date(restoredAt).toLocaleString())}
+          </span>
+        )}
+        <span className="text-xs text-ink/45">{w.autosaveHint}</span>
+      </div>
+      {historyOpen && (
+        <div className="rounded-xl border border-ink/10 bg-white/70 p-3">
+          {historyItems.length === 0 ? (
+            <p className="text-sm text-ink/55">{w.historyEmpty}</p>
+          ) : (
+            <ul className="divide-y divide-ink/5">
+              {historyItems.map((h) => (
+                <li key={h.id}>
+                  <button
+                    type="button"
+                    onClick={() => restoreFromHistory(h)}
+                    className="flex w-full items-center justify-between gap-2 py-2 text-left hover:bg-ink/[0.03]"
+                  >
+                    <span className="truncate text-sm font-medium text-ink">
+                      {h.label || w.historyUntitled}
+                    </span>
+                    <span className="shrink-0 text-xs text-ink/50">
+                      {new Date(h.updatedAt).toLocaleString()}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {showSetupNudge ? (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-6">

@@ -59,6 +59,11 @@ export interface KeywordStarterDict {
   aiNoScoreHint: string;
   /* 投放选词 */
   planTitle: string;
+  history: string;
+  historyEmpty: string;
+  historyUntitled: string;
+  restoredNote: string;
+  autosaveHint: string;
   planSubtitle: string;
   thKeyword: string;
   thAdGroup: string;
@@ -146,6 +151,11 @@ export const zh: KeywordStarterDict = {
   aiFailed: "AI 推荐失败，请稍后重试",
   aiNoScoreHint: "💡 以下为 AI 选词思路（未打分）。导入后去 SEMRUSH/规划师查真实数据填入下方，系统按真实数据算分。",
   planTitle: "投放关键词计划",
+  history: "历史记录",
+  historyEmpty: "还没有保存的关键词进度。",
+  historyUntitled: "未命名计划",
+  restoredNote: "已恢复 {time} 的进度，继续吧",
+  autosaveHint: "进度会自动保存，刷新或隔天回来可继续",
   planSubtitle:
     "逐词定分组、匹配方式和出价。匹配方式新手建议从“词组”起步，跑出数据再放宽到广泛。",
   thKeyword: "关键词",
@@ -235,6 +245,11 @@ export const en: KeywordStarterDict = {
   aiFailed: "Recommendation failed, please try again",
   aiNoScoreHint: "💡 Keyword ideas from AI (not scored). Import them, fill in real SEMRUSH/Planner data below, and the system scores from real data.",
   planTitle: "Launch keyword plan",
+  history: "History",
+  historyEmpty: "No saved keyword progress yet.",
+  historyUntitled: "Untitled plan",
+  restoredNote: "Restored progress from {time} — carry on",
+  autosaveHint: "Progress auto-saves; refresh or come back tomorrow to continue",
   planSubtitle:
     "Set ad group, match type and bid per keyword. Beginners: start with “Phrase”, loosen to “Broad” after data comes in.",
   thKeyword: "Keyword",

@@ -903,6 +903,22 @@ model AiSetting {
   @@map("ai_settings")
 }
 
+/// 工作台状态快照：AI 分析 worksheet / 投放选词 / 需求验证 的自动保存（租户隔离）。
+/// 同一租户+页面+offer 只保留最新一条；history 接口按 updatedAt 倒序列出。
+model WorkState {
+  id        String   @id @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  page      String
+  offerId   String?  @map("offer_id") @db.Uuid
+  label     String?
+  state     Json     @db.JsonB
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([tenantId, page, updatedAt(sort: Desc)], map: "work_states_tenant_page_updated_idx")
+  @@map("work_states")
+}
+
 /// Phase 11 — persisted AI offer risk analyses (tenant-scoped).
 model AiAnalysis {
   id             String   @id @db.Uuid

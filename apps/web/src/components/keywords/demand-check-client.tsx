@@ -7,6 +7,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import type { KeywordStarterDict } from "@/i18n/dict/keyword-starter";
+import { useWorkState } from "@/lib/use-work-state";
 import { recommendKeywordsAction } from "@/lib/api/ai-actions";
 import type { RecommendedKeyword } from "@/lib/api/ai";
 
@@ -121,11 +122,15 @@ export function DemandCheckClient({
   importSignal,
   aiProduct,
   onValidatedReady,
+  offerId,
+  offerName,
 }: {
   dict: KeywordStarterDict;
   importSignal: SeedImportSignal | null;
   aiProduct?: string;
   onValidatedReady?: (words: string[]) => void;
+  offerId?: string | null;
+  offerName?: string | null;
 }) {
   const [rows, setRows] = useState<DemandRow[]>([]);
   const [kwInput, setKwInput] = useState("");
@@ -137,6 +142,52 @@ export function DemandCheckClient({
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiKeywords, setAiKeywords] = useState<RecommendedKeyword[]>([]);
+
+  /* 自动保存：刷新/隔夜后可恢复（租户隔离） */
+  const { historyOpen, historyItems, restoredAt, toggleHistory, restoreFromHistory } =
+    useWorkState({
+      page: "keyword-research",
+      offerId: offerId ?? null,
+      label: offerName ?? aiProductInput.trim() ?? null,
+      buildSnapshot: () => ({ version: 1, rows, aiProductInput, aiKeywords }),
+      isMeaningful: (s) => {
+        const rs = s.rows as DemandRow[] | undefined;
+        const ks = s.aiKeywords as unknown[] | undefined;
+        return (
+          (Array.isArray(rs) && rs.some((r) => r.keyword?.trim())) ||
+          (Array.isArray(ks) && ks.length > 0)
+        );
+      },
+      applySnapshot: (s) => {
+        // 合并语义：已有的行不丢，快照里的词去重追加
+        const rs = s.rows as DemandRow[] | undefined;
+        const ks = s.aiKeywords as RecommendedKeyword[] | undefined;
+        if (Array.isArray(rs) && rs.length > 0) {
+          const clean = rs.filter((r) => r && typeof r.keyword === "string" && r.keyword.trim());
+          if (clean.length > 0) {
+            setRows((cur) => {
+              const have = new Set(
+                cur.map((r) => r.keyword.trim().toLowerCase()).filter(Boolean)
+              );
+              const fresh = clean
+                .filter((r) => !have.has(r.keyword.trim().toLowerCase()))
+                .map((r) => ({ ...newRow(), ...r }));
+              return [...cur, ...fresh];
+            });
+          }
+        }
+        if (Array.isArray(ks) && ks.length > 0) {
+          setAiKeywords((cur) => {
+            const have = new Set(cur.map((k) => k.keyword?.trim().toLowerCase()).filter(Boolean));
+            return [...cur, ...ks.filter((k) => k && !have.has(k.keyword?.trim().toLowerCase()))];
+          });
+        }
+        if (typeof s.aiProductInput === "string" && s.aiProductInput.trim() && !aiProductInput.trim()) {
+          setAiProductInput(s.aiProductInput);
+        }
+      },
+      watch: [offerId, rows, aiProductInput, aiKeywords],
+    });
 
   // offer 选择变化时同步到 AI 输入框
   useEffect(() => {
@@ -258,6 +309,49 @@ export function DemandCheckClient({
         <h2 className="text-lg font-bold text-ink">📊 {d.demandTitle}</h2>
         <p className="mt-1 text-sm text-ink/60">{d.demandSubtitle}</p>
       </div>
+
+      {/* 自动保存 + 历史记录 */}
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={toggleHistory}
+          className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink/70 hover:bg-ink/5"
+        >
+          🕘 {d.history} {historyOpen ? "▾" : "▸"}
+        </button>
+        {restoredAt && (
+          <span className="text-xs text-emerald-700">
+            ✓ {d.restoredNote.replace("{time}", new Date(restoredAt).toLocaleString())}
+          </span>
+        )}
+        <span className="text-xs text-ink/45">{d.autosaveHint}</span>
+      </div>
+      {historyOpen && (
+        <div className="rounded-xl border border-ink/10 bg-white/70 p-3">
+          {historyItems.length === 0 ? (
+            <p className="text-sm text-ink/55">{d.historyEmpty}</p>
+          ) : (
+            <ul className="divide-y divide-ink/5">
+              {historyItems.map((h) => (
+                <li key={h.id}>
+                  <button
+                    type="button"
+                    onClick={() => restoreFromHistory(h)}
+                    className="flex w-full items-center justify-between gap-2 py-2 text-left hover:bg-ink/[0.03]"
+                  >
+                    <span className="truncate text-sm font-medium text-ink">
+                      {h.label || d.historyUntitled}
+                    </span>
+                    <span className="shrink-0 text-xs text-ink/50">
+                      {new Date(h.updatedAt).toLocaleString()}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {/* AI 推荐关键词 */}
       <div className="rounded-xl border border-signal/30 bg-signal/[0.04] p-4">

@@ -137,10 +137,10 @@ export function KeywordStarterTabsClient({
               }))
             }
           />
-          <DemandCheckClient dict={d} importSignal={importSignal} aiProduct={aiProduct} onValidatedReady={importValidatedToLaunch} />
+          <DemandCheckClient dict={d} importSignal={importSignal} aiProduct={aiProduct} onValidatedReady={importValidatedToLaunch} offerId={offerId || null} offerName={selectedOffer?.name || manualOffer.trim() || null} />
         </div>
       ) : (
-        <LaunchEditorClient dict={d} lang={lang} validatedSignal={validatedSignal} />
+        <LaunchEditorClient dict={d} lang={lang} validatedSignal={validatedSignal} offerId={offerId || null} offerName={selectedOffer?.name || manualOffer.trim() || null} />
       )}
     </div>
   );

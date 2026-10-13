@@ -123,6 +123,11 @@ export const zh = {
     description:
       "按实战流程四步走完：条款解析 → 合规检查 → 盈利测算 → 投流决策，最后给出综合投放建议。",
     offerTitle: "分析对象",
+    history: "历史记录",
+    historyEmpty: "还没有保存的分析进度。",
+    historyUntitled: "未命名分析",
+    restoredNote: "已恢复 {time} 的进度，继续吧",
+    autosaveHint: "进度会自动保存，刷新或隔天回来可继续",
     noOffer:
       "未指定 offer，可直接开始分析，或从 offer 库选择一个 offer 进入（?offerId=）。",
     sourceLabel: "来源",
@@ -1054,6 +1059,11 @@ export const en: typeof zh = {
     description:
       "Four steps in workflow order: terms screening → compliance check → profitability → traffic planning, ending with an overall go / no-go.",
     offerTitle: "Subject",
+    history: "History",
+    historyEmpty: "No saved analysis progress yet.",
+    historyUntitled: "Untitled analysis",
+    restoredNote: "Restored progress from {time} — carry on",
+    autosaveHint: "Progress auto-saves; refresh or come back tomorrow to continue",
     noOffer:
       "No offer selected — you can start directly, or pick an offer from the offer library (?offerId=).",
     sourceLabel: "Source",

@@ -76,6 +76,7 @@ import { registerLinkSwapRoutes } from "./link-swap.js";
 import { registerLaunchRoutes } from "./launch.js";
 import { registerCampaignToggleRoutes } from "./campaign-toggle.js";
 import { registerAdsAutoRoutes } from "./ads-auto.js";
+import { registerWorkStateRoutes } from "./work-state.js";
 import { registerCashbackRoutes } from "./cashback.js";
 import { registerCashbackRateWatchRoutes } from "./cashback-rate-watch.js";
 import { registerCashbackTermsWatchRoutes } from "./cashback-terms-watch.js";
@@ -214,6 +215,7 @@ export async function registerRoutes(
     await registerLaunchRoutes(app, { prisma: services.prisma });
     await registerCampaignToggleRoutes(app, { prisma: services.prisma });
     await registerAdsAutoRoutes(app, { prisma: services.prisma });
+    await registerWorkStateRoutes(app, { prisma: services.prisma });
     await registerCashbackRoutes(app, { prisma: services.prisma });
     await registerTestClickRoutes(app, { prisma: services.prisma });
     // Automation pack (2026-10-07): per-feature route modules
