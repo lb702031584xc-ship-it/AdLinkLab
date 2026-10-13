@@ -181,3 +181,38 @@ describe("generateBlueprint", () => {
     expect(bp.verdict.reasons.join("")).toContain("1");
   });
 });
+
+describe("extractOfferMeta", () => {
+  it("extracts title, description and price", async () => {
+    const { extractOfferMeta } = await import("./blueprint.js");
+    const html = `<html><head><title>NordVPN – Best VPN 2026 | NordVPN</title>
+      <meta name="description" content="Fast and secure VPN for streaming.">
+      </head><body></body></html>`;
+    const meta = extractOfferMeta(html, "Get NordVPN for $65.88 for the first year.");
+    expect(meta.title).toBe("NordVPN – Best VPN 2026");
+    expect(meta.description).toBe("Fast and secure VPN for streaming.");
+    expect(meta.price).toBe(65.88);
+    expect(meta.currency).toBe("USD");
+  });
+
+  it("returns nulls when nothing found, never invents", async () => {
+    const { extractOfferMeta } = await import("./blueprint.js");
+    const meta = extractOfferMeta("<html><head></head><body>hello</body></html>", "hello world");
+    expect(meta.title).toBeNull();
+    expect(meta.price).toBeNull();
+    expect(meta.currency).toBeNull();
+  });
+
+  it("falls back to og: tags", async () => {
+    const { extractOfferMeta } = await import("./blueprint.js");
+    const html = `<html><head>
+      <meta property="og:title" content="Cool Gadget">
+      <meta property="og:description" content="Does cool things.">
+      </head><body></body></html>`;
+    const meta = extractOfferMeta(html, "Only €49.99 today");
+    expect(meta.title).toBe("Cool Gadget");
+    expect(meta.description).toBe("Does cool things.");
+    expect(meta.price).toBe(49.99);
+    expect(meta.currency).toBe("EUR");
+  });
+});

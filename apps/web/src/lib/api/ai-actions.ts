@@ -36,6 +36,8 @@ import {
   generateBlueprint,
   type BlueprintInput,
   type BlueprintResult,
+  fetchOfferMeta,
+  type OfferMetaResult,
 } from "./ai";
 import type {
   ProfitAnalysisInput,
@@ -277,6 +279,23 @@ export async function generateBlueprintAction(
       e,
       getDictionary(lang),
       lang === "zh" ? "推演报告生成失败，请稍后重试。" : "Blueprint generation failed, please try again."
+    );
+  }
+}
+
+/** 抓取 offer 页面元信息（标题/描述/价格），用于推演报告表单预填。 */
+export async function fetchOfferMetaAction(
+  url: string
+): Promise<AiActionResult<OfferMetaResult>> {
+  const lang = await getLang();
+  try {
+    const data = await fetchOfferMeta(url);
+    return { ok: true, data };
+  } catch (e) {
+    return mapAiActionError(
+      e,
+      getDictionary(lang),
+      lang === "zh" ? "页面抓取失败，该站可能屏蔽了服务器抓取，请手动填写。" : "Page fetch failed; the site may block server-side fetching. Fill in manually."
     );
   }
 }

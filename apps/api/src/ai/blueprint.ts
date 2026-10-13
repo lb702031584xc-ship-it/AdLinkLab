@@ -49,6 +49,8 @@ export interface BlueprintInput {
   targetMarket: string;
   termsText?: string | null;
   offerUrl?: string | null;
+  /** 抓取到的页面正文（offer-fetch）：提供则广告生成直接用它，不再拼合成 */
+  pageText?: string | null;
   landingMode: TrafficMode;
   brandPolicy: BrandPolicy;
   language: AnalysisLanguage;
@@ -238,18 +240,21 @@ export async function generateBlueprint(
     keywords.error = llmErrorMessage(e);
   }
 
-  // 4. 广告文案（affiliate-safe；用合成页面文字跳过抓取）
+  // 4. 广告文案（affiliate-safe；有抓取正文就用它，否则用合成页面文字跳过抓取）
   const adPlan: OfferBlueprint["adPlan"] = { plan: null, error: null };
   try {
-    const pageText = [
-      `Product: ${input.offerName}`,
-      input.productDescription.trim(),
-      input.avgPrice != null ? `Price: ${input.avgPrice} ${input.currency}` : "",
-      `Target market: ${input.targetMarket}`,
-    ]
-      .filter(Boolean)
-      .join("\n")
-      .slice(0, 12_000);
+    const fetchedText = (input.pageText ?? "").trim();
+    const pageText = fetchedText
+      ? fetchedText.slice(0, 12_000)
+      : [
+          `Product: ${input.offerName}`,
+          input.productDescription.trim(),
+          input.avgPrice != null ? `Price: ${input.avgPrice} ${input.currency}` : "",
+          `Target market: ${input.targetMarket}`,
+        ]
+          .filter(Boolean)
+          .join("\n")
+          .slice(0, 12_000);
     const url = (input.offerUrl ?? "").trim() || "https://blueprint.local/offer";
     const draft = await chatJsonValidatedShim(
       chat,
@@ -443,4 +448,64 @@ async function chatJsonValidatedShim<T>(
       e instanceof Error ? `LLM response validation failed: ${e.message}` : "LLM response validation failed"
     );
   }
+}
+
+export interface OfferMeta {
+  title: string | null;
+  description: string | null;
+  price: number | null;
+  currency: string | null;
+}
+
+function metaContent(html: string, attr: "name" | "property", key: string): string | null {
+  const re = new RegExp(
+    `<meta[^>]+${attr}=["']${key}["'][^>]*>`,
+    "i"
+  );
+  const tag = html.match(re)?.[0];
+  if (!tag) return null;
+  const content = tag.match(/content=["']([^"']{1,500})["']/i)?.[1];
+  return content?.trim() || null;
+}
+
+function cleanTitle(raw: string): string {
+  return raw
+    .replace(/\s+/g, " ")
+    .replace(/\s*[|\-–—]\s*[^-|–—]{1,60}$/, "")
+    .trim()
+    .slice(0, 120);
+}
+
+/**
+ * 从抓取的 HTML/正文里提取 offer 元信息（best-effort：用户在前端确认后才用）。
+ * 价格只认 $ / USD / € / £ 数字格式，抓不到就返回 null，不编造。
+ */
+export function extractOfferMeta(html: string, text: string): OfferMeta {
+  const rawTitle =
+    html.match(/<title[^>]*>([^<]{1,200})<\/title>/i)?.[1]?.trim() ||
+    metaContent(html, "property", "og:title");
+  const description =
+    metaContent(html, "name", "description") ||
+    metaContent(html, "property", "og:description");
+
+  let price: number | null = null;
+  let currency: string | null = null;
+  const priceRe =
+    /(USD|US\$|\$|€|£)\s?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?|\d+(?:\.\d{2})?)/;
+  const m = text.match(priceRe);
+  if (m) {
+    const symbol = m[1];
+    const num = Number(m[2].replace(/,/g, ""));
+    if (Number.isFinite(num) && num > 0 && num < 1_000_000) {
+      price = Math.round(num * 100) / 100;
+      currency = symbol === "€" ? "EUR" : symbol === "£" ? "GBP" : "USD";
+    }
+  }
+
+  return {
+    title: rawTitle ? cleanTitle(rawTitle) : null,
+    description: description?.slice(0, 300) ?? null,
+    price,
+    currency,
+  };
 }

@@ -609,6 +609,8 @@ export interface BlueprintInput {
   targetMarket?: string;
   termsText?: string;
   offerUrl?: string;
+  /** offer-fetch 抓到的页面正文（后端广告生成直接用） */
+  pageText?: string;
   landingMode: "landing" | "direct";
   brandPolicy: "allowed" | "forbidden";
   keywordCount?: number;
@@ -696,5 +698,25 @@ export async function generateBlueprint(
   return aiFetch<{ blueprint: BlueprintResult }>("/api/v1/ai/offer-blueprint", {
     method: "POST",
     body: JSON.stringify({ ...input, language }),
+  });
+}
+
+/* ---------- Offer 页面元信息抓取 ---------- */
+
+export interface OfferMetaResult {
+  finalUrl: string;
+  title: string | null;
+  description: string | null;
+  price: number | null;
+  currency: string | null;
+  /** 广告生成用的正文（随 blueprint 请求带回后端） */
+  text: string;
+}
+
+/** 抓取 offer 页面：标题/描述/价格自动提取，抓不到返回 null。 */
+export async function fetchOfferMeta(url: string): Promise<OfferMetaResult> {
+  return aiFetch<OfferMetaResult>("/api/v1/ai/offer-fetch", {
+    method: "POST",
+    body: JSON.stringify({ url }),
   });
 }

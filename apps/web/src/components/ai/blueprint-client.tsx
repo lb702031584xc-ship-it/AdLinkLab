@@ -8,6 +8,7 @@ import { useI18n } from "@/i18n/I18nProvider";
 import { zh as bpZh, en as bpEn, type AiBlueprintDict } from "@/i18n/dict/ai-blueprint";
 import {
   generateBlueprintAction,
+  fetchOfferMetaAction,
   type AiActionResult,
 } from "@/lib/api/ai-actions";
 import type { BlueprintInput, BlueprintResult } from "@/lib/api/ai";
@@ -155,9 +156,35 @@ export function BlueprintClient({ showSetupNudge }: { showSetupNudge: boolean })
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BlueprintResult | null>(null);
+  const [fetching, setFetching] = useState(false);
+  const [fetchMsg, setFetchMsg] = useState<string | null>(null);
+  const [fetchOk, setFetchOk] = useState(false);
+  const [pageText, setPageText] = useState<string | null>(null);
 
   const canSubmit =
     offerName.trim() && productDescription.trim() && Number(commissionValue) > 0 && !busy;
+
+  async function onFetch() {
+    const url = offerUrl.trim();
+    if (!url || fetching) return;
+    setFetching(true);
+    setFetchMsg(null);
+    setFetchOk(false);
+    const res = await fetchOfferMetaAction(url);
+    setFetching(false);
+    if (!res.ok) {
+      setFetchMsg(d.form.fetchFailed + (res.error ? `：${res.error}` : ""));
+      return;
+    }
+    const meta = res.data;
+    if (meta.title && !offerName.trim()) setOfferName(meta.title);
+    if (meta.description && !productDescription.trim()) setProductDescription(meta.description);
+    if (meta.price != null && !avgPrice.trim()) setAvgPrice(String(meta.price));
+    if (meta.currency && currency === "USD") setCurrency(meta.currency);
+    if (meta.text) setPageText(meta.text);
+    setFetchOk(true);
+    setFetchMsg(d.form.fetched);
+  }
 
   async function onGenerate() {
     setBusy(true);
@@ -172,6 +199,7 @@ export function BlueprintClient({ showSetupNudge }: { showSetupNudge: boolean })
       currency: currency.trim() || "USD",
       targetMarket: targetMarket.trim() || "US",
       offerUrl: offerUrl.trim() || undefined,
+      pageText: pageText || undefined,
       termsText: termsText.trim() || undefined,
       landingMode,
       brandPolicy,
@@ -225,7 +253,19 @@ export function BlueprintClient({ showSetupNudge }: { showSetupNudge: boolean })
         </div>
         <div>
           <label className={labelCls}>{d.form.offerUrl}</label>
-          <input className={inputCls} value={offerUrl} onChange={(e) => setOfferUrl(e.target.value)} placeholder={d.form.offerUrlPh} />
+          <div className="flex gap-2">
+            <input className={inputCls} value={offerUrl} onChange={(e) => { setOfferUrl(e.target.value); setFetchOk(false); setPageText(null); }} placeholder={d.form.offerUrlPh} />
+            <button type="button" onClick={onFetch} disabled={!offerUrl.trim() || fetching}
+              className="shrink-0 rounded-lg border border-ink/15 px-3 py-2 text-sm text-ink hover:bg-ink/5 disabled:opacity-50">
+              {fetching ? d.form.fetching : d.form.fetch}
+            </button>
+          </div>
+          {fetchMsg ? (
+            <p className={`mt-1 text-xs ${fetchOk ? "text-green-700" : "text-amber-700"}`}>{fetchMsg}</p>
+          ) : null}
+          {pageText ? (
+            <p className="mt-1 text-xs text-ink/50">📄 {d.form.pageTextNote}</p>
+          ) : null}
         </div>
         <div className="md:col-span-2">
           <label className={labelCls}>{d.form.productDescription} *</label>

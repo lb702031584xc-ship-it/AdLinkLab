@@ -26,7 +26,7 @@ import {
   type TrafficMode,
   type TrafficPlanInput,
 } from "../ai/traffic-planner.js";
-import { fetchPage } from "../ai/fetch-page.js";
+import { fetchPage, fetchPageHtml } from "../ai/fetch-page.js";
 import {
   checkUrlVerdict,
   detectAffiliateParams,
@@ -48,6 +48,7 @@ import {
 } from "../ai/prompts.js";
 import { computeProfitability, analyzeProfit } from "../ai/profitability.js";
 import {
+  extractOfferMeta,
   generateBlueprint,
   type BlueprintInput,
 } from "../ai/blueprint.js";
@@ -1241,6 +1242,34 @@ export async function registerAiRoutes(
   });
 
   /**
+   * 抓取 offer 页面元信息：标题/描述/价格自动提取，用于一键推演报告表单预填。
+   * 抓不到（反爬/无价格）就返回 null，前端提示手动填，不编造。
+   */
+  app.post<{
+    Body: { url?: unknown };
+  }>("/api/v1/ai/offer-fetch", async (request) => {
+    const info = await requireSession(deps, request);
+    void info;
+    const body = request.body ?? {};
+    const url = typeof body.url === "string" ? body.url.trim() : "";
+    if (!url) throw new ValidationError("url is required");
+    let page;
+    try {
+      page = await fetchPageHtml(url);
+    } catch (e) {
+      if (e instanceof AiError) throw e;
+      throw new AiError("Page fetch failed: the site may block server-side fetching; paste the product info manually.");
+    }
+    const meta = extractOfferMeta(page.html, page.text);
+    return {
+      finalUrl: page.finalUrl,
+      ...meta,
+      /** 广告生成用的正文（前端随 blueprint 请求带回） */
+      text: page.text.slice(0, 4000),
+    };
+  });
+
+  /**
    * Offer 一键推演报告：一次调用产出 7 节推演（条款/盈利/关键词/广告/投流/监控/决策）。
    * LLM 板块 fail-soft；盈利测算与监控规则纯代码计算。
    */
@@ -1255,6 +1284,7 @@ export async function registerAiRoutes(
       targetMarket?: unknown;
       termsText?: unknown;
       offerUrl?: unknown;
+      pageText?: unknown;
       landingMode?: unknown;
       brandPolicy?: unknown;
       language?: unknown;
@@ -1297,6 +1327,7 @@ export async function registerAiRoutes(
       targetMarket: str(body.targetMarket) || "US",
       termsText: str(body.termsText) || null,
       offerUrl: str(body.offerUrl) || null,
+      pageText: str(body.pageText) || null,
       landingMode: body.landingMode === "direct" ? "direct" : "landing",
       brandPolicy: body.brandPolicy === "forbidden" ? "forbidden" : "allowed",
       language: body.language === "en" ? "en" : "zh",
