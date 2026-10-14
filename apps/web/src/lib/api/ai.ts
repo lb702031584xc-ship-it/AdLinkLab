@@ -798,6 +798,27 @@ export async function parseEcommerceCapture(
   });
 }
 
+export interface AiKeywordRow {
+  keyword: string;
+  volume: number | null;
+  cpc: number | null;
+  plannerLow: number | null;
+  plannerHigh: number | null;
+  competition: "Low" | "Medium" | "High" | null;
+  intent: string | null;
+}
+
+/** 抓取页面 AI 提取关键词：AI 认表格、逐行提取、判断购买意图。 */
+export async function parseKeywordCaptureAi(
+  captureId: string,
+  language?: string
+): Promise<{ rows: AiKeywordRow[] }> {
+  return aiFetch<{ rows: AiKeywordRow[] }>("/api/v1/ai/parse-keyword-capture-ai", {
+    method: "POST",
+    body: JSON.stringify({ captureId, language }),
+  });
+}
+
 /** 解析插件抓到的 SEMrush / Planner 页面 → 关键词表一行（找不到为 null）。 */
 export async function parseKeywordCapture(captureId: string): Promise<ParsedKeywordData> {
   return aiFetch<ParsedKeywordData>("/api/v1/ai/parse-keyword-capture", {

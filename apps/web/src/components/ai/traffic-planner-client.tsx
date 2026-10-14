@@ -14,6 +14,7 @@ import {
 import {
   analyzeTrafficPlanAction,
   parseKeywordCaptureAction,
+  parseKeywordCaptureAiAction,
   parseEcommerceCaptureAction,
   type AiActionResult,
 } from "@/lib/api/ai-actions";
@@ -480,53 +481,91 @@ export function TrafficPlannerClient({
     setEcommerceNotes((prev) => (prev.trim() ? `${prev.trim()}\n${line}` : line));
   };
 
-  const fillKwFromCapture = async (c: OfferCaptureItem) => {
-    const r = await parseKeywordCaptureAction(c.id);
-    if (!r.ok) return;
-    const d = r.data;
-    // 表格多行（SEMrush 关键词变化表等）：去重后全部并入表
-    if (d.rows && d.rows.length > 0) {
-      setKeywords((ks) => {
-        const existing = new Set(
-          ks.map((k) => k.keyword.trim().toLowerCase()).filter(Boolean)
-        );
-        const fresh = d.rows!.filter(
-          (row) => row.keyword && !existing.has(row.keyword.toLowerCase())
-        );
-        if (fresh.length === 0) return ks;
-        const rows = fresh.map((row) => ({
-          ...newKwRow(),
-          keyword: row.keyword,
-          volume: row.volume ?? undefined,
-          cpc: row.cpc ?? undefined,
-          competition: row.competition ?? undefined,
-        }));
-        const next = [...ks];
-        const idx = next.findIndex((k) => !k.keyword.trim());
-        if (idx >= 0) {
-          next[idx] = { ...next[idx], ...rows[0] };
-          return [...next, ...rows.slice(1)];
-        }
-        return [...next, ...rows];
-      });
-      return;
-    }
-    const patch: Partial<KwRow> = {};
-    if (d.keyword) patch.keyword = d.keyword;
-    if (d.volume != null) patch.volume = d.volume;
-    if (d.cpc != null) patch.cpc = d.cpc;
-    if (d.plannerLow != null) patch.plannerLow = d.plannerLow;
-    if (d.plannerHigh != null) patch.plannerHigh = d.plannerHigh;
-    if (d.competition) patch.competition = d.competition;
+  /* 抓取选用：AI 先认表格、提取关键词+购买意图并填表；AI 失败时回落启发式解析 */
+  const [kwParsing, setKwParsing] = useState(false);
+  const appendKwRows = (rows: Array<{
+    keyword: string;
+    volume?: number | null;
+    cpc?: number | null;
+    plannerLow?: number | null;
+    plannerHigh?: number | null;
+    competition?: string | null;
+    intent?: string | null;
+  }>) => {
+    const existing = new Set(
+      keywords.map((k) => k.keyword.trim().toLowerCase()).filter(Boolean)
+    );
+    const fresh = rows.filter(
+      (row) => row.keyword && !existing.has(row.keyword.toLowerCase())
+    );
+    if (fresh.length === 0) return 0;
+    const mapped = fresh.map((row) => ({
+      ...newKwRow(),
+      keyword: row.keyword,
+      volume: row.volume ?? undefined,
+      cpc: row.cpc ?? undefined,
+      plannerLow: row.plannerLow ?? undefined,
+      plannerHigh: row.plannerHigh ?? undefined,
+      competition: row.competition ?? undefined,
+      intent: row.intent ?? undefined,
+    }));
     setKeywords((ks) => {
-      const idx = ks.findIndex((k) => !k.keyword.trim());
+      // 以最新 state 再去重一次，防连续点两次重复
+      const latest = new Set(ks.map((k) => k.keyword.trim().toLowerCase()).filter(Boolean));
+      const toAdd = mapped.filter((m) => !latest.has(m.keyword.toLowerCase()));
+      if (toAdd.length === 0) return ks;
+      const next = [...ks];
+      const idx = next.findIndex((k) => !k.keyword.trim());
       if (idx >= 0) {
-        const next = [...ks];
-        next[idx] = { ...next[idx], ...patch };
-        return next;
+        next[idx] = { ...next[idx], ...toAdd[0] };
+        return [...next, ...toAdd.slice(1)];
       }
-      return [...ks, { ...newKwRow(), ...patch }];
+      return [...next, ...toAdd];
     });
+    return fresh.length;
+  };
+
+  const fillKwFromCapture = async (c: OfferCaptureItem) => {
+    setKwParsing(true);
+    setMsg(d.kwAiParsing);
+    try {
+      // 1) AI 提取：认表格、逐行提取、判断购买意图
+      const ai = await parseKeywordCaptureAiAction(c.id);
+      if (ai.ok && ai.data.rows.length > 0) {
+        const added = appendKwRows(ai.data.rows);
+        setMsg(
+          added > 0
+            ? d.kwAiExtracted.replace("{n}", String(added))
+            : d.alreadyImported
+        );
+        return;
+      }
+      // 2) 回落启发式：表格多行 / 单词概览
+      const r = await parseKeywordCaptureAction(c.id);
+      if (!r.ok) {
+        setMsg(ai.ok ? d.kwAiNone : d.kwAiFallback);
+        return;
+      }
+      const data = r.data;
+      if (data.rows && data.rows.length > 0) {
+        const added = appendKwRows(data.rows);
+        setMsg(added > 0 ? d.kwAiExtracted.replace("{n}", String(added)) : d.alreadyImported);
+        return;
+      }
+      const added = appendKwRows([
+        {
+          keyword: data.keyword ?? "",
+          volume: data.volume,
+          cpc: data.cpc,
+          plannerLow: data.plannerLow,
+          plannerHigh: data.plannerHigh,
+          competition: data.competition,
+        },
+      ]);
+      setMsg(added > 0 ? d.kwAiExtracted.replace("{n}", String(added)) : d.kwAiNone);
+    } finally {
+      setKwParsing(false);
+    }
   };
 
   const importKeywords = () => {    const rows: KwRow[] = [];
@@ -945,6 +984,9 @@ export function TrafficPlannerClient({
             </button>
           </div>
           <CapturePicker onPick={fillKwFromCapture} />
+          {kwParsing && (
+            <p className="mt-1 text-xs text-ink/55">{d.kwAiParsing}</p>
+          )}
           {kwImportOpen && (
             <div className="mt-2">
               <textarea
