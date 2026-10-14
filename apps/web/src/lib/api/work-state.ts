@@ -16,7 +16,8 @@ export type WorkStatePage =
   | "traffic-planner"
   | "ai-terms"
   | "ai-compliance"
-  | "ai-blueprint";
+  | "ai-blueprint"
+  | "ads-auto";
 
 export interface WorkStateHistoryItem {
   id: string;

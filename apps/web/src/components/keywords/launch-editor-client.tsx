@@ -420,7 +420,7 @@ export function LaunchEditorClient({
                     .filter((r) => r.keyword.trim())
                     .map((r) => `${r.keyword.trim()}, ${r.matchType}`)
                     .join("\n")
-                )}`}
+                )}${offerId ? `&offerId=${encodeURIComponent(offerId)}` : ""}`}
                 className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink/70 hover:bg-ink/5"
               >
                 📢 {d.goAutoAds} →

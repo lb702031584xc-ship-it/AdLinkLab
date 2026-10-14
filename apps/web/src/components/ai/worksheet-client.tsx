@@ -980,7 +980,7 @@ export function WorksheetClient({
               )}
               {offer.destinationUrl && (
                 <Link
-                  href={`/ads/auto-create?urls=${encodeURIComponent(offer.destinationUrl)}`}
+                  href={`/ads/auto-create?urls=${encodeURIComponent(offer.destinationUrl)}&offerId=${encodeURIComponent(offer.id)}`}
                   className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink/70 hover:bg-ink/5"
                 >
                   📢 {w.verdict.toAds}

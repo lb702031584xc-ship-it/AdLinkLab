@@ -33,6 +33,7 @@ const ALLOWED_PAGES = [
   "ai-terms",
   "ai-compliance",
   "ai-blueprint",
+  "ads-auto",
 ] as const;
 type WorkStatePage = (typeof ALLOWED_PAGES)[number];
 

@@ -3,8 +3,10 @@
 /**
  * 功能2 — 自动化广告页面：粘贴 URL → 生成预览 → 确认排队 → Script/文案包。
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { loadWorkStateAction } from "@/lib/api/work-state-actions";
+import { useWorkState } from "@/lib/use-work-state";
 import { coachCheckAction, type CoachFinding } from "@/lib/api/coach-actions";
 import { CoachGate, hasCoachBlock } from "@/components/coach/coach-gate";
 import { zh as coachZh, en as coachEn } from "@/i18n/dict/coach";
@@ -152,18 +154,36 @@ function PlanPreview({ plan, d }: { plan: AdPlan; d: AdsAutoDict }) {
   );
 }
 
-export function AdsAutoClient({ dict, lang }: { dict: AdsAutoDict; lang: "zh" | "en" }) {
+export function AdsAutoClient({
+  dict,
+  lang,
+  initialOfferId,
+}: {
+  dict: AdsAutoDict;
+  lang: "zh" | "en";
+  /** ?offerId= 带入：关键词从该 offer 的投放选词快照自动带入，表单按 offer 自动保存。 */
+  initialOfferId?: string | null;
+}) {
   const d = dict;
   const [urlsText, setUrlsText] = useState("");
   const searchParams = useSearchParams();
   // ?urls= / ?keywords= / ?copyStyle= 预填（从 AI 工作表 / 投放选词跳过来）
   useEffect(() => {
     const u = searchParams.get("urls");
-    if (u && !urlsText) setUrlsText(u);
+    if (u) {
+      urlUrlsRef.current = u;
+      if (!urlsText) setUrlsText(u);
+    }
     const k = searchParams.get("keywords");
-    if (k && !kwText) setKwText(k);
+    if (k) {
+      urlKwRef.current = k;
+      if (!kwText) setKwText(k);
+    }
     const cs = searchParams.get("copyStyle");
-    if (cs === "official" || cs === "affiliate") setCopyStyle(cs);
+    if (cs === "official" || cs === "affiliate") {
+      urlCsRef.current = cs;
+      setCopyStyle(cs);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
   const [language, setLanguage] = useState<"zh" | "en">("en");
@@ -191,6 +211,81 @@ export function AdsAutoClient({ dict, lang }: { dict: AdsAutoDict; lang: "zh" | 
   const [manualText, setManualText] = useState("");
   // 投放选词里定好的关键词（可选）：填了就用这套，不再 AI 生成
   const [kwText, setKwText] = useState("");
+  const [offerId] = useState<string | null>(initialOfferId ?? null);
+  const urlKwRef = useRef<string | null>(null);
+  const urlUrlsRef = useRef<string | null>(null);
+  const urlCsRef = useRef<string | null>(null);
+
+  /* 自动保存：URL/关键词/口吻/语言按 offer 隔离，刷新不丢（URL 参数优先于快照） */
+  const { restored } = useWorkState({
+    page: "ads-auto",
+    offerId,
+    label: null,
+    buildSnapshot: () => ({
+      version: 1,
+      urlsText,
+      kwText,
+      language,
+      copyStyle,
+      googleAccountId,
+    }),
+    isMeaningful: (snap) =>
+      Boolean(
+        (snap.urlsText as string)?.trim() || (snap.kwText as string)?.trim()
+      ),
+    applySnapshot: (snap) => {
+      const str = (v: unknown) => (v == null ? "" : String(v));
+      if (urlUrlsRef.current == null && str(snap.urlsText)) setUrlsText(str(snap.urlsText));
+      if (urlKwRef.current == null && str(snap.kwText)) setKwText(str(snap.kwText));
+      if (urlCsRef.current == null && (snap.copyStyle === "official" || snap.copyStyle === "affiliate"))
+        setCopyStyle(snap.copyStyle);
+      if (snap.language === "zh" || snap.language === "en") setLanguage(snap.language);
+      if (str(snap.googleAccountId)) setGoogleAccountId(str(snap.googleAccountId));
+    },
+    watch: [offerId, urlsText, kwText, language, copyStyle, googleAccountId],
+  });
+
+  /* 关键词联动：恢复完成后仍为空时，从该 offer 的投放选词快照取定好的词 */
+  useEffect(() => {
+    if (!restored || !offerId) return;
+    if (kwText.trim() || urlKwRef.current != null) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        for (const page of ["keyword-launch", "traffic-planner"] as const) {
+          if (cancelled) return;
+          const res = await loadWorkStateAction(page, offerId);
+          if (!res.ok || !res.data.state) continue;
+          const rows = (res.data.state.rows ?? res.data.state.keywords ?? []) as Array<{
+            keyword?: unknown;
+            matchType?: unknown;
+          }>;
+          const lines: string[] = [];
+          const seen = new Set<string>();
+          for (const r of rows) {
+            const kw = typeof r.keyword === "string" ? r.keyword.trim() : "";
+            if (!kw || seen.has(kw.toLowerCase())) continue;
+            seen.add(kw.toLowerCase());
+            const mt =
+              page === "keyword-launch" && typeof r.matchType === "string"
+                ? r.matchType.trim().toLowerCase()
+                : "phrase";
+            lines.push(`${kw}, ${mt || "phrase"}`);
+          }
+          if (lines.length > 0) {
+            setKwText((prev) => (prev.trim() ? prev : lines.join("\n")));
+            return;
+          }
+        }
+      } catch {
+        /* 取不到就不填 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restored, offerId]);
   // 教练模式（第十三批）
   const [brandTermsText, setBrandTermsText] = useState("");
   const [coachFindings, setCoachFindings] = useState<CoachFinding[]>([]);
@@ -460,9 +555,51 @@ export function AdsAutoClient({ dict, lang }: { dict: AdsAutoDict; lang: "zh" | 
 
         {/* 投放选词里定好的关键词（可选）：填了就用这套，不再 AI 生成 */}
         <div className="mt-3">
-          <label className={labelClass} htmlFor="ads-auto-keywords">
-            {d.form.keywordsLabel}
-          </label>
+          <div className="flex items-center justify-between gap-2">
+            <label className={labelClass} htmlFor="ads-auto-keywords">
+              {d.form.keywordsLabel}
+            </label>
+            {offerId ? (
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    for (const page of ["keyword-launch", "traffic-planner"] as const) {
+                      const res = await loadWorkStateAction(page, offerId);
+                      if (!res.ok || !res.data.state) continue;
+                      const rows = (res.data.state.rows ?? res.data.state.keywords ?? []) as Array<{
+                        keyword?: unknown;
+                        matchType?: unknown;
+                      }>;
+                      const existing = new Set(
+                        kwText.split("\n").map((l) => l.split(",")[0]?.trim().toLowerCase()).filter(Boolean)
+                      );
+                      const lines: string[] = [];
+                      for (const r of rows) {
+                        const kw = typeof r.keyword === "string" ? r.keyword.trim() : "";
+                        if (!kw || existing.has(kw.toLowerCase())) continue;
+                        existing.add(kw.toLowerCase());
+                        const mt =
+                          page === "keyword-launch" && typeof r.matchType === "string"
+                            ? r.matchType.trim().toLowerCase()
+                            : "phrase";
+                        lines.push(`${kw}, ${mt || "phrase"}`);
+                      }
+                      if (lines.length > 0) {
+                        setKwText((prev) => (prev.trim() ? `${prev.trim()}\n${lines.join("\n")}` : lines.join("\n")));
+                        break;
+                      }
+                    }
+                  } catch {
+                    /* 取不到就不填 */
+                  }
+                }}
+                className="text-xs text-ink/60 hover:text-ink"
+              >
+                {d.form.importLaunchKeywords}
+              </button>
+            ) : null}
+          </div>
           <textarea
             id="ads-auto-keywords"
             rows={3}
