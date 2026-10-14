@@ -1506,6 +1506,7 @@ export async function registerAiRoutes(
       brandPolicy?: unknown;
       language?: unknown;
       keywordCount?: unknown;
+      seedKeywords?: unknown;
     };
   }>("/api/v1/ai/offer-blueprint", async (request) => {
     const info = await requireSession(deps, request);
@@ -1549,6 +1550,13 @@ export async function registerAiRoutes(
       brandPolicy: body.brandPolicy === "forbidden" ? "forbidden" : "allowed",
       language: body.language === "en" ? "en" : "zh",
       keywordCount: num(body.keywordCount) ?? undefined,
+      seedKeywords: Array.isArray(body.seedKeywords)
+        ? body.seedKeywords
+            .filter((x: unknown): x is string => typeof x === "string")
+            .map((x: string) => x.trim())
+            .filter(Boolean)
+            .slice(0, 50)
+        : undefined,
     };
     const blueprint = await generateBlueprint(
       {

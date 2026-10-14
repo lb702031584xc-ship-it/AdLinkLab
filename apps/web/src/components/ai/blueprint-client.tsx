@@ -181,6 +181,8 @@ export function BlueprintClient({
   const [targetMarket, setTargetMarket] = useState("US");
   const [offerUrl, setOfferUrl] = useState(initialOffer?.destinationUrl ?? "");
   const [termsText, setTermsText] = useState("");
+  /** 你的关键词：手动输入或从该 offer 的关键词页导入，推演优先评估它们。 */
+  const [seedKeywords, setSeedKeywords] = useState("");
   const [landingMode, setLandingMode] = useState<"landing" | "direct">("landing");
   const [brandPolicy, setBrandPolicy] = useState<"allowed" | "forbidden">("forbidden");
   const [selectedOfferId, setSelectedOfferId] = useState<string | null>(
@@ -203,12 +205,14 @@ export function BlueprintClient({
       version: 1,
       offerName, productDescription, avgPrice, commissionType, commissionValue,
       currency, targetMarket, offerUrl, termsText, landingMode, brandPolicy,
+      seedKeywords,
     }),
     isMeaningful: (snap) =>
       Boolean(
         (snap.offerName as string)?.trim() ||
           (snap.offerUrl as string)?.trim() ||
-          (snap.termsText as string)?.trim()
+          (snap.termsText as string)?.trim() ||
+          (snap.seedKeywords as string)?.trim()
       ),
     applySnapshot: (snap) => {
       const str = (v: unknown) => (v == null ? "" : String(v));
@@ -222,6 +226,7 @@ export function BlueprintClient({
       if (typeof snap.targetMarket === "string") setTargetMarket(snap.targetMarket);
       setOfferUrl(str(snap.offerUrl));
       setTermsText(str(snap.termsText));
+      setSeedKeywords(str(snap.seedKeywords));
       if (snap.landingMode === "landing" || snap.landingMode === "direct")
         setLandingMode(snap.landingMode);
       if (snap.brandPolicy === "allowed" || snap.brandPolicy === "forbidden")
@@ -230,7 +235,7 @@ export function BlueprintClient({
     watch: [
       selectedOfferId, offerName, productDescription, avgPrice, commissionType,
       commissionValue, currency, targetMarket, offerUrl, termsText,
-      landingMode, brandPolicy,
+      landingMode, brandPolicy, seedKeywords,
     ],
   });
 
@@ -244,6 +249,27 @@ export function BlueprintClient({
     if (o.commissionType === "fixed" || o.commissionType === "percentage")
       setCommissionType(o.commissionType);
     if (o.commissionValue != null) setCommissionValue(String(o.commissionValue));
+  };
+
+  /* 关键词联动：取该 offer 在关键词页已选的词（投放选词 + 投流决策关键词表） */
+  const loadKeywordsFromSnapshots = async (offerId: string): Promise<string[]> => {
+    const out: string[] = [];
+    for (const page of ["keyword-launch", "traffic-planner"] as const) {
+      try {
+        const res = await loadWorkStateAction(page, offerId);
+        if (!res.ok || !res.data.state) continue;
+        const rows = (res.data.state.rows ?? res.data.state.keywords ?? []) as Array<{
+          keyword?: unknown;
+        }>;
+        for (const r of rows) {
+          const kw = typeof r.keyword === "string" ? r.keyword.trim() : "";
+          if (kw && !out.some((x) => x.toLowerCase() === kw.toLowerCase())) out.push(kw);
+        }
+      } catch {
+        /* 取不到就跳过 */
+      }
+    }
+    return out;
   };
 
   /* 条款联动：为空时从该 offer 的条款解读快照取正文（前面页面已解析过的不用重贴） */
@@ -264,6 +290,12 @@ export function BlueprintClient({
       appliedOfferRef.current = key;
       fillFromOffer(initialOffer!);
       void fillTermsFromSnapshot(initialOffer!.id);
+      void (async () => {
+        const kws = await loadKeywordsFromSnapshots(initialOffer!.id);
+        if (kws.length > 0) {
+          setSeedKeywords((prev) => (prev.trim() ? prev : kws.join("\n")));
+        }
+      })();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialOffer]);
@@ -273,6 +305,22 @@ export function BlueprintClient({
     if (!o) return;
     fillFromOffer(o);
     void fillTermsFromSnapshot(o.id);
+    void (async () => {
+      const kws = await loadKeywordsFromSnapshots(o.id);
+      if (kws.length > 0) {
+        setSeedKeywords((prev) => {
+          if (prev.trim()) {
+            const existing = prev.split(/[\n,]+/).map((x) => x.trim()).filter(Boolean);
+            const merged = [...existing];
+            for (const kw of kws) {
+              if (!merged.some((x) => x.toLowerCase() === kw.toLowerCase())) merged.push(kw);
+            }
+            return merged.join("\n");
+          }
+          return kws.join("\n");
+        });
+      }
+    })();
     try {
       const res = await loadWorkStateAction("ai-blueprint", o.id);
       if (res.ok && res.data.state) {
@@ -392,6 +440,10 @@ export function BlueprintClient({
       landingMode,
       brandPolicy,
       keywordCount: 12,
+      seedKeywords: seedKeywords
+        .split(/[\n,]+/)
+        .map((x) => x.trim())
+        .filter(Boolean),
     };
     const res: AiActionResult<{ blueprint: BlueprintResult }> = await generateBlueprintAction(input);
     setBusy(false);
@@ -575,6 +627,29 @@ export function BlueprintClient({
           <textarea className={inputCls} rows={3} value={termsText} onChange={(e) => setTermsText(e.target.value)} placeholder={d.form.termsTextPh} />
         </div>
         <div className="md:col-span-2">
+          <div className="flex items-center justify-between gap-2">
+            <label className={labelCls}>{d.form.seedKeywords}</label>
+            {selectedOfferId ? (
+              <button type="button" onClick={async () => {
+                const kws = await loadKeywordsFromSnapshots(selectedOfferId);
+                if (kws.length === 0) return;
+                setSeedKeywords((prev) => {
+                  const existing = prev.split(/[\n,]+/).map((x) => x.trim()).filter(Boolean);
+                  const merged = [...existing];
+                  for (const kw of kws) {
+                    if (!merged.some((x) => x.toLowerCase() === kw.toLowerCase())) merged.push(kw);
+                  }
+                  return merged.join("\n");
+                });
+              }} className="text-xs text-ink/60 hover:text-ink">
+                {d.form.importKeywords}
+              </button>
+            ) : null}
+          </div>
+          <textarea className={inputCls} rows={3} value={seedKeywords} onChange={(e) => setSeedKeywords(e.target.value)} placeholder={d.form.seedKeywordsPh} />
+          <p className="mt-1 text-xs text-ink/50">{d.form.seedKeywordsHint}</p>
+        </div>
+        <div className="md:col-span-2">
           <button type="button" onClick={onGenerate} disabled={!canSubmit}
             className="rounded-lg bg-ink px-5 py-2.5 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50">
             {busy ? d.form.generating : d.form.generate}
@@ -669,6 +744,7 @@ export function BlueprintClient({
                   <thead><tr className="text-left text-ink/55">
                     <th className="py-1 pr-3 font-medium">{d.keywords.colKeyword}</th>
                     <th className="py-1 pr-3 font-medium">{d.keywords.colMatch}</th>
+                    <th className="py-1 pr-3 font-medium">{d.keywords.colSource}</th>
                     <th className="py-1 font-medium">{d.keywords.colReason}</th>
                   </tr></thead>
                   <tbody>
@@ -676,6 +752,7 @@ export function BlueprintClient({
                       <tr key={i} className="border-t border-ink/10">
                         <td className="py-1 pr-3 font-mono text-xs">{k.matchType === "exact" ? `[${k.keyword}]` : `"${k.keyword}"`}</td>
                         <td className="py-1 pr-3 text-ink/70">{k.matchType}</td>
+                        <td className="py-1 pr-3 text-ink/70">{k.source === "user" ? d.keywords.sourceUser : d.keywords.sourceAi}</td>
                         <td className="py-1 text-ink/70">{k.reason}</td>
                       </tr>
                     ))}

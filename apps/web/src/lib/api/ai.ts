@@ -614,12 +614,15 @@ export interface BlueprintInput {
   landingMode: "landing" | "direct";
   brandPolicy: "allowed" | "forbidden";
   keywordCount?: number;
+  /** 用户已选的关键词（关键词页/手动输入）：推演优先评估它们，再补充。 */
+  seedKeywords?: string[];
 }
 
 export interface BlueprintKeyword {
   keyword: string;
   reason: string;
   matchType: "exact" | "phrase";
+  source?: "user" | "ai";
 }
 
 export interface BlueprintResult {

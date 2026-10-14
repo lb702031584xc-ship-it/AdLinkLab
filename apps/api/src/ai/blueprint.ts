@@ -55,6 +55,8 @@ export interface BlueprintInput {
   brandPolicy: BrandPolicy;
   language: AnalysisLanguage;
   keywordCount?: number;
+  /** 用户已选的关键词（来自关键词页/手动输入）：推演优先评估它们，再补充。 */
+  seedKeywords?: string[];
 }
 
 export interface BlueprintDeps {
@@ -72,6 +74,8 @@ export interface BlueprintKeyword {
   keyword: string;
   reason: string;
   matchType: "exact" | "phrase";
+  /** user = 用户已选（关键词页/手动），ai = AI 补充。 */
+  source?: "user" | "ai";
 }
 
 export interface BlueprintProfit {
@@ -146,17 +150,70 @@ function round2(n: number): number {
 function buildKeywordPrompt(
   product: string,
   count: number,
-  language: AnalysisLanguage
+  language: AnalysisLanguage,
+  seeds: string[] = []
 ): { system: string; user: string } {
   const system =
     language === "en"
       ? "You are a 20-year affiliate paid-traffic expert specializing in Google Ads keyword strategy. Return JSON only. Important: you have no live volume/CPC data; never invent numeric scores, only give keyword ideas."
       : "You are a 20-year affiliate paid-traffic expert specializing in Google Ads keyword strategy. Return JSON only. Important: you have no live volume/CPC data; never invent numeric scores, only give keyword ideas.";
+  const seedLine =
+    seeds.length === 0
+      ? ""
+      : language === "en"
+        ? ` The user already selected these keywords: ${seeds.map((x) => `"${x}"`).join(", ")}. Evaluate each one (one-line reason: worth bidding and why / watch-outs), list them FIRST with source "user", then add supplements to reach ${count} total keywords (never repeat the user's keywords; supplements get source "ai").`
+        : ` 用户已经选了这些关键词：${seeds.map((x) => `"${x}"`).join("、")}。逐个评估（给一句话理由：是否值得投、注意什么），在返回列表里先放这些词（source 标 "user"），再补充到共 ${count} 个词（补充的不许和已有的重复，source 标 "ai"）。`;
   const user =
     language === "en"
-      ? `Suggest ${count} English keyword ideas worth checking in SEMRUSH/Keyword Planner for product/niche "${product}". Cover high-intent patterns (best/review/vs/discount/buy modifiers) and long-tail. Avoid informational-only terms. One-line reason per keyword (why this pattern is worth checking; never invent volume or scores). Return JSON only: {"keywords":[{"keyword":"...","reason":"..."}]}`
-      : `为产品/品类"${product}"推荐 ${count} 个值得去 SEMRUSH/关键词规划师查数据的英文关键词思路。要求：覆盖高购买意图词型（best/review/vs/discount/buy 修饰）、长尾词；避开纯信息类词。每个词给一句话选词理由（说明这个词型为什么值得查，不要编造搜索量或评分）。只返回 JSON：{"keywords":[{"keyword":"...","reason":"..."}]}`;
+      ? `Suggest ${count} English keyword ideas worth checking in SEMRUSH/Keyword Planner for product/niche "${product}". Cover high-intent patterns (best/review/vs/discount/buy modifiers) and long-tail. Avoid informational-only terms. One-line reason per keyword (why this pattern is worth checking; never invent volume or scores).${seedLine} Return JSON only: {"keywords":[{"keyword":"...","reason":"...","source":"user|ai"}]}`
+      : `为产品/品类"${product}"推荐 ${count} 个值得去 SEMRUSH/关键词规划师查数据的英文关键词思路。要求：覆盖高购买意图词型（best/review/vs/discount/buy 修饰）、长尾词；避开纯信息类词。每个词给一句话选词理由（说明这个词型为什么值得查，不要编造搜索量或评分）。${seedLine} 只返回 JSON：{"keywords":[{"keyword":"...","reason":"...","source":"user|ai"}]}`;
   return { system, user };
+}
+
+/**
+ * 合并关键词：用户种子全部保留在前（AI 若评估过则用 AI 的理由，否则用默认理由），
+ * AI 补充去重后补足到 count 个。绝不丢用户已选的词。
+ */
+export function mergeKeywordItems(
+  seeds: string[],
+  aiItems: Array<{ keyword?: unknown; reason?: unknown; source?: unknown }>,
+  count: number,
+  language: AnalysisLanguage
+): BlueprintKeyword[] {
+  const seen = new Set<string>();
+  const out: BlueprintKeyword[] = [];
+  const fallbackReason =
+    language === "en" ? "Your selected keyword" : "你已选的关键词";
+  const clean = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  for (const s of seeds) {
+    const kw = clean(s);
+    if (!kw) continue;
+    const key = kw.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const ai = aiItems.find((a) => clean(a.keyword).toLowerCase() === key);
+    out.push({
+      keyword: kw,
+      reason: clean(ai?.reason) || fallbackReason,
+      matchType: suggestMatchType(kw),
+      source: "user",
+    });
+  }
+  for (const a of aiItems) {
+    if (out.length >= count) break;
+    const kw = clean(a.keyword);
+    if (!kw) continue;
+    const key = kw.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      keyword: kw,
+      reason: clean(a.reason),
+      matchType: suggestMatchType(kw),
+      source: "ai",
+    });
+  }
+  return out;
 }
 
 /** 词越短越核心 → exact；长尾 → phrase. */
@@ -215,27 +272,25 @@ export async function generateBlueprint(
         : "保本 CPC = payout × 假设转化率。转化率为假设区间、非实测数据，请以关键词规划师真实 CPC 和落地页实测为准。",
   };
 
-  // 3. 关键词计划
+  // 3. 关键词计划：用户已选的种子优先，AI 评估+补充
   const keywords: OfferBlueprint["keywords"] = { items: [], error: null };
   try {
     const count = Math.min(Math.max(input.keywordCount ?? 12, 5), 20);
-    const { system, user } = buildKeywordPrompt(input.offerName, count, language);
+    const seeds = (input.seedKeywords ?? [])
+      .map((x) => (typeof x === "string" ? x.trim() : ""))
+      .filter(Boolean)
+      .slice(0, 50);
+    const { system, user } = buildKeywordPrompt(input.offerName, count, language, seeds);
     const raw = (await chat({
       ...llmArgs,
-      system: system + '\nReturn JSON: {"keywords":[{"keyword":"...","reason":"..."}]}',
+      system:
+        system +
+        '\nReturn JSON: {"keywords":[{"keyword":"...","reason":"...","source":"user|ai"}]}',
       user,
-    })) as { keywords?: Array<{ keyword?: unknown; reason?: unknown }> };
-    keywords.items = (raw.keywords ?? [])
-      .filter((k) => typeof k.keyword === "string" && (k.keyword as string).trim())
-      .slice(0, count)
-      .map((k) => {
-        const kw = (k.keyword as string).trim();
-        return {
-          keyword: kw,
-          reason: typeof k.reason === "string" ? k.reason.trim() : "",
-          matchType: suggestMatchType(kw),
-        };
-      });
+    })) as {
+      keywords?: Array<{ keyword?: unknown; reason?: unknown; source?: unknown }>;
+    };
+    keywords.items = mergeKeywordItems(seeds, raw.keywords ?? [], count, language);
   } catch (e) {
     keywords.error = llmErrorMessage(e);
   }
