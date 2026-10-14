@@ -24,8 +24,16 @@ export interface WorkStateRouteDeps {
   prisma: PrismaClient;
 }
 
-/** 允许自动保存的页面 key（白名单，防止 state 表被滥用）。 */
-const ALLOWED_PAGES = ["ai-worksheet", "keyword-launch", "keyword-research"] as const;
+/** 允许自动保存的页面 key（白名单，防止 state 表被滥用）。需与 web 端 WorkStatePage 保持一致。 */
+const ALLOWED_PAGES = [
+  "ai-worksheet",
+  "keyword-launch",
+  "keyword-research",
+  "traffic-planner",
+  "ai-terms",
+  "ai-compliance",
+  "ai-blueprint",
+] as const;
 type WorkStatePage = (typeof ALLOWED_PAGES)[number];
 
 /** 快照 JSON 上限 200KB：防止误传超大 state。 */

@@ -318,10 +318,11 @@ export function TrafficPlannerClient({
     if (s.mode === "landing" || s.mode === "direct") setMode(s.mode);
     if (s.brandPolicy === "allowed" || s.brandPolicy === "forbidden")
       setBrandPolicy(s.brandPolicy);
-    setOfferName(str(s.offerName));
-    setPayout(str(s.payout));
-    setNetwork(str(s.network));
-    setCookieDays(str(s.cookieDays));
+    /* offer 字段：快照为空时不覆盖（库参数为准；空快照是"没填过"不是"清空"） */
+    if (str(s.offerName)) setOfferName(str(s.offerName));
+    if (str(s.payout)) setPayout(str(s.payout));
+    if (str(s.network)) setNetwork(str(s.network));
+    if (str(s.cookieDays)) setCookieDays(str(s.cookieDays));
     setEpc(str(s.epc));
     setNetworkCvr(str(s.networkCvr));
     setRefundRate(str(s.refundRate));

@@ -45,7 +45,20 @@ export default async function TrafficPlannerPage({
     try {
       initialOffer = toPlannerOffer(await entityApi.offers.get(sp.offerId));
     } catch {
-      /* invalid id: render without a subject */
+      /* invalid id: fall through to last-used offer */
+    }
+  }
+  if (!initialOffer) {
+    // 没带有效 offerId：接上上次在这个页工作过的 offer（而不是全空）
+    try {
+      const { listWorkStateHistory } = await import("@/lib/api/work-state");
+      const hist = await listWorkStateHistory("traffic-planner", { limit: 5 });
+      const lastOfferId = hist.find((h) => h.offerId)?.offerId;
+      if (lastOfferId) {
+        initialOffer = toPlannerOffer(await entityApi.offers.get(lastOfferId));
+      }
+    } catch {
+      /* no history / offer gone: render empty */
     }
   }
 
