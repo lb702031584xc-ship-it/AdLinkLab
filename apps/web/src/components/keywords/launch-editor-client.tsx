@@ -418,7 +418,11 @@ export function LaunchEditorClient({
                 href={`/ads/auto-create?keywords=${encodeURIComponent(
                   rows
                     .filter((r) => r.keyword.trim())
-                    .map((r) => `${r.keyword.trim()}, ${r.matchType}`)
+                    .map((r) => {
+                      // phrase 是默认，不写后缀；只给 exact / broad 写后缀
+                      const mt = (r.matchType ?? "").toLowerCase();
+                      return mt && mt !== "phrase" ? `${r.keyword.trim()}, ${r.matchType}` : r.keyword.trim();
+                    })
                     .join("\n")
                 )}${offerId ? `&offerId=${encodeURIComponent(offerId)}` : ""}`}
                 className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink/70 hover:bg-ink/5"

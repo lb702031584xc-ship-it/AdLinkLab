@@ -41,6 +41,17 @@ function keywordText(k: AdPlanKeyword): string {
   return k.text;
 }
 
+/**
+ * 关键词文本清洗：phrase 是默认匹配方式，行尾的 ", phrase" 是多余的，去掉
+ * （只去行尾后缀；exact / broad 保留，因为不写就变 phrase 了）。
+ */
+function normalizeKwText(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => line.replace(/,\s*phrase\s*$/i, ""))
+    .join("\n");
+}
+
 function PlanPreview({ plan, d }: { plan: AdPlan; d: AdsAutoDict }) {
   const c = plan.campaign;
   return (
@@ -180,7 +191,7 @@ export function AdsAutoClient({
     const k = searchParams.get("keywords");
     if (k) {
       urlKwRef.current = k;
-      if (!kwText) setKwText(k);
+      if (!kwText) setKwText(normalizeKwText(k));
     }
     const cs = searchParams.get("copyStyle");
     if (cs === "official" || cs === "affiliate") {
@@ -239,7 +250,7 @@ export function AdsAutoClient({
     applySnapshot: (snap) => {
       const str = (v: unknown) => (v == null ? "" : String(v));
       if (urlUrlsRef.current == null && str(snap.urlsText)) setUrlsText(str(snap.urlsText));
-      if (urlKwRef.current == null && str(snap.kwText)) setKwText(str(snap.kwText));
+      if (urlKwRef.current == null && str(snap.kwText)) setKwText(normalizeKwText(str(snap.kwText)));
       if (urlCsRef.current == null && (snap.copyStyle === "official" || snap.copyStyle === "affiliate"))
         setCopyStyle(snap.copyStyle);
       if (snap.language === "zh" || snap.language === "en") setLanguage(snap.language);
@@ -267,7 +278,8 @@ export function AdsAutoClient({
           page === "keyword-launch" && typeof r.matchType === "string"
             ? r.matchType.trim().toLowerCase()
             : "phrase";
-        lines.push(`${kw}, ${mt || "phrase"}`);
+        // phrase 是默认，不写后缀；只给 exact / broad 写后缀
+        lines.push(mt && mt !== "phrase" ? `${kw}, ${mt}` : kw);
       }
       if (lines.length > 0) return lines;
     }
