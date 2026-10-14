@@ -57,6 +57,12 @@ export interface KeywordStarterDict {
   aiImportOne: string;
   aiFailed: string;
   aiNoScoreHint: string;
+  sourceCapture: string;
+  sourceAi: string;
+  captureKwFrom: string;
+  captureKwPage: string;
+  captureKwVolume: string;
+  captureKwExtracting: string;
   /* 投放选词 */
   planTitle: string;
   history: string;
@@ -150,6 +156,12 @@ export const zh: KeywordStarterDict = {
   aiImportOne: "导入",
   aiFailed: "AI 推荐失败，请稍后重试",
   aiNoScoreHint: "💡 以下为 AI 选词思路（未打分）。导入后去 SEMRUSH/规划师查真实数据填入下方，系统按真实数据算分。",
+  sourceCapture: "抓取",
+  sourceAi: "AI",
+  captureKwFrom: "抓取自",
+  captureKwPage: "抓取页",
+  captureKwVolume: "月搜索量",
+  captureKwExtracting: "🤖 AI 正在读取抓取页面，提取里面的真实关键词…",
   planTitle: "投放关键词计划",
   history: "历史记录",
   historyEmpty: "还没有保存的关键词进度。",
@@ -244,6 +256,12 @@ export const en: KeywordStarterDict = {
   aiImportOne: "Import",
   aiFailed: "Recommendation failed, please try again",
   aiNoScoreHint: "💡 Keyword ideas from AI (not scored). Import them, fill in real SEMRUSH/Planner data below, and the system scores from real data.",
+  sourceCapture: "Captured",
+  sourceAi: "AI",
+  captureKwFrom: "Captured from",
+  captureKwPage: "captured page",
+  captureKwVolume: "Volume",
+  captureKwExtracting: "🤖 AI is reading the captured page, extracting its real keywords…",
   planTitle: "Launch keyword plan",
   history: "History",
   historyEmpty: "No saved keyword progress yet.",

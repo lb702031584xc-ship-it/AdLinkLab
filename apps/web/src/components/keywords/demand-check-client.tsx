@@ -8,7 +8,10 @@
 import { useEffect, useMemo, useState } from "react";
 import type { KeywordStarterDict } from "@/i18n/dict/keyword-starter";
 import { useWorkState } from "@/lib/use-work-state";
-import { recommendKeywordsAction } from "@/lib/api/ai-actions";
+import {
+  recommendKeywordsAction,
+  parseKeywordCaptureAiAction,
+} from "@/lib/api/ai-actions";
 import type { RecommendedKeyword } from "@/lib/api/ai";
 import { CapturePicker } from "@/components/ai/capture-picker";
 
@@ -143,6 +146,7 @@ export function DemandCheckClient({
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiKeywords, setAiKeywords] = useState<RecommendedKeyword[]>([]);
+  const [captureExtracting, setCaptureExtracting] = useState(false);
 
   /* 自动保存：刷新/隔夜后可恢复（租户隔离） */
   const { historyOpen, historyItems, restoredAt, toggleHistory, restoreFromHistory } =
@@ -203,7 +207,15 @@ export function DemandCheckClient({
     try {
       const res = await recommendKeywordsAction(p, 10);
       if (res.ok) {
-        setAiKeywords(res.data.keywords);
+        setAiKeywords((cur) => {
+          const have = new Set(
+            cur.map((k) => k.keyword.trim().toLowerCase()).filter(Boolean)
+          );
+          const fresh = res.data.keywords
+            .filter((k) => k.keyword && !have.has(k.keyword.trim().toLowerCase()))
+            .map((k) => ({ ...k, source: "ai" as const }));
+          return [...cur, ...fresh];
+        });
       } else {
         setAiError(res.error || d.aiFailed);
       }
@@ -214,13 +226,15 @@ export function DemandCheckClient({
     }
   };
 
-  const importAiKeyword = (kw: string) => {
-    const t = kw.trim();
+  const importAiKeyword = (k: RecommendedKeyword) => {
+    const t = k.keyword.trim();
     if (!t) return;
     setRows((rs) => {
       const have = new Set(rs.map((r) => r.keyword.trim().toLowerCase()));
       if (have.has(t.toLowerCase())) return rs;
-      return [...rs, newRow(t)];
+      const row = newRow(t);
+      if (k.volume != null) row.volume = String(k.volume);
+      return [...rs, row];
     });
   };
 
@@ -228,9 +242,12 @@ export function DemandCheckClient({
     setRows((rs) => {
       const have = new Set(rs.map((r) => r.keyword.trim().toLowerCase()));
       const fresh = aiKeywords
-        .map((k) => k.keyword.trim())
-        .filter((w) => w && !have.has(w.toLowerCase()))
-        .map((w) => newRow(w));
+        .filter((k) => k.keyword.trim() && !have.has(k.keyword.trim().toLowerCase()))
+        .map((k) => {
+          const row = newRow(k.keyword.trim());
+          if (k.volume != null) row.volume = String(k.volume);
+          return row;
+        });
       return [...rs, ...fresh];
     });
   };
@@ -361,11 +378,44 @@ export function DemandCheckClient({
         </div>
         <p className="mt-1 text-xs text-ink/50">{d.aiRecommendHint}</p>
         <CapturePicker
-          onPick={(c) => {
+          onPick={async (c) => {
             const v = [c.title, c.description].filter(Boolean).join(" ").slice(0, 500);
             if (v) setAiProductInput(v);
+            // 抓取页面的真实关键词（AI 提取，带搜索量）进推荐列表，标明来源
+            setCaptureExtracting(true);
+            try {
+              const res = await parseKeywordCaptureAiAction(c.id);
+              if (res.ok && res.data.rows.length > 0) {
+                const from = (c.title || "").trim();
+                setAiKeywords((cur) => {
+                  const have = new Set(
+                    cur.map((k) => k.keyword.trim().toLowerCase()).filter(Boolean)
+                  );
+                  const fresh: RecommendedKeyword[] = [];
+                  for (const row of res.data.rows) {
+                    if (!row.keyword || have.has(row.keyword.toLowerCase())) continue;
+                    have.add(row.keyword.toLowerCase());
+                    const parts = [`${d.captureKwFrom} ${from || d.captureKwPage}`];
+                    if (row.volume != null)
+                      parts.push(`${d.captureKwVolume} ${row.volume.toLocaleString()}`);
+                    fresh.push({
+                      keyword: row.keyword,
+                      reason: parts.join(" · "),
+                      source: "capture",
+                      volume: row.volume,
+                    });
+                  }
+                  return [...fresh, ...cur];
+                });
+              }
+            } finally {
+              setCaptureExtracting(false);
+            }
           }}
         />
+        {captureExtracting && (
+          <p className="mt-1 text-xs text-ink/55">{d.captureKwExtracting}</p>
+        )}
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <input
             value={aiProductInput}
@@ -405,13 +455,22 @@ export function DemandCheckClient({
               >
                 <div className="min-w-0">
                   <span className="text-sm font-medium text-ink">{k.keyword}</span>
+                  <span
+                    className={`ml-2 rounded px-1.5 py-0.5 text-[11px] ${
+                      k.source === "capture"
+                        ? "bg-emerald-100 text-emerald-800"
+                        : "bg-ink/5 text-ink/60"
+                    }`}
+                  >
+                    {k.source === "capture" ? `📥 ${d.sourceCapture}` : `🤖 ${d.sourceAi}`}
+                  </span>
                   {k.reason && (
                     <p className="truncate text-xs text-ink/50">{k.reason}</p>
                   )}
                 </div>
                 <button
                   type="button"
-                  onClick={() => importAiKeyword(k.keyword)}
+                  onClick={() => importAiKeyword(k)}
                   className="shrink-0 text-xs text-signal hover:underline"
                 >
                   {d.aiImportOne}

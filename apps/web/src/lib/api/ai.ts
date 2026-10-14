@@ -368,6 +368,10 @@ export async function analyzeTrafficPlan(
 export interface RecommendedKeyword {
   keyword: string;
   reason: string;
+  /** capture = 抓取页面里的真实词（带搜索量），ai = AI 现想的思路。 */
+  source?: "capture" | "ai";
+  /** 抓取词的月搜索量（页面原文）。 */
+  volume?: number | null;
 }
 
 export async function recommendKeywords(
