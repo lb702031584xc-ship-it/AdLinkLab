@@ -12,8 +12,14 @@ import type { OfferCaptureItem } from "@/lib/api/ai";
  */
 export function CapturePicker({
   onPick,
+  label,
+  className,
 }: {
   onPick: (c: OfferCaptureItem) => void;
+  /** 自定义按钮文案；不传则用默认“浏览器插件抓取记录”。 */
+  label?: string;
+  /** 外层容器 class，默认 mt-2；嵌入卡片头部时传 "" 取消间距。 */
+  className?: string;
 }) {
   const t = useDict();
   const d = t.ai.captures;
@@ -31,7 +37,7 @@ export function CapturePicker({
   }
 
   return (
-    <div className="mt-2">
+    <div className={className ?? "mt-2"}>
       <button
         type="button"
         onClick={() => {
@@ -40,7 +46,7 @@ export function CapturePicker({
         }}
         className="text-xs text-ink/60 hover:text-ink"
       >
-        🧩 {d.toggle} {open ? "▲" : "▼"}
+        {label ?? `🧩 ${d.toggle}`} {open ? "▲" : "▼"}
       </button>
       {open ? (
         <div className="mt-2 space-y-1.5 rounded-lg border border-ink/10 bg-ink/[0.02] p-2">

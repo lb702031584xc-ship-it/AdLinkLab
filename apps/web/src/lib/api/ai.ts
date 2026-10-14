@@ -810,6 +810,8 @@ export interface AiKeywordRow {
   plannerHigh: number | null;
   competition: "Low" | "Medium" | "High" | null;
   intent: string | null;
+  /** 趋势：页面明确给出时才有，否则 null。 */
+  trend: "up" | "flat" | "down" | null;
 }
 
 /** 抓取页面 AI 提取关键词：AI 认表格、逐行提取、判断购买意图。 */

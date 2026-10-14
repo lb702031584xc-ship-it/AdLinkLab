@@ -16,6 +16,8 @@ export interface AiKeywordRow {
   competition: "Low" | "Medium" | "High" | null;
   /** 购买意图：交易 / 商业调查 / 信息 / 导航。 */
   intent: string | null;
+  /** 趋势：页面明确给出趋势方向时才有，否则 null（趋势图本身读不出就 null）。 */
+  trend: "up" | "flat" | "down" | null;
 }
 
 export type AnalysisLanguage = "zh" | "en";
@@ -23,6 +25,18 @@ export type AnalysisLanguage = "zh" | "en";
 const INTENT_ZH = new Set(["交易", "商业调查", "信息", "导航"]);
 const INTENT_EN = new Set(["Transactional", "Commercial", "Informational", "Navigational"]);
 const COMPETITION = new Set(["Low", "Medium", "High"]);
+/** 趋势归一化：英文枚举 + 中文标签都接受。 */
+const TREND_MAP: Record<string, "up" | "flat" | "down"> = {
+  up: "up",
+  "上升": "up",
+  rising: "up",
+  flat: "flat",
+  "平稳": "flat",
+  stable: "flat",
+  down: "down",
+  "下降": "down",
+  declining: "down",
+};
 
 export function buildKeywordExtractPrompt(
   pageText: string,
@@ -38,12 +52,13 @@ export function buildKeywordExtractPrompt(
 Tasks:
 1. Find the keyword list/table in the text (if several tables, pick the one that looks most like keyword data).
 2. Extract each row: keyword, monthly search volume, SEMrush CPC, Planner low bid, Planner high bid, competition.
-3. Judge each keyword's purchase intent:
+3. Trend: only when the page explicitly shows a trend direction for the keyword (e.g. "Trend +12%", "rising", "declining", a trend arrow with a % change). Otherwise null. Never infer trend from volume alone.
+4. Judge each keyword's purchase intent:
    - Transactional: contains buy/discount/coupon/price/cheap/deal/order, or clearly wants to buy;
    - Commercial: contains best/review/vs/top, comparing before buying;
    - Informational: contains how/what/why/guide, just researching;
    - Navigational: only the brand/product name itself, looking for the official site.
-4. Return JSON only: {"rows":[{"keyword":"...","volume":14800,"cpc":1.5,"plannerLow":0.8,"plannerHigh":2.5,"competition":"Medium","intent":"Transactional"}]}
+5. Return JSON only: {"rows":[{"keyword":"...","volume":14800,"cpc":1.5,"plannerLow":0.8,"plannerHigh":2.5,"competition":"Medium","intent":"Transactional","trend":"up"}]}
 
 Strict rules:
 - Numbers must come from the page text. Never invent, estimate, or fill in.
@@ -66,12 +81,13 @@ ${text}
 任务：
 1. 找出页面里的关键词列表/表格（有多张表就取最像关键词数据的那张）。
 2. 逐行提取：关键词、月搜索量、SEMrush CPC、Planner 低位出价、Planner 高位出价、竞争度。
-3. 判断每个词的购买意图：
+3. 趋势：只有页面明确给出了该词的趋势方向时才填（例如“趋势 +12%”、上升/下降箭头配百分比）。否则 null。绝不只凭搜索量推断趋势。
+4. 判断每个词的购买意图：
    - 交易：含 buy/discount/coupon/price/cheap/deal/order/购买/优惠/折扣等，或明确表示要买；
    - 商业调查：含 best/review/vs/top/推荐/对比/评测等，正在比较选购；
    - 信息：含 how/what/why/guide/教程/怎么/什么等，纯查资料；
    - 导航：只有品牌/产品名本身，想找官网。
-4. 只返回 JSON：{"rows":[{"keyword":"...","volume":14800,"cpc":1.5,"plannerLow":0.8,"plannerHigh":2.5,"competition":"Medium","intent":"交易"}]}
+5. 只返回 JSON：{"rows":[{"keyword":"...","volume":14800,"cpc":1.5,"plannerLow":0.8,"plannerHigh":2.5,"competition":"Medium","intent":"交易","trend":"up"}]}
 
 严格规则：
 - 数字必须来自页面原文，不许编造、估算、补全。页面没有的字段填 null。
@@ -113,6 +129,8 @@ export function normalizeAiKeywordRows(raw: unknown): AiKeywordRow[] {
         : null;
     const intentRaw = typeof r.intent === "string" ? r.intent.trim() : "";
     const intent = INTENT_ZH.has(intentRaw) || INTENT_EN.has(intentRaw) ? intentRaw : null;
+    const trendRaw = typeof r.trend === "string" ? r.trend.trim() : "";
+    const trend = TREND_MAP[trendRaw] ?? null;
     out.push({
       keyword,
       volume: num(r.volume),
@@ -121,6 +139,7 @@ export function normalizeAiKeywordRows(raw: unknown): AiKeywordRow[] {
       plannerHigh: num(r.plannerHigh),
       competition,
       intent,
+      trend,
     });
   }
   return out;

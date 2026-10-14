@@ -15,7 +15,7 @@ describe("keyword-capture-ai", () => {
   it("normalize：清洗非法行、去重、上限", () => {
     const rows = normalizeAiKeywordRows({
       rows: [
-        { keyword: "best bunk bed", volume: 5400, cpc: 1.2, intent: "商业调查", competition: "Medium" },
+        { keyword: "best bunk bed", volume: 5400, cpc: 1.2, intent: "商业调查", competition: "Medium", trend: "上升" },
         { keyword: "Best Bunk Bed", volume: 5400 },
         { keyword: "", volume: 1 },
         { keyword: "x", volume: -5, cpc: "abc", intent: "乱填" },
@@ -23,9 +23,9 @@ describe("keyword-capture-ai", () => {
       ],
     });
     expect(rows).toEqual([
-      { keyword: "best bunk bed", volume: 5400, cpc: 1.2, plannerLow: null, plannerHigh: null, competition: "Medium", intent: "商业调查" },
-      { keyword: "x", volume: null, cpc: null, plannerLow: null, plannerHigh: null, competition: null, intent: null },
-      { keyword: "no table here", volume: null, cpc: null, plannerLow: null, plannerHigh: null, competition: null, intent: null },
+      { keyword: "best bunk bed", volume: 5400, cpc: 1.2, plannerLow: null, plannerHigh: null, competition: "Medium", intent: "商业调查", trend: "up" },
+      { keyword: "x", volume: null, cpc: null, plannerLow: null, plannerHigh: null, competition: null, intent: null, trend: null },
+      { keyword: "no table here", volume: null, cpc: null, plannerLow: null, plannerHigh: null, competition: null, intent: null, trend: null },
     ]);
   });
 

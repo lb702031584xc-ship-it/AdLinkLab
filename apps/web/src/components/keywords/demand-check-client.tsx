@@ -147,6 +147,9 @@ export function DemandCheckClient({
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiKeywords, setAiKeywords] = useState<RecommendedKeyword[]>([]);
   const [captureExtracting, setCaptureExtracting] = useState(false);
+  // 抓取填充参数：忙碌目标（"all" = 全部；行 id = 单条）与每条的提示
+  const [fillBusy, setFillBusy] = useState<string | null>(null);
+  const [fillNotes, setFillNotes] = useState<Record<string, string>>({});
 
   /* 自动保存：刷新/隔夜后可恢复（租户隔离） */
   const { historyOpen, historyItems, restoredAt, toggleHistory, restoreFromHistory } =
@@ -268,6 +271,58 @@ export function DemandCheckClient({
   const update = (id: string, patch: Partial<DemandRow>) =>
     setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   const removeRow = (id: string) => setRows((rs) => rs.filter((r) => r.id !== id));
+
+  /* 抓取填充参数：AI 从抓取页提取该词的真实参数，匹配上的才覆盖，没匹配的不动 */
+  const fillFromCapture = async (captureId: string, target: "all" | string) => {
+    const busyKey = target === "all" ? "all" : target;
+    setFillBusy(busyKey);
+    try {
+      const res = await parseKeywordCaptureAiAction(captureId);
+      if (!res.ok || res.data.rows.length === 0) {
+        setFillNotes((n) => ({ ...n, [busyKey]: d.captureFillRowNone }));
+        return;
+      }
+      const byKw = new Map(
+        res.data.rows.map((r) => [r.keyword.trim().toLowerCase(), r])
+      );
+      const patches = new Map<string, Partial<DemandRow>>();
+      for (const row of rows) {
+        if (target !== "all" && row.id !== target) continue;
+        const ai = byKw.get(row.keyword.trim().toLowerCase());
+        if (!ai) continue;
+        const patch: Partial<DemandRow> = {};
+        if (ai.volume != null) patch.volume = String(ai.volume);
+        if (ai.competition === "Low") patch.competition = "low";
+        else if (ai.competition === "Medium") patch.competition = "medium";
+        else if (ai.competition === "High") patch.competition = "high";
+        // 导航意图没有对应选项，保持原值不覆盖
+        if (ai.intent === "交易" || ai.intent === "Transactional") patch.intent = "buy";
+        else if (ai.intent === "商业调查" || ai.intent === "Commercial") patch.intent = "compare";
+        else if (ai.intent === "信息" || ai.intent === "Informational") patch.intent = "info";
+        if (ai.trend === "up" || ai.trend === "flat" || ai.trend === "down") patch.trend = ai.trend;
+        if (Object.keys(patch).length > 0) patches.set(row.id, patch);
+      }
+      if (patches.size === 0) {
+        setFillNotes((n) => ({
+          ...n,
+          [busyKey]: target === "all" ? d.captureFillNone : d.captureFillRowNone,
+        }));
+        return;
+      }
+      setRows((cur) =>
+        cur.map((r) => (patches.has(r.id) ? { ...r, ...patches.get(r.id) } : r))
+      );
+      setFillNotes((n) => ({
+        ...n,
+        [busyKey]:
+          target === "all"
+            ? d.captureFillDone.replace("{n}", String(patches.size))
+            : d.captureFillRowDone,
+      }));
+    } finally {
+      setFillBusy(null);
+    }
+  };
 
   const addKeyword = () => {
     const kw = kwInput.trim();
@@ -533,6 +588,21 @@ export function DemandCheckClient({
         </div>
       )}
 
+      {rows.length > 0 && (
+        <div className="mt-2">
+          <CapturePicker
+            label={d.captureFillAll}
+            onPick={(c) => void fillFromCapture(c.id, "all")}
+          />
+          {fillBusy === "all" && (
+            <p className="mt-1 text-xs text-ink/55">{d.captureFilling}</p>
+          )}
+          {fillNotes.all && fillBusy !== "all" && (
+            <p className="mt-1 text-xs text-ink/55">{fillNotes.all}</p>
+          )}
+        </div>
+      )}
+
       {rows.length === 0 ? (
         <p className="rounded-xl border border-dashed border-ink/20 bg-white/50 p-6 text-center text-sm text-ink/50">
           {d.emptyDemand}
@@ -561,6 +631,11 @@ export function DemandCheckClient({
                     <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${verdictCls[v]}`}>
                       {d.verdictOptions[v]}
                     </span>
+                    <CapturePicker
+                      label={d.captureFillRow}
+                      className=""
+                      onPick={(c) => void fillFromCapture(c.id, r.id)}
+                    />
                     <button
                       type="button"
                       onClick={() => removeRow(r.id)}
@@ -627,6 +702,11 @@ export function DemandCheckClient({
                     <a href={semrushUrl()} target="_blank" rel="noreferrer" className="text-signal hover:underline">{d.openSemrush} ↗</a>
                   </span>
                 </div>
+                {(fillBusy === r.id || fillNotes[r.id]) && (
+                  <p className="mt-2 text-xs text-ink/55">
+                    {fillBusy === r.id ? d.captureFilling : fillNotes[r.id]}
+                  </p>
+                )}
               </div>
             );
           })}

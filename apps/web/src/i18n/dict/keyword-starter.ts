@@ -63,6 +63,13 @@ export interface KeywordStarterDict {
   captureKwPage: string;
   captureKwVolume: string;
   captureKwExtracting: string;
+  captureFillAll: string;
+  captureFillRow: string;
+  captureFilling: string;
+  captureFillDone: string;
+  captureFillNone: string;
+  captureFillRowDone: string;
+  captureFillRowNone: string;
   /* 投放选词 */
   planTitle: string;
   history: string;
@@ -162,6 +169,13 @@ export const zh: KeywordStarterDict = {
   captureKwPage: "抓取页",
   captureKwVolume: "月搜索量",
   captureKwExtracting: "🤖 AI 正在读取抓取页面，提取里面的真实关键词…",
+  captureFillAll: "📥 抓取填充参数（全部）",
+  captureFillRow: "📥 抓取填充",
+  captureFilling: "🤖 AI 正在读取抓取页面，提取参数…",
+  captureFillDone: "已从抓取页填充 {n} 个词的参数",
+  captureFillNone: "抓取页里没找到这些词，未覆盖",
+  captureFillRowDone: "已从抓取页填充参数",
+  captureFillRowNone: "抓取页里没找到这个词，未覆盖",
   planTitle: "投放关键词计划",
   history: "历史记录",
   historyEmpty: "还没有保存的关键词进度。",
@@ -262,6 +276,13 @@ export const en: KeywordStarterDict = {
   captureKwPage: "captured page",
   captureKwVolume: "Volume",
   captureKwExtracting: "🤖 AI is reading the captured page, extracting its real keywords…",
+  captureFillAll: "📥 Fill params from capture (all)",
+  captureFillRow: "📥 Fill from capture",
+  captureFilling: "🤖 AI is reading the captured page, extracting params…",
+  captureFillDone: "Filled params for {n} keywords from the captured page",
+  captureFillNone: "No matching keywords found on the captured page; nothing overwritten",
+  captureFillRowDone: "Params filled from the captured page",
+  captureFillRowNone: "This keyword was not found on the captured page; nothing overwritten",
   planTitle: "Launch keyword plan",
   history: "History",
   historyEmpty: "No saved keyword progress yet.",
