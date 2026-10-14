@@ -114,6 +114,13 @@ function siteUrl(site: string, query: string): string {
       return q ? `https://www.similarweb.com/website/${q}/` : "https://www.similarweb.com/";
     case "trends":
       return q ? `https://trends.google.com/trends/explore?q=${q}` : "https://trends.google.com/";
+    /* 电商查询：电商 offer 在 Offervault 查不到数据，直接看产品本身 */
+    case "amazon":
+      return q ? `https://www.amazon.com/s?k=${q}` : "https://www.amazon.com/";
+    case "keepa":
+      return q ? `https://keepa.com/#!search/1-${q}` : "https://keepa.com/";
+    case "gshopping":
+      return q ? `https://www.google.com/search?tbm=shop&q=${q}` : "https://www.google.com/shopping";
     default:
       return "https://www.google.com/";
   }
@@ -792,6 +799,23 @@ export function TrafficPlannerClient({
               <span className={hintCls}>{d.refundRateHint}</span>
               <input className={inputCls} type="number" min="0" step="0.1" value={refundRate} onChange={(e) => setRefundRate(e.target.value)} placeholder="5" />
             </label>
+          </div>
+          {/* 电商查询：电商 offer 在 Offervault 没有数据，直接查产品本身 */}
+          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-ink/10 pt-3">
+            <span className="text-xs font-medium text-ink/70">{d.ecomQuery}：</span>
+            <a href={siteUrl("amazon", offerName)} target="_blank" rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 rounded-lg bg-signal/10 px-2.5 py-1 text-xs font-medium text-signal transition hover:bg-signal/20">
+              ↗ {d.amazonSearch}
+            </a>
+            <a href={siteUrl("keepa", offerName)} target="_blank" rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 rounded-lg bg-signal/10 px-2.5 py-1 text-xs font-medium text-signal transition hover:bg-signal/20">
+              ↗ {d.keepaPrice}
+            </a>
+            <a href={siteUrl("gshopping", offerName)} target="_blank" rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 rounded-lg bg-signal/10 px-2.5 py-1 text-xs font-medium text-signal transition hover:bg-signal/20">
+              ↗ {d.googleShopping}
+            </a>
+            <span className="text-xs text-ink/50">{d.ecomQueryHint}</span>
           </div>
         </div>
 
