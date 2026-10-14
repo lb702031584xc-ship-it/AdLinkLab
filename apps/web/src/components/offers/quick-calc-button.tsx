@@ -38,9 +38,38 @@ function fmtMoney(v: number | null): string {
   return v.toFixed(2);
 }
 
-export function QuickCalcButton({ dict }: { dict: QuickCalcDict }) {
+/** 从 offer 佣金推导 payout：固定佣金直接用；百分比按均价折算。 */
+function payoutFromOffer(o: {
+  commissionValue?: string | number | null;
+  commissionType?: string | null;
+  avgPrice?: string | number | null;
+}): string {
+  const v = Number(o.commissionValue);
+  if (!Number.isFinite(v) || v <= 0) return "";
+  if (o.commissionType === "percentage") {
+    const price = Number(o.avgPrice);
+    if (!Number.isFinite(price) || price <= 0) return "";
+    return String(Math.round(((price * v) / 100) * 100) / 100);
+  }
+  return String(o.commissionValue);
+}
+
+export function QuickCalcButton({
+  dict,
+  offer,
+}: {
+  dict: QuickCalcDict;
+  /** 当前行 offer：payout 按它的佣金预填，不用手输。 */
+  offer?: {
+    commissionValue?: string | number | null;
+    commissionType?: string | null;
+    avgPrice?: string | number | null;
+  } | null;
+}) {
   const [open, setOpen] = useState(false);
-  const [payout, setPayout] = useState("");
+  const [payout, setPayout] = useState(() =>
+    offer ? payoutFromOffer(offer) : ""
+  );
   const [cpc, setCpc] = useState("");
   const [cvrPct, setCvrPct] = useState("");
   const [result, setResult] = useState<ReturnType<typeof calcProfit> | null>(

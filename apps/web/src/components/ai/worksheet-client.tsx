@@ -52,24 +52,76 @@ function fmt(n: number | null, digits = 2): string {
 export interface ProfitStepState {
   status: StepStatus;
   summary: string;
+  /** ③ 的输入（用于快照恢复 + 往 ④ 投流模块同步 payout/CVR/退款率）。 */
+  inputs?: {
+    payout: string;
+    cpc: string;
+    cvrPct: string;
+    refundPct: string;
+    shavePct: string;
+  };
 }
 
 function ProfitStep({
   onChange,
   initialPayout,
+  initialValues,
+  offerId,
 }: {
   onChange: (s: ProfitStepState | null) => void;
   initialPayout?: string;
+  /** 快照恢复的输入（刷新后不丢手改值）。 */
+  initialValues?: ProfitStepState["inputs"];
+  /** 当前 offer：用于从投放选词快照取参考 CPC。 */
+  offerId?: string | null;
 }) {
   const t = useDict();
   const d = t.ai.profit;
   const w = t.ai.worksheet.profitStep;
 
-  const [payout, setPayout] = useState(initialPayout ?? "");
-  const [cpc, setCpc] = useState("");
-  const [cvrPct, setCvrPct] = useState("");
-  const [refundPct, setRefundPct] = useState("");
-  const [shavePct, setShavePct] = useState("");
+  const [payout, setPayout] = useState(initialValues?.payout ?? initialPayout ?? "");
+  const [cpc, setCpc] = useState(initialValues?.cpc ?? "");
+  const [cvrPct, setCvrPct] = useState(initialValues?.cvrPct ?? "");
+  const [refundPct, setRefundPct] = useState(initialValues?.refundPct ?? "");
+  const [shavePct, setShavePct] = useState(initialValues?.shavePct ?? "");
+  const [cpcFromKeywords, setCpcFromKeywords] = useState(false);
+
+  /* 快照晚到时：只填空字段，不覆盖手改 */
+  useEffect(() => {
+    if (!initialValues) return;
+    if (!payout && initialValues.payout) setPayout(initialValues.payout);
+    if (!cpc && initialValues.cpc) setCpc(initialValues.cpc);
+    if (!cvrPct && initialValues.cvrPct) setCvrPct(initialValues.cvrPct);
+    if (!refundPct && initialValues.refundPct) setRefundPct(initialValues.refundPct);
+    if (!shavePct && initialValues.shavePct) setShavePct(initialValues.shavePct);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialValues]);
+
+  /* CPC 联动：为空时从该 offer 的投放选词快照取参考 CPC 均值 */
+  useEffect(() => {
+    if (cpc || !offerId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await loadWorkStateAction("keyword-launch", offerId);
+        if (cancelled || !res.ok || !res.data.state) return;
+        const rows = (res.data.state.rows ?? []) as Array<{ refCpc?: string }>;
+        const nums = rows
+          .map((r) => Number(r.refCpc))
+          .filter((n) => Number.isFinite(n) && n > 0);
+        if (nums.length === 0) return;
+        const avg = nums.reduce((a, b) => a + b, 0) / nums.length;
+        setCpc(String(Math.round(avg * 100) / 100));
+        setCpcFromKeywords(true);
+      } catch {
+        /* 取不到就不填 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offerId]);
 
   const inputClass =
     "w-full rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm text-ink placeholder:text-ink/35 focus:border-signal focus:outline-none";
@@ -104,6 +156,7 @@ function ProfitStep({
     onChange({
       status,
       summary: `EPC ${fmt(result.epc)} · ${d.results.breakEvenCvr} ${result.breakEvenCvrPct !== null ? `${fmt(result.breakEvenCvrPct)}%` : "—"} · ${w.perClickProfit} ${p > 0 ? "+" : ""}${fmt(p)}`,
+      inputs: { payout, cpc, cvrPct, refundPct, shavePct },
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result]);
@@ -122,7 +175,10 @@ function ProfitStep({
         <div>
           <label className={labelClass} htmlFor="ws-cpc">{d.cpcLabel}</label>
           <input id="ws-cpc" inputMode="decimal" value={cpc}
-            onChange={(e) => setCpc(e.target.value)} placeholder="0.80" className={inputClass} />
+            onChange={(e) => { setCpc(e.target.value); setCpcFromKeywords(false); }} placeholder="0.80" className={inputClass} />
+          {cpcFromKeywords && (
+            <p className="mt-1 text-xs text-ink/45">✨ {w.cpcFromKeywords}</p>
+          )}
         </div>
         <div>
           <label className={labelClass} htmlFor="ws-cvr">{w.cvrLabel}</label>
@@ -612,10 +668,28 @@ export function WorksheetClient({
         <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-ink/10 pt-3">
           <select
             value={offer?.id ?? ""}
-            onChange={(e) => {
-              const sel = offers.find((o) => o.id === e.target.value);
-              setOffer(sel ?? null);
+            onChange={async (e) => {
+              const sel = offers.find((o) => o.id === e.target.value) ?? null;
+              // 切 offer：先清空旧 offer 的步骤结果，避免残留/污染新 offer
+              setTermsVerdict(null);
+              setComplianceResults(null);
+              setComplianceCounted(true);
+              setProfitState(null);
+              setTrafficResult(null);
+              setOffer(sel);
               setManualOpen(false);
+              // 再加载新 offer 的快照（有则恢复）
+              if (sel) {
+                try {
+                  const res = await loadWorkStateAction("ai-worksheet", sel.id);
+                  if (res.ok && res.data.state && snapshotMeaningful(res.data.state)) {
+                    applySnapshot(res.data.state);
+                    setRestoredAt(res.data.updatedAt);
+                  }
+                } catch {
+                  /* 恢复失败不打断 */
+                }
+              }
             }}
             className="rounded-lg border border-ink/15 bg-white px-3 py-1.5 text-sm text-ink outline-none focus:border-signal"
           >
@@ -800,7 +874,13 @@ export function WorksheetClient({
         open={openStep === 3}
         onToggle={() => toggleStep(3)}
       >
-        <ProfitStep onChange={setProfitState} initialPayout={initialPayout} key={offer?.id ?? "manual"} />
+        <ProfitStep
+          onChange={setProfitState}
+          initialPayout={initialPayout}
+          initialValues={profitState?.inputs}
+          offerId={offer?.id ?? null}
+          key={offer?.id ?? "manual"}
+        />
       </StepCard>
 
       {/* Step ④ traffic */}
@@ -817,6 +897,15 @@ export function WorksheetClient({
           showSetupNudge={false}
           hideHeader
           onResult={setTrafficResult}
+          initialInputs={
+            profitState?.inputs
+              ? {
+                  payout: profitState.inputs.payout,
+                  cvr: profitState.inputs.cvrPct,
+                  refundRate: profitState.inputs.refundPct,
+                }
+              : undefined
+          }
           initialOffer={
             offer
               ? (offer as PlannerOffer)

@@ -33,6 +33,8 @@ export function useWorkState(opts: UseWorkStateOptions) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyItems, setHistoryItems] = useState<WorkStateHistoryItem[]>([]);
   const [restoredAt, setRestoredAt] = useState<string | null>(null);
+  /** 挂载恢复尝试已完成（无论有没有找到快照）。调用方可据此在恢复后应用外部传入值。 */
+  const [restored, setRestored] = useState(false);
   const loadedRef = useRef(false);
   const lastSavedRef = useRef("");
   // 回调用 ref 存，避免 effect 依赖抖动
@@ -54,7 +56,10 @@ export function useWorkState(opts: UseWorkStateOptions) {
       } catch {
         /* 恢复失败不打断页面 */
       } finally {
-        if (!cancelled) loadedRef.current = true;
+        if (!cancelled) {
+          loadedRef.current = true;
+          setRestored(true);
+        }
       }
     })();
     return () => {
@@ -105,5 +110,5 @@ export function useWorkState(opts: UseWorkStateOptions) {
     setHistoryOpen(false);
   }, []);
 
-  return { historyOpen, historyItems, restoredAt, toggleHistory, restoreFromHistory };
+  return { historyOpen, historyItems, restoredAt, restored, toggleHistory, restoreFromHistory };
 }

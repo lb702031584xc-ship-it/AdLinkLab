@@ -210,6 +210,7 @@ export const zh = {
       perClickProfit: "单次点击利润",
       perClickProfitFormula: "单次点击利润 = EPC − CPC",
       payoutFromOffer: "已按 offer 的佣金/产品均价自动填入",
+      cpcFromKeywords: "已按该 offer 投放选词的参考 CPC 均值填入",
     },
   },
   terms: {
@@ -1174,6 +1175,7 @@ export const en: typeof zh = {
       perClickProfit: "Profit per click",
       perClickProfitFormula: "profit per click = EPC − CPC",
       payoutFromOffer: "Prefilled from the offer's commission/avg price",
+      cpcFromKeywords: "Prefilled from the avg reference CPC of this offer's keyword launch plan",
     },
   },
   terms: {

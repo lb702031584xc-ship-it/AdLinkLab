@@ -303,7 +303,16 @@ export default async function OffersPage({
     },
     {
       header: t.entities.offers.quickCalc.button,
-      render: () => <QuickCalcButton dict={quickCalcDict} />,
+      render: (o) => (
+        <QuickCalcButton
+          dict={quickCalcDict}
+          offer={{
+            commissionValue: o.commissionValue,
+            commissionType: o.commissionType,
+            avgPrice: o.avgPrice,
+          }}
+        />
+      ),
       className: "whitespace-nowrap",
     },
     {

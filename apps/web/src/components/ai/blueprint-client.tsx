@@ -246,11 +246,24 @@ export function BlueprintClient({
     if (o.commissionValue != null) setCommissionValue(String(o.commissionValue));
   };
 
+  /* 条款联动：为空时从该 offer 的条款解读快照取正文（前面页面已解析过的不用重贴） */
+  const fillTermsFromSnapshot = async (offerId: string) => {
+    try {
+      const res = await loadWorkStateAction("ai-terms", offerId);
+      const snap = res.ok ? res.data.state : null;
+      const txt = snap && typeof snap.text === "string" ? snap.text.trim() : "";
+      if (txt) setTermsText((prev) => (prev.trim() ? prev : txt));
+    } catch {
+      /* 取不到就不填 */
+    }
+  };
+
   useEffect(() => {
     const key = initialOffer ? initialOffer.id : null;
     if (key && appliedOfferRef.current !== key) {
       appliedOfferRef.current = key;
       fillFromOffer(initialOffer!);
+      void fillTermsFromSnapshot(initialOffer!.id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialOffer]);
@@ -259,6 +272,7 @@ export function BlueprintClient({
     const o = (offers ?? []).find((x) => x.id === id) ?? null;
     if (!o) return;
     fillFromOffer(o);
+    void fillTermsFromSnapshot(o.id);
     try {
       const res = await loadWorkStateAction("ai-blueprint", o.id);
       if (res.ok && res.data.state) {

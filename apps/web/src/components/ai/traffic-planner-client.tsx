@@ -163,6 +163,7 @@ export function TrafficPlannerClient({
   onResult,
   initialOffer,
   offers,
+  initialInputs,
 }: {
   showSetupNudge: boolean;
   /** Worksheet embedding: hide the page header (the step card provides it). */
@@ -173,6 +174,11 @@ export function TrafficPlannerClient({
   initialOffer?: PlannerOffer | null;
   /** 独立页 offer 下拉列表（嵌入时不传，不显示下拉）。 */
   offers?: PlannerOffer[];
+  /**
+   * 上游（工作表 ③ 盈利测算）同步来的值：payout/CVR/退款率。
+   * 恢复完成后应用到对应字段（只覆盖这三个字段，关键词/情报等仍用本页快照）。
+   */
+  initialInputs?: { payout?: string; cvr?: string; refundRate?: string };
 }) {
   const { lang } = useI18n();
   const d: Dict = lang === "zh" ? tpZh : tpEn;
@@ -188,15 +194,15 @@ export function TrafficPlannerClient({
 
   // Offer 基础（优先用带入的 offer 参数初始化）
   const [offerName, setOfferName] = useState(initialOffer?.name ?? "");
-  const [payout, setPayout] = useState(() =>
-    initialOffer ? payoutFromOffer(initialOffer) : ""
+  const [payout, setPayout] = useState(
+    () => initialInputs?.payout ?? (initialOffer ? payoutFromOffer(initialOffer) : "")
   );
   const [network, setNetwork] = useState(initialOffer?.network ?? "");
   const [cookieDays, setCookieDays] = useState("");
   // EPC
   const [epc, setEpc] = useState("");
-  const [networkCvr, setNetworkCvr] = useState("");
-  const [refundRate, setRefundRate] = useState("");
+  const [networkCvr, setNetworkCvr] = useState(initialInputs?.cvr ?? "");
+  const [refundRate, setRefundRate] = useState(initialInputs?.refundRate ?? "");
   // Offervault
   const [bestPayout, setBestPayout] = useState("");
   const [bestPayoutNetwork, setBestPayoutNetwork] = useState("");
@@ -323,7 +329,7 @@ export function TrafficPlannerClient({
       setNegatives((s.negatives as unknown[]).map((x) => String(x)));
   };
 
-  useWorkState({
+  const { restored } = useWorkState({
     page: "traffic-planner",
     offerId: selectedOfferId,
     label: offerName || null,
@@ -353,6 +359,19 @@ export function TrafficPlannerClient({
       negatives,
     ],
   });
+  const appliedInputsRef = useRef<string | null>(null);
+
+  /* 上游 ③ 的值：恢复完成后应用（只覆盖 payout/CVR/退款率三个字段） */
+  useEffect(() => {
+    if (!restored || !initialInputs) return;
+    const key = JSON.stringify(initialInputs);
+    if (appliedInputsRef.current === key) return;
+    appliedInputsRef.current = key;
+    if (initialInputs.payout != null) setPayout(initialInputs.payout);
+    if (initialInputs.cvr != null) setNetworkCvr(initialInputs.cvr);
+    if (initialInputs.refundRate != null) setRefundRate(initialInputs.refundRate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restored, initialInputs]);
 
   /** 工作表嵌入时：上层 offer 变化 → 同步填充（每个 offer 只自动填一次，不覆盖手改） */
   useEffect(() => {
