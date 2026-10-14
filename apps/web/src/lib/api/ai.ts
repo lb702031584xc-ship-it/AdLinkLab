@@ -759,6 +759,14 @@ export interface BrandBiddingResult {
   source: string;
 }
 
+export interface ParsedKeywordRow {
+  keyword: string;
+  volume: number | null;
+  cpc: number | null;
+  kd: number | null;
+  competition: "Low" | "Medium" | "High" | null;
+}
+
 export interface ParsedKeywordData {
   keyword: string | null;
   volume: number | null;
@@ -766,6 +774,8 @@ export interface ParsedKeywordData {
   plannerLow: number | null;
   plannerHigh: number | null;
   competition: "Low" | "Medium" | "High" | null;
+  /** 抓取到的表格行（为空时用上面单值字段）。 */
+  rows?: ParsedKeywordRow[];
 }
 
 /** 解析插件抓到的 SEMrush / Planner 页面 → 关键词表一行（找不到为 null）。 */

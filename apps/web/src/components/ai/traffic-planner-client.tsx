@@ -454,6 +454,33 @@ export function TrafficPlannerClient({
     const r = await parseKeywordCaptureAction(c.id);
     if (!r.ok) return;
     const d = r.data;
+    // 表格多行（SEMrush 关键词变化表等）：去重后全部并入表
+    if (d.rows && d.rows.length > 0) {
+      setKeywords((ks) => {
+        const existing = new Set(
+          ks.map((k) => k.keyword.trim().toLowerCase()).filter(Boolean)
+        );
+        const fresh = d.rows!.filter(
+          (row) => row.keyword && !existing.has(row.keyword.toLowerCase())
+        );
+        if (fresh.length === 0) return ks;
+        const rows = fresh.map((row) => ({
+          ...newKwRow(),
+          keyword: row.keyword,
+          volume: row.volume ?? undefined,
+          cpc: row.cpc ?? undefined,
+          competition: row.competition ?? undefined,
+        }));
+        const next = [...ks];
+        const idx = next.findIndex((k) => !k.keyword.trim());
+        if (idx >= 0) {
+          next[idx] = { ...next[idx], ...rows[0] };
+          return [...next, ...rows.slice(1)];
+        }
+        return [...next, ...rows];
+      });
+      return;
+    }
     const patch: Partial<KwRow> = {};
     if (d.keyword) patch.keyword = d.keyword;
     if (d.volume != null) patch.volume = d.volume;
