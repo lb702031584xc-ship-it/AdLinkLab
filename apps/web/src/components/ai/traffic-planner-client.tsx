@@ -4,7 +4,7 @@
  * 投流决策 AI 分析：2×2 组合选择 → 数据源收集（一键直达+填充位）→ AI 五板块报告。
  * 关键词/否定词：自动生成 + 手动 + 批量导入 + 导出。
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "@/i18n/I18nProvider";
 import {
   zh as tpZh,
@@ -16,6 +16,8 @@ import {
   parseKeywordCaptureAction,
   type AiActionResult,
 } from "@/lib/api/ai-actions";
+import { loadWorkStateAction } from "@/lib/api/work-state-actions";
+import { useWorkState } from "@/lib/use-work-state";
 import type {
   TrafficPlanKeywordInput,
   TrafficPlanResult,
@@ -132,16 +134,44 @@ interface KwRow extends TrafficPlanKeywordInput {
 let kwSeq = 0;
 const newKwRow = (): KwRow => ({ id: `kw-${++kwSeq}`, keyword: "" });
 
+/** Offer 上下文（offer 库 / AI 分析工作表带入）。 */
+export interface PlannerOffer {
+  id: string;
+  name: string;
+  network: string;
+  commissionValue?: string | number | null;
+  commissionType?: string | null;
+  avgPrice?: string | number | null;
+}
+
+/** 从 offer 库参数推导 payout（美元）：固定佣金直接用；百分比佣金按均价折算。 */
+function payoutFromOffer(o: PlannerOffer): string {
+  const v = Number(o.commissionValue);
+  if (!Number.isFinite(v) || v <= 0) return "";
+  if (o.commissionType === "percentage") {
+    const price = Number(o.avgPrice);
+    if (!Number.isFinite(price) || price <= 0) return "";
+    return ((price * v) / 100).toFixed(2);
+  }
+  return String(o.commissionValue);
+}
+
 export function TrafficPlannerClient({
   showSetupNudge,
   hideHeader,
   onResult,
+  initialOffer,
+  offers,
 }: {
   showSetupNudge: boolean;
   /** Worksheet embedding: hide the page header (the step card provides it). */
   hideHeader?: boolean;
   /** Worksheet embedding: report the generated plan upward. */
   onResult?: (r: TrafficPlanResult | null) => void;
+  /** Offer 上下文：独立页 ?offerId= / 工作表嵌入时带入，自动填 offer 参数。 */
+  initialOffer?: PlannerOffer | null;
+  /** 独立页 offer 下拉列表（嵌入时不传，不显示下拉）。 */
+  offers?: PlannerOffer[];
 }) {
   const { lang } = useI18n();
   const d: Dict = lang === "zh" ? tpZh : tpEn;
@@ -149,10 +179,18 @@ export function TrafficPlannerClient({
   const [mode, setMode] = useState<Mode>("landing");
   const [brandPolicy, setBrandPolicy] = useState<BrandPolicy>("allowed");
 
-  // Offer 基础
-  const [offerName, setOfferName] = useState("");
-  const [payout, setPayout] = useState("");
-  const [network, setNetwork] = useState("");
+  // Offer 上下文：?offerId= / 工作表嵌入带入
+  const [selectedOfferId, setSelectedOfferId] = useState<string | null>(
+    initialOffer?.id ?? null
+  );
+  const appliedOfferRef = useRef<string | null>(initialOffer?.id ?? null);
+
+  // Offer 基础（优先用带入的 offer 参数初始化）
+  const [offerName, setOfferName] = useState(initialOffer?.name ?? "");
+  const [payout, setPayout] = useState(() =>
+    initialOffer ? payoutFromOffer(initialOffer) : ""
+  );
+  const [network, setNetwork] = useState(initialOffer?.network ?? "");
   const [cookieDays, setCookieDays] = useState("");
   // EPC
   const [epc, setEpc] = useState("");
@@ -210,6 +248,186 @@ export function TrafficPlannerClient({
   };
   const removeKw = (id: string) =>
     setKeywords((ks) => (ks.length > 1 ? ks.filter((k) => k.id !== id) : ks));
+
+  /** 用 offer 库参数填充 offer 区块（名称/佣金/渠道） */
+  const fillFromOffer = (o: PlannerOffer) => {
+    setSelectedOfferId(o.id || null);
+    setOfferName(o.name);
+    setNetwork(o.network);
+    const p = payoutFromOffer(o);
+    if (p) setPayout(p);
+  };
+
+  /** 快照：全部输入（按 offer 隔离保存，刷新/隔夜不丢） */
+  const buildSnapshot = () => ({
+    version: 1,
+    mode,
+    brandPolicy,
+    offerName,
+    payout,
+    network,
+    cookieDays,
+    epc,
+    networkCvr,
+    refundRate,
+    bestPayout,
+    bestPayoutNetwork,
+    spyfuKeywords,
+    spyfuBudgetTrend,
+    competitorAds,
+    similarwebNotes,
+    targetMargin,
+    notes,
+    keywords: keywords.map(({ id: _id, ...r }) => r),
+    negatives,
+  });
+  const snapshotMeaningful = (s: Record<string, unknown>) =>
+    Boolean(
+      (s.offerName as string)?.trim() ||
+        (s.payout as string)?.toString().trim() ||
+        ((s.keywords as Array<{ keyword?: string }>) ?? []).some((k) =>
+          k.keyword?.trim()
+        ) ||
+        (s.spyfuKeywords as string)?.trim() ||
+        (s.competitorAds as string)?.trim() ||
+        (s.similarwebNotes as string)?.trim()
+    );
+  const applySnapshot = (s: Record<string, unknown>) => {
+    const str = (v: unknown) => (v == null ? "" : String(v));
+    if (s.mode === "landing" || s.mode === "direct") setMode(s.mode);
+    if (s.brandPolicy === "allowed" || s.brandPolicy === "forbidden")
+      setBrandPolicy(s.brandPolicy);
+    setOfferName(str(s.offerName));
+    setPayout(str(s.payout));
+    setNetwork(str(s.network));
+    setCookieDays(str(s.cookieDays));
+    setEpc(str(s.epc));
+    setNetworkCvr(str(s.networkCvr));
+    setRefundRate(str(s.refundRate));
+    setBestPayout(str(s.bestPayout));
+    setBestPayoutNetwork(str(s.bestPayoutNetwork));
+    setSpyfuKeywords(str(s.spyfuKeywords));
+    setSpyfuBudgetTrend(str(s.spyfuBudgetTrend));
+    setCompetitorAds(str(s.competitorAds));
+    setSimilarwebNotes(str(s.similarwebNotes));
+    if (s.targetMargin != null) setTargetMargin(str(s.targetMargin));
+    setNotes(str(s.notes));
+    const ks = s.keywords as TrafficPlanKeywordInput[] | undefined;
+    if (Array.isArray(ks) && ks.length > 0) {
+      setKeywords(
+        ks.map((k) => ({ ...newKwRow(), ...k, keyword: str(k.keyword) }))
+      );
+    }
+    if (Array.isArray(s.negatives))
+      setNegatives((s.negatives as unknown[]).map((x) => String(x)));
+  };
+
+  useWorkState({
+    page: "traffic-planner",
+    offerId: selectedOfferId,
+    label: offerName || null,
+    buildSnapshot,
+    isMeaningful: snapshotMeaningful,
+    applySnapshot,
+    watch: [
+      selectedOfferId,
+      mode,
+      brandPolicy,
+      offerName,
+      payout,
+      network,
+      cookieDays,
+      epc,
+      networkCvr,
+      refundRate,
+      bestPayout,
+      bestPayoutNetwork,
+      spyfuKeywords,
+      spyfuBudgetTrend,
+      competitorAds,
+      similarwebNotes,
+      targetMargin,
+      notes,
+      keywords,
+      negatives,
+    ],
+  });
+
+  /** 工作表嵌入时：上层 offer 变化 → 同步填充（每个 offer 只自动填一次，不覆盖手改） */
+  useEffect(() => {
+    const key = initialOffer ? `${initialOffer.id}::${initialOffer.name}` : null;
+    if (key && appliedOfferRef.current !== key) {
+      appliedOfferRef.current = key;
+      fillFromOffer(initialOffer!);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialOffer]);
+
+  /** 下拉切换 offer：先填库参数，再恢复该 offer 的 planner 快照（有则覆盖） */
+  const onSelectOffer = async (id: string) => {
+    const o = (offers ?? []).find((x) => x.id === id) ?? null;
+    if (!o) {
+      setSelectedOfferId(null);
+      return;
+    }
+    fillFromOffer(o);
+    try {
+      const res = await loadWorkStateAction("traffic-planner", o.id);
+      if (res.ok && res.data.state && snapshotMeaningful(res.data.state)) {
+        applySnapshot(res.data.state);
+      }
+    } catch {
+      /* 恢复失败不打断 */
+    }
+  };
+
+  /** 从投放选词页导入该 offer 的关键词（去重） */
+  const importLaunchKeywords = async () => {
+    if (!selectedOfferId) {
+      setMsg(d.selectOfferFirst);
+      return;
+    }
+    try {
+      const res = await loadWorkStateAction("keyword-launch", selectedOfferId);
+      const rows = (res.ok && res.data.state
+        ? (res.data.state.rows as Array<{
+            keyword?: string;
+            refCpc?: string;
+          }>)
+        : []) as Array<{ keyword?: string; refCpc?: string }>;
+      const valid = (rows ?? []).filter((r) => r.keyword?.trim());
+      if (valid.length === 0) {
+        setMsg(d.noLaunchData);
+        return;
+      }
+      const existing = new Set(
+        keywords.map((k) => k.keyword.trim().toLowerCase()).filter(Boolean)
+      );
+      const toAdd = valid.filter(
+        (r) => !existing.has(r.keyword!.trim().toLowerCase())
+      );
+      if (toAdd.length === 0) {
+        setMsg(d.alreadyImported);
+        return;
+      }
+      setKeywords((ks) => {
+        const base = ks.some((k) => !k.keyword.trim())
+          ? ks.filter((k) => k.keyword.trim())
+          : ks;
+        return [
+          ...base,
+          ...toAdd.map((r) => ({
+            ...newKwRow(),
+            keyword: r.keyword!.trim(),
+            cpc: r.refCpc && Number(r.refCpc) > 0 ? Number(r.refCpc) : undefined,
+          })),
+        ];
+      });
+      setMsg(d.importedKeywords.replace("{n}", String(toAdd.length)));
+    } catch {
+      setMsg(d.noLaunchData);
+    }
+  };
 
   /** 插件抓取填入关键词行：解析 SEMrush/Planner 页面，填首个空行或追加新行 */
   const fillKwFromCapture = async (c: OfferCaptureItem) => {
@@ -459,6 +677,23 @@ export function TrafficPlannerClient({
               }}
             />
           </div>
+          {offers && offers.length > 0 && (
+            <div className="mb-3">
+              <select
+                value={selectedOfferId ?? ""}
+                onChange={(e) => onSelectOffer(e.target.value)}
+                className="w-full rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm text-ink outline-none focus:border-signal sm:max-w-xs"
+              >
+                <option value="">{d.selectOffer}</option>
+                {offers.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.name}（{o.network}）
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-ink/50">{d.selectOfferHint}</p>
+            </div>
+          )}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="block">
               <span className={labelCls}>{d.offerName} <span className="text-red-500">*</span></span>
@@ -583,12 +818,15 @@ export function TrafficPlannerClient({
               </tbody>
             </table>
           </div>
-          <div className="mt-2 flex gap-2">
+          <div className="mt-2 flex flex-wrap gap-2">
             <button className={btnGhost} onClick={() => setKeywords((ks) => [...ks, newKwRow()])}>
               + {d.addKeyword}
             </button>
             <button className={btnGhost} onClick={() => setKwImportOpen(!kwImportOpen)}>
               {d.importKeywords}
+            </button>
+            <button className={btnGhost} onClick={importLaunchKeywords}>
+              {d.importLaunchKeywords}
             </button>
           </div>
           <CapturePicker onPick={fillKwFromCapture} />

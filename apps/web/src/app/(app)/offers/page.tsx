@@ -326,6 +326,12 @@ export default async function OffersPage({
           >
             {t.entities.offers.columns.analyze}
           </Link>
+          <Link
+            href={`/ai/traffic-planner?offerId=${encodeURIComponent(o.id)}`}
+            className="text-xs text-signal hover:underline"
+          >
+            {t.entities.offers.columns.trafficPlan}
+          </Link>
           <OfferDeleteButton
             offerId={o.id}
             offerName={o.name}

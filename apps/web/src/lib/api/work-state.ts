@@ -9,7 +9,7 @@ import {
 } from "./entities-config";
 import { sessionHeaders } from "./session";
 
-export type WorkStatePage = "ai-worksheet" | "keyword-launch" | "keyword-research";
+export type WorkStatePage = "ai-worksheet" | "keyword-launch" | "keyword-research" | "traffic-planner";
 
 export interface WorkStateHistoryItem {
   id: string;

@@ -13,7 +13,7 @@ import {
 } from "@/lib/api/work-state-actions";
 import { TermsClient } from "./terms-client";
 import { ComplianceClient } from "./compliance-client";
-import { TrafficPlannerClient } from "./traffic-planner-client";
+import { TrafficPlannerClient, type PlannerOffer } from "./traffic-planner-client";
 import { BrandBiddingClient } from "./brand-bidding-client";
 import type { AiUrlCheckResult, TrafficPlanResult } from "@/lib/api/ai";
 
@@ -782,7 +782,22 @@ export function WorksheetClient({
         open={openStep === 4}
         onToggle={() => toggleStep(4)}
       >
-        <TrafficPlannerClient showSetupNudge={false} hideHeader onResult={setTrafficResult} />
+        <TrafficPlannerClient
+          showSetupNudge={false}
+          hideHeader
+          onResult={setTrafficResult}
+          initialOffer={
+            offer
+              ? (offer as PlannerOffer)
+              : mName.trim()
+                ? {
+                    id: "",
+                    name: mName.trim(),
+                    network: mNetwork.trim(),
+                  }
+                : null
+          }
+        />
         <BrandBiddingClient
           initialKeyword={offer?.name ?? mName}
           initialDomain={(() => {
