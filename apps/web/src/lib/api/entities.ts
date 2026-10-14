@@ -329,7 +329,9 @@ async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
     res = await fetch(`${base}${path}`, {
       ...init,
       headers: {
-        "content-type": "application/json",
+        // 无 body 的请求（GET/DELETE）不带 JSON 头，
+        // 否则 Fastify 会因 "application/json + 空 body" 直接 400
+        ...(init.body != null ? { "content-type": "application/json" } : {}),
         ...authHeaders,
         ...(init.headers ?? {}),
       },
