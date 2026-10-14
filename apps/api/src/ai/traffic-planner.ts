@@ -41,6 +41,8 @@ export interface TrafficPlanInput {
   spyfuKeywords?: string; // SpyFu 对手关键词摘要
   spyfuBudgetTrend?: string; // 对手预算趋势：涨/跌/稳
   similarwebNotes?: string; // SimilarWeb 流量结构观察
+  // 电商产品数据（插件抓 Amazon/Keepa/Shopping 实查）
+  ecommerceNotes?: string;
   // 关键词数据
   keywords: KeywordRow[];
   negativeKeywords: string[];
@@ -221,6 +223,7 @@ ${input.competitorAds ? `- 广告透明度中心观察：${input.competitorAds}`
 ${input.spyfuKeywords ? `- SpyFu 对手关键词：${input.spyfuKeywords}` : "- SpyFu：未提供"}
 ${input.spyfuBudgetTrend ? `- 对手预算趋势：${input.spyfuBudgetTrend}` : ""}
 ${input.similarwebNotes ? `- SimilarWeb 流量结构：${input.similarwebNotes}` : "- SimilarWeb：未提供"}
+${input.ecommerceNotes ? `- 电商产品数据：${input.ecommerceNotes}` : "- 电商产品数据：未提供"}
 
 ## 否定关键词（用户已准备）
 ${input.negativeKeywords.length ? input.negativeKeywords.join("、") : "（未提供，用通用否定词库补）"}

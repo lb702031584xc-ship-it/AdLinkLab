@@ -14,6 +14,7 @@ import {
 import {
   analyzeTrafficPlanAction,
   parseKeywordCaptureAction,
+  parseEcommerceCaptureAction,
   type AiActionResult,
 } from "@/lib/api/ai-actions";
 import { loadWorkStateAction } from "@/lib/api/work-state-actions";
@@ -218,6 +219,8 @@ export function TrafficPlannerClient({
   const [spyfuBudgetTrend, setSpyfuBudgetTrend] = useState("");
   const [competitorAds, setCompetitorAds] = useState("");
   const [similarwebNotes, setSimilarwebNotes] = useState("");
+  /** 电商产品数据：插件抓 Amazon/Keepa/Shopping 后填入，进 AI 输入。 */
+  const [ecommerceNotes, setEcommerceNotes] = useState("");
   const [targetMargin, setTargetMargin] = useState("50");
   const [notes, setNotes] = useState("");
 
@@ -290,6 +293,7 @@ export function TrafficPlannerClient({
     spyfuBudgetTrend,
     competitorAds,
     similarwebNotes,
+    ecommerceNotes,
     targetMargin,
     notes,
     keywords: keywords.map(({ id: _id, ...r }) => r),
@@ -304,7 +308,8 @@ export function TrafficPlannerClient({
         ) ||
         (s.spyfuKeywords as string)?.trim() ||
         (s.competitorAds as string)?.trim() ||
-        (s.similarwebNotes as string)?.trim()
+        (s.similarwebNotes as string)?.trim() ||
+          (s.ecommerceNotes as string)?.trim()
     );
   const applySnapshot = (s: Record<string, unknown>) => {
     const str = (v: unknown) => (v == null ? "" : String(v));
@@ -324,6 +329,7 @@ export function TrafficPlannerClient({
     setSpyfuBudgetTrend(str(s.spyfuBudgetTrend));
     setCompetitorAds(str(s.competitorAds));
     setSimilarwebNotes(str(s.similarwebNotes));
+    setEcommerceNotes(str(s.ecommerceNotes));
     if (s.targetMargin != null) setTargetMargin(str(s.targetMargin));
     setNotes(str(s.notes));
     const ks = s.keywords as TrafficPlanKeywordInput[] | undefined;
@@ -360,6 +366,7 @@ export function TrafficPlannerClient({
       spyfuBudgetTrend,
       competitorAds,
       similarwebNotes,
+      ecommerceNotes,
       targetMargin,
       notes,
       keywords,
@@ -457,6 +464,22 @@ export function TrafficPlannerClient({
   };
 
   /** 插件抓取填入关键词行：解析 SEMrush/Planner 页面，填首个空行或追加新行 */
+  /* 抓取选用：Amazon/Keepa/Shopping 页 → 产品数据追加到电商数据框 */
+  const fillEcomFromCapture = async (c: OfferCaptureItem) => {
+    const r = await parseEcommerceCaptureAction(c.id);
+    if (!r.ok) return;
+    const data = r.data;
+    const parts: string[] = [];
+    if (data.price != null) parts.push(`${d.ecomPriceLabel} $${data.price}`);
+    if (data.rating != null) parts.push(`${d.ecomRatingLabel} ${data.rating}/5`);
+    if (data.reviewCount != null) parts.push(`${d.ecomReviewsLabel} ${data.reviewCount}`);
+    if (data.bsr != null)
+      parts.push(`${d.ecomBsrLabel} #${data.bsr}${data.bsrCategory ? ` (${data.bsrCategory})` : ""}`);
+    if (parts.length === 0) return;
+    const line = `${c.title ? `${c.title}：` : ""}${parts.join(" · ")}`;
+    setEcommerceNotes((prev) => (prev.trim() ? `${prev.trim()}\n${line}` : line));
+  };
+
   const fillKwFromCapture = async (c: OfferCaptureItem) => {
     const r = await parseKeywordCaptureAction(c.id);
     if (!r.ok) return;
@@ -594,6 +617,7 @@ export function TrafficPlannerClient({
         spyfuKeywords: spyfuKeywords.trim() || undefined,
         spyfuBudgetTrend: spyfuBudgetTrend || undefined,
         similarwebNotes: similarwebNotes.trim() || undefined,
+        ecommerceNotes: ecommerceNotes.trim() || undefined,
         keywords: validKeywords,
         negativeKeywords: negatives,
         targetProfitMargin: (numOrUndef(targetMargin) ?? 50) / 100,
@@ -816,6 +840,14 @@ export function TrafficPlannerClient({
               ↗ {d.googleShopping}
             </a>
             <span className="text-xs text-ink/50">{d.ecomQueryHint}</span>
+          </div>
+          {/* 电商数据：插件抓 Amazon/Keepa/Shopping 页后选用填入，进 AI 输入 */}
+          <div className="mt-3 border-t border-ink/10 pt-3">
+            <label className={labelCls}>{d.ecomNotes}</label>
+            <textarea className={`${inputCls} h-16`} value={ecommerceNotes} onChange={(e) => setEcommerceNotes(e.target.value)} placeholder={d.ecomNotesPh} />
+            <div className="mt-2">
+              <CapturePicker onPick={fillEcomFromCapture} />
+            </div>
           </div>
         </div>
 

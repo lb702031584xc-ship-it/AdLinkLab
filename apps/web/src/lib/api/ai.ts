@@ -327,6 +327,8 @@ export interface TrafficPlanInput {
   spyfuKeywords?: string;
   spyfuBudgetTrend?: string;
   similarwebNotes?: string;
+  /** 电商产品数据（插件抓 Amazon/Keepa/Shopping 实查）。 */
+  ecommerceNotes?: string;
   keywords: TrafficPlanKeywordInput[];
   negativeKeywords: string[];
   targetProfitMargin?: number;
@@ -776,6 +778,24 @@ export interface ParsedKeywordData {
   competition: "Low" | "Medium" | "High" | null;
   /** 抓取到的表格行（为空时用上面单值字段）。 */
   rows?: ParsedKeywordRow[];
+}
+
+export interface EcommerceData {
+  price: number | null;
+  rating: number | null;
+  reviewCount: number | null;
+  bsr: number | null;
+  bsrCategory: string | null;
+}
+
+/** 解析插件抓到的 Amazon / Keepa / Shopping 页面 → 产品数据（找不到为 null）。 */
+export async function parseEcommerceCapture(
+  captureId: string
+): Promise<EcommerceData> {
+  return aiFetch<EcommerceData>("/api/v1/ai/parse-ecommerce-capture", {
+    method: "POST",
+    body: JSON.stringify({ captureId }),
+  });
 }
 
 /** 解析插件抓到的 SEMrush / Planner 页面 → 关键词表一行（找不到为 null）。 */
