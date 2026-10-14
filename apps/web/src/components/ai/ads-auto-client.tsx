@@ -17,6 +17,9 @@ import { EntityPageHeader } from "@/components/entities/ui";
 import { DataQualityBadge } from "@/components/data-quality-badge";
 import type { AdsAutoDict } from "@/i18n/dict/ads-auto";
 import { listGoogleAccountsAction } from "@/lib/api/entity-actions";
+import { parseProductCaptureAiAction } from "@/lib/api/ai-actions";
+import { CapturePicker } from "@/components/ai/capture-picker";
+import type { OfferCaptureItem } from "@/lib/api/ai";
 import {
   confirmAdPlanAction,
   getCopyPackAction,
@@ -223,6 +226,34 @@ export function AdsAutoClient({
   // 抓取失败兜底：手动粘贴页面文字（Amazon 等反爬站点）
   const [manualOpen, setManualOpen] = useState(false);
   const [manualText, setManualText] = useState("");
+  // 插件抓取 + AI 识别商品信息
+  const [captureFilling, setCaptureFilling] = useState(false);
+  const [captureNote, setCaptureNote] = useState<string | null>(null);
+
+  /* 插件抓取 + AI 识别：从抓取页提取商品信息填入手动粘贴框（可检查后再生成） */
+  const fillProductFromCapture = async (c: OfferCaptureItem) => {
+    setCaptureFilling(true);
+    setCaptureNote(null);
+    try {
+      const res = await parseProductCaptureAiAction(c.id);
+      if (!res.ok) {
+        setCaptureNote(res.error);
+        return;
+      }
+      const { product, summaryText } = res.data;
+      if (!summaryText.trim() || (!product.title && product.bullets.length === 0)) {
+        setCaptureNote(d.form.captureFillNone);
+        return;
+      }
+      setManualText(summaryText);
+      setManualOpen(true);
+      // 抓取记录的 URL 回填到 URL 框（URL 框为空时）
+      if (!urlsText.trim() && c.finalUrl) setUrlsText(c.finalUrl);
+      setCaptureNote(d.form.captureFillDone);
+    } finally {
+      setCaptureFilling(false);
+    }
+  };
   // 投放选词里定好的关键词（可选）：填了就用这套，不再 AI 生成
   const [kwText, setKwText] = useState("");
   const [offerId] = useState<string | null>(initialOfferId ?? null);
@@ -521,6 +552,17 @@ export function AdsAutoClient({
           placeholder={d.form.urlsPlaceholder}
           className={`${inputClass} font-mono`}
         />
+        {/* 插件抓取 + AI 识别：Amazon 等反爬页面抓不到时，用插件抓商品页，AI 提取标题/价格/卖点填入下方 */}
+        <CapturePicker
+          label={d.form.captureFillProduct}
+          onPick={(c) => void fillProductFromCapture(c)}
+        />
+        {captureFilling && (
+          <p className="mt-1 text-xs text-ink/55">{d.form.captureFilling}</p>
+        )}
+        {captureNote && !captureFilling && (
+          <p className="mt-1 text-xs text-ink/55">{captureNote}</p>
+        )}
         <div className="mt-3 flex flex-wrap items-end gap-3">
           <div>
             <label className={labelClass} htmlFor="ads-auto-lang">

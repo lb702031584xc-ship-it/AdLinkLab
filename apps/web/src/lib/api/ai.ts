@@ -814,6 +814,29 @@ export interface AiKeywordRow {
   trend: "up" | "flat" | "down" | null;
 }
 
+/** 抓取页面 AI 提取商品信息：标题/品牌/价格/卖点（页面没有的为 null）。 */
+export interface ProductCapture {
+  title: string | null;
+  brand: string | null;
+  price: number | null;
+  currency: string | null;
+  bullets: string[];
+  description: string | null;
+}
+
+export async function parseProductCaptureAi(
+  captureId: string,
+  language?: string
+): Promise<{ product: ProductCapture; summaryText: string }> {
+  return aiFetch<{ product: ProductCapture; summaryText: string }>(
+    "/api/v1/ai/parse-product-capture",
+    {
+      method: "POST",
+      body: JSON.stringify({ captureId, language }),
+    }
+  );
+}
+
 /** 抓取页面 AI 提取关键词：AI 认表格、逐行提取、判断购买意图。 */
 export async function parseKeywordCaptureAi(
   captureId: string,

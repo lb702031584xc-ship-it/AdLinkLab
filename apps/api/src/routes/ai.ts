@@ -34,6 +34,7 @@ import { parseKeywordCapture } from "../ai/keyword-capture.js";
 import { parseEcommerceCapture } from "../ai/ecommerce-capture.js";
 import { extractKeywordsWithAi } from "../ai/keyword-capture-ai.js";
 import { extractIntelWithAi, isIntelKind } from "../ai/intel-capture-ai.js";
+import { extractProductWithAi } from "../ai/product-capture-ai.js";
 import {
   checkUrlVerdict,
   detectAffiliateParams,
@@ -1477,6 +1478,41 @@ export async function registerAiRoutes(
       row.pageText ?? ""
     );
     return { rows };
+  });
+
+  /**
+   * 商品页抓取 AI 提取：自动化广告页 Amazon 等反爬页面抓不到时，
+   * 插件抓取 + AI 识别商品信息（标题/价格/卖点）填入手动粘贴框。
+   */
+  app.post("/api/v1/ai/parse-product-capture", async (request) => {
+    const info = await requireSession(deps, request);
+    void info;
+    const body = (request.body ?? {}) as { captureId?: unknown; language?: unknown };
+    const captureId = typeof body.captureId === "string" ? body.captureId : "";
+    if (!captureId) throw new ValidationError("captureId is required");
+    const row = await deps.prisma.offerCapture.findFirst({
+      where: { id: captureId, tenantId: info.tenantId },
+      select: { pageText: true },
+    });
+    if (!row) throw new ValidationError("抓取记录不存在");
+    const settings = await readSettings(prisma);
+    if (!isConfigured(settings)) {
+      throw new AppError("AI is not configured", {
+        code: "AI_NOT_CONFIGURED",
+        statusCode: 400,
+      });
+    }
+    const pepper = assertAiSettingsPepperConfigured();
+    const apiKey = decryptSecret(settings.apiKeyEnc as string, pepper);
+    return extractProductWithAi(
+      {
+        baseUrl: settings.baseUrl as string,
+        model: settings.model as string,
+        apiKey,
+        language: body.language === "en" ? "en" : "zh",
+      },
+      row.pageText ?? ""
+    );
   });
 
   /**

@@ -37,6 +37,8 @@ import {
   type IntelKind,
   parseEcommerceCapture,
   parseKeywordCaptureAi,
+  parseProductCaptureAi,
+  type ProductCapture,
   parseIntelCapture,
   type OfferCaptureDetail,
   type OfferCaptureItem,
@@ -432,6 +434,20 @@ export async function parseKeywordCaptureAiAction(
   try {
     const lang = await getLang();
     return { ok: true, data: await parseKeywordCaptureAi(captureId, lang) };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof AiApiError ? e.message : "AI 解析抓取失败",
+    };
+  }
+}
+
+export async function parseProductCaptureAiAction(
+  captureId: string
+): Promise<AiActionResult<{ product: ProductCapture; summaryText: string }>> {
+  try {
+    const lang = await getLang();
+    return { ok: true, data: await parseProductCaptureAi(captureId, lang) };
   } catch (e) {
     return {
       ok: false,
