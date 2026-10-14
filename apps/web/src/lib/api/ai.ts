@@ -823,6 +823,20 @@ export async function parseKeywordCaptureAi(
   });
 }
 
+export type IntelKind = "spyfu" | "transparency" | "similarweb" | "negatives";
+
+/** 情报页抓取 AI 提取：只提取该框要的内容，提不出返回 null。 */
+export async function parseIntelCapture(
+  captureId: string,
+  kind: IntelKind,
+  language?: string
+): Promise<{ summary: string | null }> {
+  return aiFetch<{ summary: string | null }>("/api/v1/ai/parse-intel-capture", {
+    method: "POST",
+    body: JSON.stringify({ captureId, kind, language }),
+  });
+}
+
 /** 解析插件抓到的 SEMrush / Planner 页面 → 关键词表一行（找不到为 null）。 */
 export async function parseKeywordCapture(captureId: string): Promise<ParsedKeywordData> {
   return aiFetch<ParsedKeywordData>("/api/v1/ai/parse-keyword-capture", {

@@ -34,8 +34,10 @@ import {
   type ParsedKeywordData,
   type EcommerceData,
   type AiKeywordRow,
+  type IntelKind,
   parseEcommerceCapture,
   parseKeywordCaptureAi,
+  parseIntelCapture,
   type OfferCaptureDetail,
   type OfferCaptureItem,
   type AiUrlCheckResponse,
@@ -405,6 +407,21 @@ export async function parseEcommerceCaptureAction(
     return {
       ok: false,
       error: e instanceof AiApiError ? e.message : "解析抓取失败",
+    };
+  }
+}
+
+export async function parseIntelCaptureAction(
+  captureId: string,
+  kind: IntelKind
+): Promise<AiActionResult<{ summary: string | null }>> {
+  try {
+    const lang = await getLang();
+    return { ok: true, data: await parseIntelCapture(captureId, kind, lang) };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof AiApiError ? e.message : "AI 解析抓取失败",
     };
   }
 }

@@ -15,6 +15,7 @@ import {
   analyzeTrafficPlanAction,
   parseKeywordCaptureAction,
   parseKeywordCaptureAiAction,
+  parseIntelCaptureAction,
   parseEcommerceCaptureAction,
   type AiActionResult,
 } from "@/lib/api/ai-actions";
@@ -523,6 +524,32 @@ export function TrafficPlannerClient({
       return [...next, ...toAdd];
     });
     return fresh.length;
+  };
+
+  /* 情报抓取：AI 只提取该框要的内容（SpyFu/透明度/SimilarWeb/否定词），提不出不塞垃圾 */
+  const [intelParsing, setIntelParsing] = useState<string | null>(null);
+  const fillIntelFromCapture = async (
+    kind: "spyfu" | "transparency" | "similarweb" | "negatives",
+    c: OfferCaptureItem
+  ) => {
+    setIntelParsing(kind);
+    try {
+      const r = await parseIntelCaptureAction(c.id, kind);
+      if (!r.ok || !r.data.summary) {
+        setMsg(d.intelNone);
+        return;
+      }
+      const summary = r.data.summary;
+      if (kind === "spyfu") setSpyfuKeywords(summary);
+      else if (kind === "transparency") setCompetitorAds(summary);
+      else if (kind === "similarweb") setSimilarwebNotes(summary);
+      else {
+        setNegImportText(summary);
+        setNegImportOpen(true);
+      }
+    } finally {
+      setIntelParsing(null);
+    }
   };
 
   const fillKwFromCapture = async (c: OfferCaptureItem) => {
@@ -1062,12 +1089,10 @@ export function TrafficPlannerClient({
               {d.importNegatives}
             </button>
           </div>
-          <CapturePicker
-            onPick={(c) => {
-              setNegImportText(c.text.slice(0, 2000));
-              setNegImportOpen(true);
-            }}
-          />
+          <CapturePicker onPick={(c) => fillIntelFromCapture("negatives", c)} />
+          {intelParsing === "negatives" && (
+            <p className="mt-1 text-xs text-ink/55">{d.intelParsing}</p>
+          )}
           {negImportOpen && (
             <div className="mt-2">
               <textarea
@@ -1101,7 +1126,10 @@ export function TrafficPlannerClient({
               </select>
             </label>
           </div>
-          <CapturePicker onPick={(c) => setSpyfuKeywords(c.text.slice(0, 2000))} />
+          <CapturePicker onPick={(c) => fillIntelFromCapture("spyfu", c)} />
+          {intelParsing === "spyfu" && (
+            <p className="mt-1 text-xs text-ink/55">{d.intelParsing}</p>
+          )}
         </div>
 
         {/* Transparency */}
@@ -1111,7 +1139,10 @@ export function TrafficPlannerClient({
             <span className={labelCls}>{d.competitorAds}</span>
             <textarea className={`${inputCls} h-20`} value={competitorAds} onChange={(e) => setCompetitorAds(e.target.value)} placeholder={d.competitorAdsHint} />
           </label>
-          <CapturePicker onPick={(c) => setCompetitorAds(c.text.slice(0, 2000))} />
+          <CapturePicker onPick={(c) => fillIntelFromCapture("transparency", c)} />
+          {intelParsing === "transparency" && (
+            <p className="mt-1 text-xs text-ink/55">{d.intelParsing}</p>
+          )}
         </div>
 
         {/* SimilarWeb */}
@@ -1121,7 +1152,10 @@ export function TrafficPlannerClient({
             <span className={labelCls}>{d.similarwebNotes}</span>
             <textarea className={`${inputCls} h-20`} value={similarwebNotes} onChange={(e) => setSimilarwebNotes(e.target.value)} placeholder={lang === "zh" ? "比如：对手搜索流量占 65%，可复制" : "e.g. 65% search traffic, replicable"} />
           </label>
-          <CapturePicker onPick={(c) => setSimilarwebNotes(c.text.slice(0, 2000))} />
+          <CapturePicker onPick={(c) => fillIntelFromCapture("similarweb", c)} />
+          {intelParsing === "similarweb" && (
+            <p className="mt-1 text-xs text-ink/55">{d.intelParsing}</p>
+          )}
         </div>
 
         {/* 其他 */}
