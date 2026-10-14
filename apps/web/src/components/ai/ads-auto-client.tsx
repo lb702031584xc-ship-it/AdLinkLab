@@ -5,7 +5,10 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { loadWorkStateAction } from "@/lib/api/work-state-actions";
+import {
+  listWorkStateHistoryAction,
+  loadWorkStateAction,
+} from "@/lib/api/work-state-actions";
 import { useWorkState } from "@/lib/use-work-state";
 import { coachCheckAction, type CoachFinding } from "@/lib/api/coach-actions";
 import { CoachGate, hasCoachBlock } from "@/components/coach/coach-gate";
@@ -245,37 +248,56 @@ export function AdsAutoClient({
     watch: [offerId, urlsText, kwText, language, copyStyle, googleAccountId],
   });
 
+  /* 取某 offer 的投放选词（优先）/ 投流关键词（回落），转成 kwText 行 */
+  const loadLaunchKeywordLines = async (oid: string): Promise<string[]> => {
+    for (const page of ["keyword-launch", "traffic-planner"] as const) {
+      const res = await loadWorkStateAction(page, oid);
+      if (!res.ok || !res.data.state) continue;
+      const rows = (res.data.state.rows ?? res.data.state.keywords ?? []) as Array<{
+        keyword?: unknown;
+        matchType?: unknown;
+      }>;
+      const lines: string[] = [];
+      const seen = new Set<string>();
+      for (const r of rows) {
+        const kw = typeof r.keyword === "string" ? r.keyword.trim() : "";
+        if (!kw || seen.has(kw.toLowerCase())) continue;
+        seen.add(kw.toLowerCase());
+        const mt =
+          page === "keyword-launch" && typeof r.matchType === "string"
+            ? r.matchType.trim().toLowerCase()
+            : "phrase";
+        lines.push(`${kw}, ${mt || "phrase"}`);
+      }
+      if (lines.length > 0) return lines;
+    }
+    return [];
+  };
+
+  /* 解析生效 offer：?offerId= 优先，否则取最近用过的投放选词 offer */
+  const resolveOfferId = async (): Promise<string | null> => {
+    if (offerId) return offerId;
+    try {
+      const hist = await listWorkStateHistoryAction("keyword-launch", { limit: 5 });
+      if (hist.ok) return hist.data.find((h) => h.offerId)?.offerId ?? null;
+    } catch {
+      /* ignore */
+    }
+    return null;
+  };
+
   /* 关键词联动：恢复完成后仍为空时，从该 offer 的投放选词快照取定好的词 */
   useEffect(() => {
-    if (!restored || !offerId) return;
+    if (!restored) return;
     if (kwText.trim() || urlKwRef.current != null) return;
     let cancelled = false;
     (async () => {
       try {
-        for (const page of ["keyword-launch", "traffic-planner"] as const) {
-          if (cancelled) return;
-          const res = await loadWorkStateAction(page, offerId);
-          if (!res.ok || !res.data.state) continue;
-          const rows = (res.data.state.rows ?? res.data.state.keywords ?? []) as Array<{
-            keyword?: unknown;
-            matchType?: unknown;
-          }>;
-          const lines: string[] = [];
-          const seen = new Set<string>();
-          for (const r of rows) {
-            const kw = typeof r.keyword === "string" ? r.keyword.trim() : "";
-            if (!kw || seen.has(kw.toLowerCase())) continue;
-            seen.add(kw.toLowerCase());
-            const mt =
-              page === "keyword-launch" && typeof r.matchType === "string"
-                ? r.matchType.trim().toLowerCase()
-                : "phrase";
-            lines.push(`${kw}, ${mt || "phrase"}`);
-          }
-          if (lines.length > 0) {
-            setKwText((prev) => (prev.trim() ? prev : lines.join("\n")));
-            return;
-          }
+        const oid = await resolveOfferId();
+        if (!oid || cancelled) return;
+        const lines = await loadLaunchKeywordLines(oid);
+        if (lines.length > 0 && !cancelled) {
+          setKwText((prev) => (prev.trim() ? prev : lines.join("\n")));
         }
       } catch {
         /* 取不到就不填 */
@@ -285,7 +307,7 @@ export function AdsAutoClient({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [restored, offerId]);
+  }, [restored]);
   // 教练模式（第十三批）
   const [brandTermsText, setBrandTermsText] = useState("");
   const [coachFindings, setCoachFindings] = useState<CoachFinding[]>([]);
@@ -559,46 +581,33 @@ export function AdsAutoClient({
             <label className={labelClass} htmlFor="ads-auto-keywords">
               {d.form.keywordsLabel}
             </label>
-            {offerId ? (
-              <button
-                type="button"
-                onClick={async () => {
-                  try {
-                    for (const page of ["keyword-launch", "traffic-planner"] as const) {
-                      const res = await loadWorkStateAction(page, offerId);
-                      if (!res.ok || !res.data.state) continue;
-                      const rows = (res.data.state.rows ?? res.data.state.keywords ?? []) as Array<{
-                        keyword?: unknown;
-                        matchType?: unknown;
-                      }>;
-                      const existing = new Set(
-                        kwText.split("\n").map((l) => l.split(",")[0]?.trim().toLowerCase()).filter(Boolean)
-                      );
-                      const lines: string[] = [];
-                      for (const r of rows) {
-                        const kw = typeof r.keyword === "string" ? r.keyword.trim() : "";
-                        if (!kw || existing.has(kw.toLowerCase())) continue;
-                        existing.add(kw.toLowerCase());
-                        const mt =
-                          page === "keyword-launch" && typeof r.matchType === "string"
-                            ? r.matchType.trim().toLowerCase()
-                            : "phrase";
-                        lines.push(`${kw}, ${mt || "phrase"}`);
-                      }
-                      if (lines.length > 0) {
-                        setKwText((prev) => (prev.trim() ? `${prev.trim()}\n${lines.join("\n")}` : lines.join("\n")));
-                        break;
-                      }
-                    }
-                  } catch {
-                    /* 取不到就不填 */
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  const oid = await resolveOfferId();
+                  if (!oid) return;
+                  const lines = await loadLaunchKeywordLines(oid);
+                  if (lines.length === 0) return;
+                  const existing = new Set(
+                    kwText.split("\n").map((l) => l.split(",")[0]?.trim().toLowerCase()).filter(Boolean)
+                  );
+                  const fresh = lines.filter(
+                    (l) => !existing.has((l.split(",")[0] ?? "").trim().toLowerCase())
+                  );
+                  if (fresh.length > 0) {
+                    setKwText((prev) =>
+                      prev.trim() ? `${prev.trim()}\n${fresh.join("\n")}` : fresh.join("\n")
+                    );
                   }
-                }}
-                className="text-xs text-ink/60 hover:text-ink"
-              >
-                {d.form.importLaunchKeywords}
-              </button>
-            ) : null}
+                } catch {
+                  /* 取不到就不填 */
+                }
+              }}
+              className="text-xs text-ink/60 hover:text-ink"
+            >
+              {d.form.importLaunchKeywords}
+            </button>
           </div>
           <textarea
             id="ads-auto-keywords"
