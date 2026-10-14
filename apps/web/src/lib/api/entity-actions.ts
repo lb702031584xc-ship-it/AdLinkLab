@@ -98,6 +98,19 @@ export async function deleteOfferAction(id: string) {
   return attempt(() => entityApi.offers.remove(id), ["/offers"]);
 }
 
+/** 批量删除 Offer（逐个调用单删 API，租户隔离；最多 100 个）。 */
+export async function deleteOffersAction(ids: string[]) {
+  const clean = [...new Set(ids)].filter(Boolean).slice(0, 100);
+  return attempt(async () => {
+    let deleted = 0;
+    for (const id of clean) {
+      await entityApi.offers.remove(id);
+      deleted++;
+    }
+    return { deleted };
+  }, ["/offers"]);
+}
+
 /* ---------- Tracking Links ---------- */
 
 export async function replaceTrackingLinkBindingsAction(

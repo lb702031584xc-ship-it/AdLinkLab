@@ -81,6 +81,9 @@ export const zh = {
       analyze: "AI 分析",
       deleteConfirm: "确定删除这个 Offer 吗？",
       deleting: "删除中…",
+      deleteSelected: "删除选中",
+      deleteSelectedConfirm: "确定删除选中的 {n} 个 Offer 吗？删除后不可恢复。",
+      selectedCount: "已选 {n} 个",
     },
     quickCalc: {
       button: "快速测算",
@@ -507,6 +510,9 @@ export const en: typeof zh = {
       analyze: "AI analyze",
       deleteConfirm: "Delete this offer?",
       deleting: "Deleting…",
+      deleteSelected: "Delete selected",
+      deleteSelectedConfirm: "Delete the selected {n} offers? This cannot be undone.",
+      selectedCount: "{n} selected",
     },
     quickCalc: {
       button: "Quick calc",

@@ -19,6 +19,12 @@ import { getLang } from "@/i18n/lang";
 import { getDictionary } from "@/i18n/dictionaries";
 import { OfferScoreCell } from "@/components/offers/offer-score-cell";
 import { OfferDeleteButton } from "@/components/offers/offer-delete-button";
+import {
+  OfferSelectionProvider,
+  OfferRowCheckbox,
+  OfferSelectAllCheckbox,
+  OfferBatchDeleteBar,
+} from "@/components/offers/offer-selection";
 import { TestSpendCell } from "@/components/offers/test-spend-cell";
 import {
   QuickCalcButton,
@@ -198,6 +204,12 @@ export default async function OffersPage({
   }
 
   const columns: Array<Column<Offer>> = [
+    {
+      header: "",
+      noLink: true,
+      render: (o) => <OfferRowCheckbox offerId={o.id} />,
+      className: "whitespace-nowrap",
+    },
     { header: t.common.misc.name, render: (o) => o.name },
     {
       header: t.entities.offers.columns.mid,
@@ -337,6 +349,18 @@ export default async function OffersPage({
     error = mapEntityErrorMessage(e, lang);
   }
 
+  const tableColumns: Array<Column<Offer>> = data
+    ? [
+        {
+          ...columns[0],
+          headerRender: (
+            <OfferSelectAllCheckbox ids={data.items.map((o) => o.id)} />
+          ),
+        },
+        ...columns.slice(1),
+      ]
+    : columns;
+
   return (
     <div>
       <EntityPageHeader
@@ -358,12 +382,23 @@ export default async function OffersPage({
         />
       ) : (
         <div className="mt-4">
-          <DataTable<Offer>
-            columns={columns}
-            rows={data.items}
-            rowHref={(o) => `/offers/${o.id}`}
-            emptyText={t.entities.offers.empty}
-          />
+          <OfferSelectionProvider>
+            <OfferBatchDeleteBar
+              dict={{
+                selectedCount: t.entities.offers.columns.selectedCount,
+                deleteSelected: t.entities.offers.columns.deleteSelected,
+                deleteSelectedConfirm:
+                  t.entities.offers.columns.deleteSelectedConfirm,
+                deleting: t.entities.offers.columns.deleting,
+              }}
+            />
+            <DataTable<Offer>
+              columns={tableColumns}
+              rows={data.items}
+              rowHref={(o) => `/offers/${o.id}`}
+              emptyText={t.entities.offers.empty}
+            />
+          </OfferSelectionProvider>
           <Pagination
             page={data.page}
             pageSize={data.pageSize}

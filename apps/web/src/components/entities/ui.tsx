@@ -91,6 +91,10 @@ export interface Column<T> {
   header: string;
   render: (row: T) => ReactNode;
   className?: string;
+  /** 自定义表头渲染（不提供则显示 header 文本） */
+  headerRender?: ReactNode;
+  /** 为 true 时，即使有 rowHref 也不把该列包进链接（复选框列用） */
+  noLink?: boolean;
 }
 
 export function DataTable<T extends { id: string }>({
@@ -116,12 +120,12 @@ export function DataTable<T extends { id: string }>({
       <table className="w-full min-w-[720px] text-left text-sm">
         <thead>
           <tr className="border-b border-ink/10 bg-ink/[0.03]">
-            {columns.map((c) => (
+            {columns.map((c, ci) => (
               <th
-                key={c.header}
+                key={`${c.header}-${ci}`}
                 className={`whitespace-nowrap px-4 py-3 text-xs font-semibold uppercase tracking-wide text-ink/60 ${c.className ?? ""}`}
               >
-                {c.header}
+                {c.headerRender ?? c.header}
               </th>
             ))}
           </tr>
@@ -129,6 +133,7 @@ export function DataTable<T extends { id: string }>({
         <tbody>
           {rows.map((row) => {
             const href = rowHref?.(row);
+            const linkIdx = columns.findIndex((c) => !c.noLink);
             const cells = columns.map((c) => (
               <td key={c.header} className={`px-4 py-3 align-top ${c.className ?? ""}`}>
                 {c.render(row)}
@@ -137,7 +142,7 @@ export function DataTable<T extends { id: string }>({
             return href ? (
               <tr key={row.id} className="border-b border-ink/5 transition last:border-0 hover:bg-signal/[0.04]">
                 {cells.map((cell, i) =>
-                  i === 0 ? (
+                  i === linkIdx ? (
                     <td key={columns[i].header} className={`px-4 py-3 align-top ${columns[i].className ?? ""}`}>
                       <Link href={href} className="font-semibold text-signal hover:underline">
                         {columns[i].render(row)}
