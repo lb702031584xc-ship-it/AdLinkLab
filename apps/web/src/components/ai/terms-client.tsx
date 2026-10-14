@@ -1,12 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useDict } from "@/i18n/use-dict";
 import { formatDateTime } from "@/lib/api/entities-config";
 import { EntityPageHeader } from "@/components/entities/ui";
 import { analyzeTermsAction, screenOffersAction, getOfferCaptureAction } from "@/lib/api/ai-actions";
 import { CapturePicker } from "@/components/ai/capture-picker";
+import { OfferPipelineNav } from "@/components/ai/offer-pipeline-nav";
+import { loadWorkStateAction } from "@/lib/api/work-state-actions";
+import { useWorkState } from "@/lib/use-work-state";
 import type {
   AiScreenResultItem,
   AiTermsResult,
@@ -184,11 +187,19 @@ interface BatchRow {
   text: string;
 }
 
+export interface TermsOffer {
+  id: string;
+  name: string;
+  network?: string | null;
+}
+
 export function TermsClient({
   isAdmin,
   showSetupNudge,
   hideHeader,
   onVerdict,
+  initialOffer,
+  offers,
 }: {
   isAdmin: boolean;
   showSetupNudge: boolean;
@@ -196,11 +207,25 @@ export function TermsClient({
   hideHeader?: boolean;
   /** Worksheet embedding: report the step verdict upward. */
   onVerdict?: (v: "go" | "caution" | "stop" | null) => void;
+  /** Offer 上下文：独立页 ?offerId= / 工作表嵌入时带入。 */
+  initialOffer?: TermsOffer | null;
+  /** 独立页 offer 下拉列表。 */
+  offers?: TermsOffer[];
 }) {
   const t = useDict();
   const d = t.ai.terms;
   const [mode, setMode] = useState<"single" | "batch">("single");
   const [text, setText] = useState("");
+  const [selectedOfferId, setSelectedOfferId] = useState<string | null>(
+    initialOffer?.id ?? null
+  );
+  const [selectedOfferName, setSelectedOfferName] = useState<string | null>(
+    initialOffer?.name ?? null
+  );
+  const [selectedOfferNetwork, setSelectedOfferNetwork] = useState<string | null>(
+    initialOffer?.network ?? null
+  );
+  const appliedOfferRef = useRef<string | null>(initialOffer?.id ?? null);
   const [rows, setRows] = useState<BatchRow[]>([{ key: 0, name: "", text: "" }]);
   const [nextKey, setNextKey] = useState(1);
   const [working, setWorking] = useState(false);
@@ -210,6 +235,72 @@ export function TermsClient({
   const [batchResults, setBatchResults] = useState<AiScreenResultItem[] | null>(
     null
   );
+
+  /* Offer 主线：按 offer 自动保存/恢复（单条文本 + 批量行） */
+  useWorkState({
+    page: "ai-terms",
+    offerId: selectedOfferId,
+    label: selectedOfferName,
+    buildSnapshot: () => ({
+      version: 1,
+      mode,
+      text,
+      rows: rows.map((r) => ({ name: r.name, text: r.text })),
+    }),
+    isMeaningful: (snap) =>
+      Boolean(
+        (snap.text as string)?.trim() ||
+          ((snap.rows as Array<{ name?: string; text?: string }>) ?? []).some(
+            (r) => r.name?.trim() || r.text?.trim()
+          )
+      ),
+    applySnapshot: (snap) => {
+      if (snap.mode === "single" || snap.mode === "batch") setMode(snap.mode);
+      if (typeof snap.text === "string") setText(snap.text);
+      const rs = snap.rows as Array<{ name?: string; text?: string }> | undefined;
+      if (Array.isArray(rs) && rs.length > 0) {
+        setRows(rs.map((r, i) => ({ key: Date.now() + i, name: r.name ?? "", text: r.text ?? "" })));
+      }
+    },
+    watch: [selectedOfferId, mode, text, rows],
+  });
+  /* 工作表嵌入时：上层 offer 变化 → 切换上下文 */
+  useEffect(() => {
+    const key = initialOffer ? initialOffer.id : null;
+    if (key && appliedOfferRef.current !== key) {
+      appliedOfferRef.current = key;
+      setSelectedOfferId(initialOffer!.id);
+      setSelectedOfferName(initialOffer!.name);
+      setSelectedOfferNetwork(initialOffer!.network ?? null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialOffer]);
+
+  const onSelectOffer = async (id: string) => {
+    const o = (offers ?? []).find((x) => x.id === id) ?? null;
+    if (!o) return;
+    setSelectedOfferId(o.id);
+    setSelectedOfferName(o.name);
+    setSelectedOfferNetwork(o.network ?? null);
+    try {
+      const res = await loadWorkStateAction("ai-terms", o.id);
+      const snap = res.ok ? res.data.state : null;
+      if (
+        snap &&
+        (typeof snap.text === "string" && snap.text.trim() ||
+          (Array.isArray(snap.rows) && snap.rows.length > 0))
+      ) {
+        if (snap.mode === "single" || snap.mode === "batch") setMode(snap.mode);
+        if (typeof snap.text === "string") setText(snap.text);
+        const rs = snap.rows as Array<{ name?: string; text?: string }>;
+        if (Array.isArray(rs) && rs.length > 0) {
+          setRows(rs.map((r, i) => ({ key: Date.now() + i, name: r.name ?? "", text: r.text ?? "" })));
+        }
+      }
+    } catch {
+      /* 恢复失败不打断 */
+    }
+  };
 
   const inputClass =
     "w-full rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm text-ink placeholder:text-ink/35 focus:border-signal focus:outline-none";
@@ -325,6 +416,17 @@ export function TermsClient({
           {error}
         </p>
       ) : null}
+
+      {!hideHeader && (
+        <OfferPipelineNav
+          current="terms"
+          offerId={selectedOfferId}
+          offerName={selectedOfferName}
+          offerNetwork={selectedOfferNetwork}
+          offers={offers}
+          onSelectOffer={onSelectOffer}
+        />
+      )}
 
       <div
         className="mt-6 inline-flex rounded-lg bg-ink/5 p-1"

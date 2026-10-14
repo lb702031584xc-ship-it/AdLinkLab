@@ -14,6 +14,7 @@ import {
 import { TermsClient } from "./terms-client";
 import { ComplianceClient } from "./compliance-client";
 import { TrafficPlannerClient, type PlannerOffer } from "./traffic-planner-client";
+import { OfferPipelineNav } from "./offer-pipeline-nav";
 import { BrandBiddingClient } from "./brand-bidding-client";
 import type { AiUrlCheckResult, TrafficPlanResult } from "@/lib/api/ai";
 
@@ -490,6 +491,16 @@ export function WorksheetClient({
     <div className="space-y-5">
       <EntityPageHeader title={w.title} description={w.description} />
 
+      <OfferPipelineNav
+        current="analyze"
+        offerId={offer?.id ?? null}
+        offerName={offer?.name ?? (mName || null)}
+        offerNetwork={offer?.network ?? (mNetwork || null)}
+        picker={
+          <span className="text-xs text-ink/50">（上方已选）</span>
+        }
+      />
+
       {/* 自动保存状态 + 历史记录入口 */}
       <div className="flex flex-wrap items-center gap-2">
         <button
@@ -725,7 +736,17 @@ export function WorksheetClient({
             {w.cashbackTermsHint}
           </p>
         ) : null}
-        <TermsClient isAdmin={isAdmin} showSetupNudge={false} hideHeader onVerdict={setTermsVerdict} />
+        <TermsClient
+          isAdmin={isAdmin}
+          showSetupNudge={false}
+          hideHeader
+          onVerdict={setTermsVerdict}
+          initialOffer={
+            offer
+              ? { id: offer.id, name: offer.name, network: offer.network }
+              : null
+          }
+        />
       </StepCard>
 
       {/* Step ② compliance */}
@@ -756,6 +777,16 @@ export function WorksheetClient({
           initialOwnedDomains={initialOwnedDomains}
           hideHeader
           onResult={setComplianceResults}
+          initialOffer={
+            offer
+              ? {
+                  id: offer.id,
+                  name: offer.name,
+                  network: offer.network,
+                  destinationUrl: offer.destinationUrl,
+                }
+              : null
+          }
         />
       </StepCard>
 

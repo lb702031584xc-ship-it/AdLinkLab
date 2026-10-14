@@ -69,9 +69,10 @@ interface Props {
   offers: Offer[];
   initialChecklists: LaunchChecklist[];
   lang: "zh" | "en";
+  initialOfferId?: string;
 }
 
-export function LaunchWizardClient({ dict: d, offers, initialChecklists, lang }: Props) {
+export function LaunchWizardClient({ dict: d, offers, initialChecklists, lang, initialOfferId }: Props) {
   const [checklists, setChecklists] = useState<LaunchChecklist[]>(initialChecklists);
   const [detail, setDetail] = useState<LaunchDetail | null>(null);
   const [step, setStep] = useState(1);
@@ -79,7 +80,9 @@ export function LaunchWizardClient({ dict: d, offers, initialChecklists, lang }:
   const [error, setError] = useState<string | null>(null);
 
   // per-step state
-  const [offerId, setOfferId] = useState("");
+  const [offerId, setOfferId] = useState(
+    initialOfferId && offers.some((o) => o.id === initialOfferId) ? initialOfferId : ""
+  );
   const [analyses, setAnalyses] = useState<AiAnalysis[]>([]);
   const [analysisId, setAnalysisId] = useState("");
   const [publicId, setPublicId] = useState("");

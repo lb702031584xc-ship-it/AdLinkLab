@@ -1,11 +1,17 @@
 import { getCurrentUser } from "@/lib/api/auth";
 import { getAiSettingsAction } from "@/lib/api/ai-actions";
-import { ComplianceClient } from "@/components/ai/compliance-client";
+import { entityApi } from "@/lib/api/entities";
+import { ComplianceClient, type ComplianceOffer } from "@/components/ai/compliance-client";
 
 export const dynamic = "force-dynamic";
 
 /** Direct-link compliance URL checker. */
-export default async function AiCompliancePage() {
+export default async function AiCompliancePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ offerId?: string }>;
+}) {
+  const sp = await searchParams;
   const user = await getCurrentUser();
   const isAdmin = user?.role === "admin";
 
@@ -16,10 +22,29 @@ export default async function AiCompliancePage() {
     if (settings.ok) initialOwnedDomains = settings.data.ownedDomains ?? [];
   }
 
+  let initialOffer: ComplianceOffer | null = null;
+  if (sp.offerId) {
+    try {
+      const o = await entityApi.offers.get(sp.offerId);
+      initialOffer = { id: o.id, name: o.name, network: o.network, destinationUrl: o.destinationUrl };
+    } catch {
+      /* invalid id */
+    }
+  }
+  let offers: ComplianceOffer[] = [];
+  try {
+    const data = await entityApi.offers.list(1, 200);
+    offers = (data.items ?? []).map((o) => ({ id: o.id, name: o.name, network: o.network, destinationUrl: o.destinationUrl }));
+  } catch {
+    /* page still renders */
+  }
+
   return (
     <ComplianceClient
       isAdmin={isAdmin}
       initialOwnedDomains={initialOwnedDomains}
+      initialOffer={initialOffer}
+      offers={offers}
     />
   );
 }

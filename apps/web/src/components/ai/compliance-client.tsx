@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useDict } from "@/i18n/use-dict";
 import { EntityPageHeader } from "@/components/entities/ui";
 import {
@@ -9,6 +9,9 @@ import {
 } from "@/lib/api/ai-actions";
 import type { AiUrlCheckResult, UrlCheckVerdict } from "@/lib/api/ai";
 import { CapturePicker } from "@/components/ai/capture-picker";
+import { OfferPipelineNav } from "@/components/ai/offer-pipeline-nav";
+import { loadWorkStateAction } from "@/lib/api/work-state-actions";
+import { useWorkState } from "@/lib/use-work-state";
 
 const MAX_URLS = 20;
 
@@ -19,11 +22,20 @@ function verdictBadge(v: UrlCheckVerdict): string {
   return "bg-ink/10 text-ink/60";
 }
 
+export interface ComplianceOffer {
+  id: string;
+  name: string;
+  network?: string | null;
+  destinationUrl: string;
+}
+
 export function ComplianceClient({
   isAdmin,
   initialOwnedDomains,
   hideHeader,
   onResult,
+  initialOffer,
+  offers,
 }: {
   isAdmin: boolean;
   initialOwnedDomains: string[];
@@ -31,11 +43,82 @@ export function ComplianceClient({
   hideHeader?: boolean;
   /** Worksheet embedding: report check results upward. */
   onResult?: (r: AiUrlCheckResult[] | null) => void;
+  /** Offer 上下文：独立页 ?offerId= / 工作表嵌入时带入。 */
+  initialOffer?: ComplianceOffer | null;
+  /** 独立页 offer 下拉列表。 */
+  offers?: ComplianceOffer[];
 }) {
   const t = useDict();
   const d = t.ai.compliance;
   const [urlsText, setUrlsText] = useState("");
   const [domains, setDomains] = useState(initialOwnedDomains.join(", "));
+  const [selectedOfferId, setSelectedOfferId] = useState<string | null>(
+    initialOffer?.id ?? null
+  );
+  const [selectedOfferName, setSelectedOfferName] = useState<string | null>(
+    initialOffer?.name ?? null
+  );
+  const [selectedOfferNetwork, setSelectedOfferNetwork] = useState<string | null>(
+    initialOffer?.network ?? null
+  );
+  const appliedOfferRef = useRef<string | null>(initialOffer?.id ?? null);
+
+  /* Offer 主线：按 offer 自动保存/恢复待查链接 */
+  useWorkState({
+    page: "ai-compliance",
+    offerId: selectedOfferId,
+    label: selectedOfferName,
+    buildSnapshot: () => ({ version: 1, urlsText, domains }),
+    isMeaningful: (snap) => Boolean((snap.urlsText as string)?.trim()),
+    applySnapshot: (snap) => {
+      if (typeof snap.urlsText === "string") setUrlsText(snap.urlsText);
+      if (typeof snap.domains === "string") setDomains(snap.domains);
+    },
+    watch: [selectedOfferId, urlsText, domains],
+  });
+
+  /* 选了 offer：把它的目标 URL 自动加进待查链接（去重，不覆盖手填） */
+  const applyOfferUrl = (o: ComplianceOffer) => {
+    setSelectedOfferId(o.id);
+    setSelectedOfferName(o.name);
+    setSelectedOfferNetwork(o.network ?? null);
+    if (o.destinationUrl) {
+      setUrlsText((prev) => {
+        const lines = prev.split("\n").map((s) => s.trim()).filter(Boolean);
+        if (lines.includes(o.destinationUrl.trim())) return prev;
+        return prev.trim() ? `${prev.trim()}\n${o.destinationUrl.trim()}` : o.destinationUrl.trim();
+      });
+    }
+  };
+
+  useEffect(() => {
+    const key = initialOffer ? initialOffer.id : null;
+    if (key && appliedOfferRef.current !== key) {
+      appliedOfferRef.current = key;
+      applyOfferUrl(initialOffer!);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialOffer]);
+
+  const onSelectOffer = async (id: string) => {
+    const o = (offers ?? []).find((x) => x.id === id) ?? null;
+    if (!o) return;
+    try {
+      const res = await loadWorkStateAction("ai-compliance", o.id);
+      const snap = res.ok ? res.data.state : null;
+      if (snap && typeof snap.urlsText === "string" && snap.urlsText.trim()) {
+        setSelectedOfferId(o.id);
+        setSelectedOfferName(o.name);
+        setSelectedOfferNetwork(o.network ?? null);
+        setUrlsText(snap.urlsText);
+        if (typeof snap.domains === "string") setDomains(snap.domains);
+        return;
+      }
+    } catch {
+      /* 恢复失败则走默认填充 */
+    }
+    applyOfferUrl(o);
+  };
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<AiUrlCheckResult[] | null>(null);
@@ -95,6 +178,17 @@ export function ComplianceClient({
     <div>
       {hideHeader ? null : (
         <EntityPageHeader title={d.title} description={d.description} />
+      )}
+
+      {!hideHeader && (
+        <OfferPipelineNav
+          current="compliance"
+          offerId={selectedOfferId}
+          offerName={selectedOfferName}
+          offerNetwork={selectedOfferNetwork}
+          offers={offers}
+          onSelectOffer={onSelectOffer}
+        />
       )}
 
       <div className="mt-6 rounded-xl border border-signal/25 bg-signal/5 p-5">

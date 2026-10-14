@@ -3,7 +3,10 @@
 /**
  * Offer 一键推演报告：输入表单 → 一次生成 7 节推演 → 报告展示 + Markdown 导出。
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { OfferPipelineNav } from "@/components/ai/offer-pipeline-nav";
+import { loadWorkStateAction } from "@/lib/api/work-state-actions";
+import { useWorkState } from "@/lib/use-work-state";
 import { useI18n } from "@/i18n/I18nProvider";
 import { zh as bpZh, en as bpEn, type AiBlueprintDict } from "@/i18n/dict/ai-blueprint";
 import {
@@ -139,21 +142,149 @@ function buildMarkdownExport(bp: BlueprintResult): string {
   return L.join("\n");
 }
 
-export function BlueprintClient({ showSetupNudge }: { showSetupNudge: boolean }) {
+export interface BlueprintOffer {
+  id: string;
+  name: string;
+  network?: string | null;
+  destinationUrl: string;
+  commissionValue?: string | number | null;
+  commissionType?: string | null;
+  avgPrice?: string | number | null;
+}
+
+export function BlueprintClient({
+  showSetupNudge,
+  initialOffer,
+  offers,
+}: {
+  showSetupNudge: boolean;
+  /** Offer 上下文：?offerId= 带入，自动填表。 */
+  initialOffer?: BlueprintOffer | null;
+  /** offer 下拉列表。 */
+  offers?: BlueprintOffer[];
+}) {
   const { lang } = useI18n();
   const d: Dict = lang === "en" ? bpEn : bpZh;
 
-  const [offerName, setOfferName] = useState("");
+  const [offerName, setOfferName] = useState(initialOffer?.name ?? "");
   const [productDescription, setProductDescription] = useState("");
-  const [avgPrice, setAvgPrice] = useState("");
-  const [commissionType, setCommissionType] = useState<"percentage" | "fixed">("percentage");
-  const [commissionValue, setCommissionValue] = useState("");
+  const [avgPrice, setAvgPrice] = useState(
+    initialOffer?.avgPrice != null ? String(initialOffer.avgPrice) : ""
+  );
+  const [commissionType, setCommissionType] = useState<"percentage" | "fixed">(
+    initialOffer?.commissionType === "fixed" ? "fixed" : "percentage"
+  );
+  const [commissionValue, setCommissionValue] = useState(
+    initialOffer?.commissionValue != null ? String(initialOffer.commissionValue) : ""
+  );
   const [currency, setCurrency] = useState("USD");
   const [targetMarket, setTargetMarket] = useState("US");
-  const [offerUrl, setOfferUrl] = useState("");
+  const [offerUrl, setOfferUrl] = useState(initialOffer?.destinationUrl ?? "");
   const [termsText, setTermsText] = useState("");
   const [landingMode, setLandingMode] = useState<"landing" | "direct">("landing");
   const [brandPolicy, setBrandPolicy] = useState<"allowed" | "forbidden">("forbidden");
+  const [selectedOfferId, setSelectedOfferId] = useState<string | null>(
+    initialOffer?.id ?? null
+  );
+  const [selectedOfferName, setSelectedOfferName] = useState<string | null>(
+    initialOffer?.name ?? null
+  );
+  const [selectedOfferNetwork, setSelectedOfferNetwork] = useState<string | null>(
+    initialOffer?.network ?? null
+  );
+  const appliedOfferRef = useRef<string | null>(initialOffer?.id ?? null);
+
+  /* Offer 主线：按 offer 自动保存/恢复整张表单 */
+  useWorkState({
+    page: "ai-blueprint",
+    offerId: selectedOfferId,
+    label: selectedOfferName,
+    buildSnapshot: () => ({
+      version: 1,
+      offerName, productDescription, avgPrice, commissionType, commissionValue,
+      currency, targetMarket, offerUrl, termsText, landingMode, brandPolicy,
+    }),
+    isMeaningful: (snap) =>
+      Boolean(
+        (snap.offerName as string)?.trim() ||
+          (snap.offerUrl as string)?.trim() ||
+          (snap.termsText as string)?.trim()
+      ),
+    applySnapshot: (snap) => {
+      const str = (v: unknown) => (v == null ? "" : String(v));
+      setOfferName(str(snap.offerName));
+      setProductDescription(str(snap.productDescription));
+      setAvgPrice(str(snap.avgPrice));
+      if (snap.commissionType === "fixed" || snap.commissionType === "percentage")
+        setCommissionType(snap.commissionType);
+      setCommissionValue(str(snap.commissionValue));
+      if (typeof snap.currency === "string") setCurrency(snap.currency);
+      if (typeof snap.targetMarket === "string") setTargetMarket(snap.targetMarket);
+      setOfferUrl(str(snap.offerUrl));
+      setTermsText(str(snap.termsText));
+      if (snap.landingMode === "landing" || snap.landingMode === "direct")
+        setLandingMode(snap.landingMode);
+      if (snap.brandPolicy === "allowed" || snap.brandPolicy === "forbidden")
+        setBrandPolicy(snap.brandPolicy);
+    },
+    watch: [
+      selectedOfferId, offerName, productDescription, avgPrice, commissionType,
+      commissionValue, currency, targetMarket, offerUrl, termsText,
+      landingMode, brandPolicy,
+    ],
+  });
+
+  const fillFromOffer = (o: BlueprintOffer) => {
+    setSelectedOfferId(o.id);
+    setSelectedOfferName(o.name);
+    setSelectedOfferNetwork(o.network ?? null);
+    setOfferName(o.name);
+    setOfferUrl(o.destinationUrl);
+    if (o.avgPrice != null) setAvgPrice(String(o.avgPrice));
+    if (o.commissionType === "fixed" || o.commissionType === "percentage")
+      setCommissionType(o.commissionType);
+    if (o.commissionValue != null) setCommissionValue(String(o.commissionValue));
+  };
+
+  useEffect(() => {
+    const key = initialOffer ? initialOffer.id : null;
+    if (key && appliedOfferRef.current !== key) {
+      appliedOfferRef.current = key;
+      fillFromOffer(initialOffer!);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialOffer]);
+
+  const onSelectOffer = async (id: string) => {
+    const o = (offers ?? []).find((x) => x.id === id) ?? null;
+    if (!o) return;
+    fillFromOffer(o);
+    try {
+      const res = await loadWorkStateAction("ai-blueprint", o.id);
+      if (res.ok && res.data.state) {
+        const snap = res.data.state as Record<string, unknown>;
+        if ((snap.offerName as string)?.trim() || (snap.offerUrl as string)?.trim()) {
+          const str = (v: unknown) => (v == null ? "" : String(v));
+          setOfferName(str(snap.offerName));
+          setProductDescription(str(snap.productDescription));
+          setAvgPrice(str(snap.avgPrice));
+          if (snap.commissionType === "fixed" || snap.commissionType === "percentage")
+            setCommissionType(snap.commissionType as "fixed" | "percentage");
+          setCommissionValue(str(snap.commissionValue));
+          if (typeof snap.currency === "string") setCurrency(snap.currency);
+          if (typeof snap.targetMarket === "string") setTargetMarket(snap.targetMarket);
+          setOfferUrl(str(snap.offerUrl));
+          setTermsText(str(snap.termsText));
+          if (snap.landingMode === "landing" || snap.landingMode === "direct")
+            setLandingMode(snap.landingMode as "landing" | "direct");
+          if (snap.brandPolicy === "allowed" || snap.brandPolicy === "forbidden")
+            setBrandPolicy(snap.brandPolicy as "allowed" | "forbidden");
+        }
+      }
+    } catch {
+      /* 恢复失败不打断 */
+    }
+  };
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -280,6 +411,15 @@ export function BlueprintClient({ showSetupNudge }: { showSetupNudge: boolean })
         <h1 className="text-xl font-bold text-ink">{d.title}</h1>
         <p className="mt-1 text-sm text-ink/60">{d.subtitle}</p>
       </div>
+
+      <OfferPipelineNav
+        current="blueprint"
+        offerId={selectedOfferId}
+        offerName={selectedOfferName}
+        offerNetwork={selectedOfferNetwork}
+        offers={offers}
+        onSelectOffer={onSelectOffer}
+      />
 
       {showSetupNudge ? (
         <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">

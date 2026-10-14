@@ -23,6 +23,7 @@ import type {
   TrafficPlanResult,
 } from "@/lib/api/ai";
 import { CapturePicker } from "@/components/ai/capture-picker";
+import { OfferPipelineNav } from "@/components/ai/offer-pipeline-nav";
 import type { OfferCaptureItem } from "@/lib/api/ai";
 
 type Dict = TrafficPlannerDict;
@@ -591,6 +592,18 @@ export function TrafficPlannerClient({
           <p className="mt-1 text-sm text-ink/60">{d.subtitle}</p>
         </div>
       )}
+
+      {!hideHeader && (
+        <OfferPipelineNav
+          current="planner"
+          offerId={selectedOfferId}
+          offerName={offerName || null}
+          offerNetwork={network || null}
+          offers={(offers ?? []).map((o) => ({ id: o.id, name: o.name, network: o.network }))}
+          onSelectOffer={onSelectOffer}
+        />
+      )}
+
 
       {showSetupNudge && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
