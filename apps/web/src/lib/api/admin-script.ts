@@ -67,7 +67,9 @@ async function adminFetch<T>(
   const res = await fetch(`${base}${path}`, {
     ...init,
     headers: {
-      "content-type": "application/json",
+      // 无 body 的请求（DELETE 解绑/删除）不带 JSON 头，否则 Fastify
+      // 报 FST_ERR_CTP_EMPTY_JSON_BODY（同 apiFetch 的 f0bda98 修复）。
+      ...(init.body != null ? { "content-type": "application/json" } : {}),
       ...authHeaders,
       ...(init.headers ?? {}),
     },
