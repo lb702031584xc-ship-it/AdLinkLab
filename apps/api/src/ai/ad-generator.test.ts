@@ -120,12 +120,25 @@ describe("validateAdPlanUrlDraft", () => {
     ).toThrow(AiError);
   });
 
-  it("rejects over-long headlines", () => {
+  it("truncates over-long headlines at a word boundary instead of rejecting", () => {
     const bad = headlines(15);
-    bad[0] = "x".repeat(31);
-    expect(() => validateAdPlanUrlDraft(validDraft({ headlines: bad }))).toThrow(
-      AiError
+    bad[0] = "Max and Lily Twin Over Twin Bunk Bed"; // 35 chars
+    const draft = validateAdPlanUrlDraft(validDraft({ headlines: bad }));
+    expect(draft.headlines[0].length).toBeLessThanOrEqual(30);
+    expect(draft.headlines[0]).toBe("Max and Lily Twin Over Twin");
+    // 无空格长词硬截
+    const hard = headlines(15);
+    hard[0] = "x".repeat(31);
+    const draft2 = validateAdPlanUrlDraft(validDraft({ headlines: hard }));
+    expect(draft2.headlines[0]).toBe("x".repeat(30));
+  });
+
+  it("truncates over-long descriptions instead of rejecting", () => {
+    const long = `Solid pine bunk bed with a timeless design that fits any kids room and lasts for years.`;
+    const draft = validateAdPlanUrlDraft(
+      validDraft({ descriptions: [long, "d2", "d3", "d4"] })
     );
+    expect(draft.descriptions[0].length).toBeLessThanOrEqual(90);
   });
 
   it("rejects unknown match type", () => {

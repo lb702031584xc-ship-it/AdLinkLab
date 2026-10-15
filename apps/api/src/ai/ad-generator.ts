@@ -276,6 +276,20 @@ throw new AiError(`LLM returned an unexpected response shape (${field})`);
 return arr;
 }
 
+/**
+ * RSA 文案超长时截断而非扔掉整单：LLM 数不准字符数，重试一次也常超，
+ * 但 Google Ads 本来就要求标题 ≤30 / 描述 ≤90，截断后计划直接可用，
+ * 用户还能在预览里改。按词边界截断（不断词）；无空格的长词硬截。
+ */
+export function truncateToLimit(text: string, max: number): string {
+  const t = text.trim();
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max);
+  const lastSpace = cut.lastIndexOf(" ");
+  if (lastSpace > 0) return cut.slice(0, lastSpace).trim();
+  return cut.trim();
+}
+
 const MATCH_TYPES = ["EXACT", "PHRASE", "BROAD"] as const;
 
 /**
@@ -404,22 +418,12 @@ o.suggestedNegatives,
 100,
 "suggestedNegatives"
 );
-const headlines = normStrArray(o.headlines, 15, 15, "headlines");
-for (const [i, h] of headlines.entries()) {
-if (h.length > 30) {
-throw new AiError(
-`LLM returned an unexpected response shape (headlines[${i}] exceeds 30 chars)`
+const headlines = normStrArray(o.headlines, 15, 15, "headlines").map((h) =>
+  truncateToLimit(h, 30)
 );
-}
-}
-const descriptions = normStrArray(o.descriptions, 4, 4, "descriptions");
-for (const [i, d] of descriptions.entries()) {
-if (d.length > 90) {
-throw new AiError(
-`LLM returned an unexpected response shape (descriptions[${i}] exceeds 90 chars)`
+const descriptions = normStrArray(o.descriptions, 4, 4, "descriptions").map((d) =>
+  truncateToLimit(d, 90)
 );
-}
-}
 const path1 =
 o.path1 === null || o.path1 === undefined
 ? null
