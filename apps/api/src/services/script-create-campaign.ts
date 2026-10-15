@@ -255,9 +255,11 @@ function createCampaign_(c, budgetRn) {
     campaignBudget: budgetRn,
     status: "PAUSED",
     advertisingChannelType: "SEARCH",
-    // REQUIRED by the Google Ads API (EU political-ad transparency).
-    // AdLinkLab plans are product/affiliate ads, never EU political ads.
-    containsEuPoliticalAdvertising: false,
+    // REQUIRED by the Google Ads API (EU political-ad transparency). NOTE:
+    // this is an ENUM, not a boolean — false is rejected with
+    // "Invalid enum value". AdLinkLab plans are product/affiliate ads,
+    // never EU political ads.
+    containsEuPoliticalAdvertising: "DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING",
     networkSettings: {
       targetGoogleSearch: true,
       targetSearchNetwork: true,

@@ -111,8 +111,11 @@ describe("buildCreateCampaignScript", () => {
     expect(src).toContain("campaignBudgetOperation");
     expect(src).toContain("campaignOperation");
     // containsEuPoliticalAdvertising is REQUIRED by the Google Ads API on
-    // campaign create — missing it rejects the whole operation.
-    expect(src).toContain("containsEuPoliticalAdvertising: false");
+    // campaign create — and it is an ENUM, not a boolean (false is
+    // rejected with "Invalid enum value").
+    expect(src).toContain(
+      'containsEuPoliticalAdvertising: "DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING"'
+    );
     expect(src).toContain("adGroupOperation");
     expect(src).toContain("adGroupCriterionOperation");
     expect(src).toContain("adGroupAdOperation");
