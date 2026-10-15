@@ -7,7 +7,8 @@ COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* .npmrc ./
 COPY packages ./packages
 COPY apps/web ./apps/web
 COPY tsconfig.base.json ./
-RUN pnpm install --frozen-lockfile=false
+# pnpm store 缓存挂载：依赖层缓存失效时复用已下载的包，不用全部重新下载
+RUN --mount=type=cache,id=pnpm-store-web,target=/root/.local/share/pnpm/store pnpm install --frozen-lockfile=false
 
 FROM deps AS build
 WORKDIR /app

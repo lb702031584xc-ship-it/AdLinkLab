@@ -10,7 +10,9 @@ COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* .npmrc ./
 COPY packages ./packages
 COPY apps/api ./apps/api
 COPY tsconfig.base.json ./
-RUN pnpm install --frozen-lockfile=false
+# pnpm store 缓存挂载：依赖层缓存失效时复用已下载的包，不用全部重新下载
+# （HK 服务器到镜像源极慢时，无缓存的 pnpm install 能卡 5000 秒+）
+RUN --mount=type=cache,id=pnpm-store-api,target=/root/.local/share/pnpm/store pnpm install --frozen-lockfile=false
 
 FROM deps AS build
 WORKDIR /app
