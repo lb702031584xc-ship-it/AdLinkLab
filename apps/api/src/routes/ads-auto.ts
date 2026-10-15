@@ -253,7 +253,10 @@ export async function registerAdsAutoRoutes(
         );
       } catch (e) {
         if (e instanceof AiError) throw e;
-        throw new AiError("LLM request failed");
+        // 不要吞掉真实原因：裸 "LLM request failed" 没法定位（网络/超时/解析/配置）
+        throw new AiError(
+          `LLM request failed: ${e instanceof Error ? e.message : "unknown error"}`
+        );
       }
       // 用户自带关键词：覆盖 AI 生成的词（品牌冲突过滤仍在 finalize 里做）
       if (userKeywords.length > 0) {
