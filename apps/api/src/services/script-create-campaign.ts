@@ -255,6 +255,9 @@ function createCampaign_(c, budgetRn) {
     campaignBudget: budgetRn,
     status: "PAUSED",
     advertisingChannelType: "SEARCH",
+    // REQUIRED by the Google Ads API (EU political-ad transparency).
+    // AdLinkLab plans are product/affiliate ads, never EU political ads.
+    containsEuPoliticalAdvertising: false,
     networkSettings: {
       targetGoogleSearch: true,
       targetSearchNetwork: true,

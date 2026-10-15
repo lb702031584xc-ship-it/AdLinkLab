@@ -110,6 +110,9 @@ describe("buildCreateCampaignScript", () => {
     // Budget first, then campaign, then ad group / criteria / RSA.
     expect(src).toContain("campaignBudgetOperation");
     expect(src).toContain("campaignOperation");
+    // containsEuPoliticalAdvertising is REQUIRED by the Google Ads API on
+    // campaign create — missing it rejects the whole operation.
+    expect(src).toContain("containsEuPoliticalAdvertising: false");
     expect(src).toContain("adGroupOperation");
     expect(src).toContain("adGroupCriterionOperation");
     expect(src).toContain("adGroupAdOperation");
