@@ -12,7 +12,9 @@
  *    不设任何离谱默认值。
  * 3. 新建 campaign / ad group 一律 PAUSED，由人工审核后开启。
  * 4. 绝不调用 remove()/pause()/setStatus(ENABLED) 等变更已有实体的 API，
- *    不触碰账户级设置。
+ *    不触碰账户级设置。唯一例外：与计划同名的预算若已存在且
+ *    没有任何系列在使用它（早前失败运行留下的孤儿预算），则重用它
+ *    并把金额同步为计划值；正被其他系列使用的预算绝不动，另建唯一名预算。
  *
  * 实现注意：AdsApp 没有 newCampaignBuilder（调用会报
  * `AdsApp.newCampaignBuilder is not a function`）。创建统一走
@@ -237,9 +239,61 @@ function campaignExists_(name) {
   return it.hasNext();
 }
 
+function findBudget_(budgetName) {
+  var it = AdsApp.budgets()
+    .withCondition('campaign_budget.name = "' + escapeCondition_(budgetName) + '"')
+    .get();
+  return it.hasNext() ? it.next() : null;
+}
+
 function createBudget_(campaignName, amount) {
+  var budgetName = campaignName + " budget";
+  var existing = findBudget_(budgetName);
+  if (existing) {
+    var inUse = true;
+    try {
+      inUse = existing.campaigns().get().hasNext();
+    } catch (e) {
+      inUse = true; // fail safe: treat as in use
+    }
+    if (!inUse) {
+      // Orphaned leftover from an earlier failed run (no campaign uses it):
+      // reuse it and sync its amount to the plan.
+      var prevAmount = 0;
+      try {
+        prevAmount = existing.getAmount();
+      } catch (e2) {
+        prevAmount = 0;
+      }
+      if (Math.abs(prevAmount - Number(amount)) > 0.005) {
+        try {
+          existing.setAmount(Number(amount));
+          Logger.log(
+            'Reusing orphaned budget "' + budgetName + '": amount updated from ' +
+            prevAmount + " to " + amount + " per plan."
+          );
+        } catch (e3) {
+          Logger.log(
+            'Reusing orphaned budget "' + budgetName + '" but amount update failed (' +
+            e3 + "); using existing amount " + prevAmount + "."
+          );
+        }
+      } else {
+        Logger.log('Reusing existing budget "' + budgetName + '" (amount ' + prevAmount + ").");
+      }
+      return existing.getResourceName();
+    }
+    // Budget name is taken by a budget another campaign uses — never touch
+    // it; fall back to a unique name for this plan.
+    budgetName =
+      budgetName + " [" + String(ADLINKLAB_CREATE_CAMPAIGN.plan.planId).slice(0, 8) + "]";
+    Logger.log(
+      'Budget name "' + campaignName + ' budget" is in use by another campaign; ' +
+      'creating "' + budgetName + '" instead.'
+    );
+  }
   var rn = mutate_({ campaignBudgetOperation: { create: {
-    name: campaignName + " budget",
+    name: budgetName,
     amountMicros: micros_(amount),
     deliveryMethod: "STANDARD"
   } } });

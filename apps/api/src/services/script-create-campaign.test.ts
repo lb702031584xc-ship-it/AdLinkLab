@@ -122,7 +122,17 @@ describe("buildCreateCampaignScript", () => {
     expect(src).toContain("responsiveSearchAd");
   });
 
-  it("surfaces real Google errors via getErrorMessages (no silent failures)", () => {
+  it("reuses an orphaned same-name budget instead of failing on re-run", () => {
+    const src = buildCreateCampaignScript(samplePlan());
+    // Earlier runs really created the budget, so a re-run must not fail
+    // with "A campaign budget with this name already exists".
+    expect(src).toContain("AdsApp.budgets()");
+    expect(src).toContain("campaign_budget.name");
+    expect(src).toContain("Reusing orphaned budget");
+    expect(src).toContain("setAmount");
+    // A budget another campaign uses is never touched — fallback name.
+    expect(src).toContain("is in use by another campaign");
+  });
     const src = buildCreateCampaignScript(samplePlan());
     // mutate() returns a failed MutateResult instead of throwing — the
     // script must read getErrorMessages() or the log hides the real cause.
