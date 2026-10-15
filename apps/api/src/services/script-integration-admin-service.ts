@@ -212,6 +212,11 @@ export class ScriptIntegrationAdminService {
     return toAdminIntegrationDto(integration, targets.total);
   }
 
+  async delete(tenantId: string, integrationId: string) {
+    const integration = await this.lifecycle.delete(tenantId, integrationId);
+    return toAdminIntegrationDto(integration, 0);
+  }
+
   async listTargets(
     tenantId: string,
     integrationId: string,

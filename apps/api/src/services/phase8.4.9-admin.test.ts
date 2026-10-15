@@ -287,6 +287,56 @@ describe("Phase 8.4.9 Script Integration Admin API", () => {
       ).toBe(200);
     });
 
+    it("6b. delete → 401 on config; integration gone from list", async () => {
+      const h = createHarness();
+      const app = await buildApp(h.services);
+      apps.push(app);
+      const created = (
+        await app.inject({
+          method: "POST",
+          url: ADMIN,
+          headers: authHeaders(KEY_A),
+          payload: { name: "Del", googleAccountId: TenantA.account },
+        })
+      ).json() as { integrationId: string; token: string };
+      const del = await app.inject({
+        method: "DELETE",
+        url: `${ADMIN}/${created.integrationId}`,
+        headers: authHeaders(KEY_A),
+      });
+      expect(del.statusCode).toBe(200);
+      // 已删除集成的令牌鉴权失败 → 401（脚本无法再拉取配置）
+      expect(
+        (
+          await app.inject({
+            method: "GET",
+            url: "/api/v1/script/config",
+            headers: { authorization: `Bearer ${created.token}` },
+          })
+        ).statusCode
+      ).toBe(401);
+      const list = (
+        await app.inject({
+          method: "GET",
+          url: ADMIN,
+          headers: authHeaders(KEY_A),
+        })
+      ).json() as { items: Array<{ integrationId: string }> };
+      expect(
+        list.items.some((i) => i.integrationId === created.integrationId)
+      ).toBe(false);
+      // 幂等：重复删除不报错
+      expect(
+        (
+          await app.inject({
+            method: "DELETE",
+            url: `${ADMIN}/${created.integrationId}`,
+            headers: authHeaders(KEY_A),
+          })
+        ).statusCode
+      ).toBe(200);
+    });
+
     it("7. enable REVOKED rejected", async () => {
       const h = createHarness();
       const app = await buildApp(h.services);

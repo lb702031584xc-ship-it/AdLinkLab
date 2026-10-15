@@ -8,6 +8,7 @@ import type { AdminIntegration, AdminTarget } from "@/lib/api/admin-script";
 import {
   attachTargetAction,
   detachTargetAction,
+  deleteIntegrationAction,
   disableIntegrationAction,
   enableIntegrationAction,
   generateScriptAction,
@@ -148,6 +149,21 @@ export function IntegrationDetailClient(props: {
             }
           >
             {t.integrations.detail.revoke}
+          </button>
+          <button
+            type="button"
+            disabled={pending}
+            className="rounded-lg border border-red-300 bg-red-50 px-3 py-1.5 text-sm text-red-800"
+            onClick={() =>
+              run(async () => {
+                if (!window.confirm(t.integrations.detail.deleteConfirm)) return;
+                const r = await deleteIntegrationAction(id);
+                if (!r.ok) setError(r.error);
+                else window.location.href = "/script-integrations";
+              })
+            }
+          >
+            {t.integrations.detail.delete}
           </button>
         </div>
         {onceToken ? (

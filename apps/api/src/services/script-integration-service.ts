@@ -226,4 +226,36 @@ export class ScriptIntegrationService {
     });
     return integration;
   }
+
+  /**
+   * Soft-delete: sets deletedAt. Targets become unreachable (requireIntegration
+   * rejects deleted integrations) and the Google Ads script can no longer fetch
+   * config. Idempotent: deleting an already-deleted integration is a no-op.
+   */
+  async delete(
+    tenantId: string,
+    integrationId: string
+  ): Promise<GoogleAdsScriptIntegration> {
+    const existing = await this.scriptIntegrations.findByIdForTenant(
+      tenantId,
+      integrationId
+    );
+    if (!existing) {
+      throw new NotFoundError("GoogleAdsScriptIntegration", integrationId);
+    }
+    if (existing.deletedAt) {
+      return existing;
+    }
+    const integration = await this.scriptIntegrations.update(existing.id, {
+      deletedAt: new Date(),
+    });
+    await this.audit?.record({
+      action: AuditActions.SCRIPT_INTEGRATION_DELETED,
+      tenantId: integration.tenantId,
+      entityType: "GoogleAdsScriptIntegration",
+      entityId: integration.id,
+      after: { deletedAt: integration.deletedAt },
+    });
+    return integration;
+  }
 }

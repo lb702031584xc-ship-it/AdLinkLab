@@ -35,6 +35,9 @@ export const zh = {
     disable: "禁用",
     enable: "启用",
     revoke: "撤销",
+    delete: "删除",
+    deleteConfirm:
+      "确定删除这个集成？删除后 Google Ads 里的脚本将无法再拉取配置，请同时去 Google Ads 脚本页删除该脚本。",
     newTokenTitle: "新令牌（仅显示一次）",
     copyToken: "复制令牌",
     targets: "目标",
@@ -112,6 +115,9 @@ export const en: typeof zh = {
     disable: "Disable",
     enable: "Enable",
     revoke: "Revoke",
+    delete: "Delete",
+    deleteConfirm:
+      "Delete this integration? The Google Ads script will no longer be able to fetch config — also remove that script in Google Ads Scripts.",
     newTokenTitle: "New token (shown once)",
     copyToken: "Copy Token",
     targets: "Targets",

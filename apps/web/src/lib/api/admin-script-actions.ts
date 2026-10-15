@@ -93,6 +93,18 @@ export async function enableIntegrationAction(
   }
 }
 
+export async function deleteIntegrationAction(
+  integrationId: string
+): Promise<AdminActionResult<null>> {
+  try {
+    await adminScriptApi.deleteIntegration(integrationId);
+    revalidatePath("/script-integrations");
+    return { ok: true, data: null };
+  } catch (error) {
+    return { ok: false, error: mapAdminErrorMessage(error, await getLang()) };
+  }
+}
+
 export async function attachTargetAction(input: {
   integrationId: string;
   entityId: string;

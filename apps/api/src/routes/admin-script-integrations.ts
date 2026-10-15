@@ -89,6 +89,16 @@ export async function registerAdminScriptIntegrationRoutes(
     }
   );
 
+  app.delete<{
+    Params: { integrationId: string };
+  }>(
+    "/api/v1/admin/script-integrations/:integrationId",
+    async (request) => {
+      const tenantId = tenantOf(request);
+      return admin.delete(tenantId, request.params.integrationId);
+    }
+  );
+
   app.get<{
     Params: { integrationId: string };
     Querystring: { page?: string; pageSize?: string };

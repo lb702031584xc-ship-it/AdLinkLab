@@ -129,6 +129,12 @@ export const adminScriptApi = {
       { method: "POST", body: "{}" }
     );
   },
+  deleteIntegration(id: string) {
+    return adminFetch<AdminIntegration>(
+      `/api/v1/admin/script-integrations/${id}`,
+      { method: "DELETE" }
+    );
+  },
   listTargets(id: string) {
     return adminFetch<{ items: AdminTarget[] }>(
       `/api/v1/admin/script-integrations/${id}/targets`
