@@ -111,7 +111,16 @@ async function postChatCompletions(
   } catch {
     throw new AiError("LLM returned invalid JSON");
   }
-  return JSON.parse(extractJson(extractContent(envelope))) as unknown;
+  const content = extractContent(envelope);
+  const jsonText = extractJson(content);
+  try {
+    return JSON.parse(jsonText) as unknown;
+  } catch {
+    // 模型返回了非 JSON 内容（空串/截断/纯文本拒绝）：原生 SyntaxError 不是
+    // AiError，会被调用方吞成裸 "LLM request failed"，这里转成带内容片段的 AiError
+    const snippet = jsonText.slice(0, 200).replace(/\s+/g, " ");
+    throw new AiError(`LLM returned invalid JSON${snippet ? `: ${snippet}` : ""}`);
+  }
 }
 
 /**
