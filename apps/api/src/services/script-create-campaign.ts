@@ -169,17 +169,34 @@ function main() {
   );
 }
 
-// Single mutate wrapper: AdsApp.mutate throws on API errors; a missing /
-// empty resource name is treated as failure. Every failure is logged by
-// the caller — no silent no-ops.
+// Single mutate wrapper: a failed operation does NOT throw — it returns a
+// MutateResult with isSuccessful() === false and the real Google error in
+// getErrorMessages(). Always surface those messages; never fail silently.
 function mutate_(operation) {
   try {
     var result = AdsApp.mutate(operation);
     if (!result) {
+      Logger.log("mutate failed: empty result");
+      return null;
+    }
+    if (typeof result.isSuccessful === "function" && !result.isSuccessful()) {
+      var errs = [];
+      try {
+        errs = result.getErrorMessages() || [];
+      } catch (e2) {
+        errs = [];
+      }
+      Logger.log(
+        "mutate failed: " + (errs.length ? errs.join("; ") : "unknown error")
+      );
       return null;
     }
     var rn = result.getResourceName();
-    return rn ? String(rn) : null;
+    if (!rn) {
+      Logger.log("mutate failed: empty resource name");
+      return null;
+    }
+    return String(rn);
   } catch (e) {
     Logger.log("mutate failed: " + e);
     return null;

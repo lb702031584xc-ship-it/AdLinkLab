@@ -116,6 +116,15 @@ describe("buildCreateCampaignScript", () => {
     expect(src).toContain("responsiveSearchAd");
   });
 
+  it("surfaces real Google errors via getErrorMessages (no silent failures)", () => {
+    const src = buildCreateCampaignScript(samplePlan());
+    // mutate() returns a failed MutateResult instead of throwing — the
+    // script must read getErrorMessages() or the log hides the real cause.
+    expect(src).toContain("isSuccessful()");
+    expect(src).toContain("getErrorMessages()");
+    expect(src).toContain("mutate failed: ");
+  });
+
   it("creates keywords with match-type enum and negatives", () => {
     const src = buildCreateCampaignScript(samplePlan());
     expect(src).toContain("matchType");
