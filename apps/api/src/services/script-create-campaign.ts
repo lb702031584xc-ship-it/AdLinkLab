@@ -14,12 +14,17 @@
  * 4. 绝不调用 remove()/pause()/setStatus(ENABLED) 等变更已有实体的 API，
  *    不触碰账户级设置。
  *
+ * 实现注意：AdsApp 没有 newCampaignBuilder（调用会报
+ * `AdsApp.newCampaignBuilder is not a function`）。创建统一走
+ * AdsApp.mutate()（Google Ads API REST）：先建 CampaignBudget，
+ * 再建 Campaign，再建 AdGroup / 关键词 / 否词 / RSA。
+ *
  * Target runtime: Google Ads Scripts (AdsApp), NOT Node.js — ES5 only.
  */
 import { jsStringLiteral } from "./script-generator-source.js";
 import type { AdPlan } from "../ai/ad-generator.js";
 
-export const CREATE_CAMPAIGN_SCRIPT_VERSION = "1.0.0";
+export const CREATE_CAMPAIGN_SCRIPT_VERSION = "1.1.0";
 
 /** ISO country code → Google Ads geo target location ID (criteria ID). */
 export const COUNTRY_LOCATION_IDS: Record<string, number> = {
@@ -140,15 +145,20 @@ function main() {
     );
     return;
   }
-  var campaign = createCampaign_(plan.campaign);
-  if (!campaign) {
+  var budgetRn = createBudget_(campaignName, plan.campaign.dailyBudget.amount);
+  if (!budgetRn) {
+    Logger.log("ABORT: campaign budget creation failed; nothing else was attempted.");
+    return;
+  }
+  var campaignRn = createCampaign_(plan.campaign, budgetRn);
+  if (!campaignRn) {
     Logger.log("ABORT: campaign creation failed; nothing else was attempted.");
     return;
   }
-  applyGeoTargets_(campaign, plan.campaign.geoTargets || []);
+  applyGeoTargets_(campaignRn, plan.campaign.geoTargets || []);
   var createdGroups = 0;
   for (var i = 0; i < plan.adGroups.length; i++) {
-    if (createAdGroup_(campaign, plan.adGroups[i])) {
+    if (createAdGroup_(campaignRn, plan.adGroups[i])) {
       createdGroups++;
     }
   }
@@ -157,6 +167,28 @@ function main() {
     createdGroups + "/" + plan.adGroups.length + " ad groups. " +
     "Review and enable manually."
   );
+}
+
+// Single mutate wrapper: AdsApp.mutate throws on API errors; a missing /
+// empty resource name is treated as failure. Every failure is logged by
+// the caller — no silent no-ops.
+function mutate_(operation) {
+  try {
+    var result = AdsApp.mutate(operation);
+    if (!result) {
+      return null;
+    }
+    var rn = result.getResourceName();
+    return rn ? String(rn) : null;
+  } catch (e) {
+    Logger.log("mutate failed: " + e);
+    return null;
+  }
+}
+
+// Google Ads API money is integer micros as a string: $42.50 -> "42500000".
+function micros_(amount) {
+  return String(Math.round(Number(amount) * 1000000));
 }
 
 function validatePlan_(plan) {
@@ -183,30 +215,49 @@ function escapeCondition_(value) {
 
 function campaignExists_(name) {
   var it = AdsApp.campaigns()
-    .withCondition('Name = "' + escapeCondition_(name) + '"')
+    .withCondition('campaign.name = "' + escapeCondition_(name) + '"')
     .get();
   return it.hasNext();
 }
 
-function createCampaign_(c) {
-  // Budget comes EXACTLY from the plan (validated positive above).
-  var builder = AdsApp.newCampaignBuilder()
-    .withName(c.name)
-    .withBudget(c.dailyBudget.amount)
-    .withStatus("PAUSED");
-  var strategy = c.bidding && c.bidding.strategy === "MAXIMIZE_CLICKS"
-    ? "MAXIMIZE_CLICKS"
-    : "MANUAL_CPC";
-  builder.withBiddingStrategy(strategy);
-  var op = builder.build();
-  if (!op.isSuccessful()) {
-    Logger.log("campaign build failed: " + describeErrors_(op.getErrors()));
-    return null;
+function createBudget_(campaignName, amount) {
+  var rn = mutate_({ campaignBudgetOperation: { create: {
+    name: campaignName + " budget",
+    amountMicros: micros_(amount),
+    deliveryMethod: "STANDARD"
+  } } });
+  if (!rn) {
+    Logger.log('campaign budget creation failed for "' + campaignName + '"');
   }
-  return op.getResult();
+  return rn;
 }
 
-function applyGeoTargets_(campaign, geoTargets) {
+function createCampaign_(c, budgetRn) {
+  var create = {
+    name: c.name,
+    campaignBudget: budgetRn,
+    status: "PAUSED",
+    advertisingChannelType: "SEARCH",
+    networkSettings: {
+      targetGoogleSearch: true,
+      targetSearchNetwork: true,
+      targetContentNetwork: false,
+      targetPartnerSearchNetwork: false
+    }
+  };
+  if (c.bidding && c.bidding.strategy === "MAXIMIZE_CLICKS") {
+    create.maximizeClicks = {};
+  } else {
+    create.manualCpc = {};
+  }
+  var rn = mutate_({ campaignOperation: { create: create } });
+  if (!rn) {
+    Logger.log('campaign creation failed for "' + c.name + '"');
+  }
+  return rn;
+}
+
+function applyGeoTargets_(campaignRn, geoTargets) {
   var ids = ADLINKLAB_CREATE_CAMPAIGN.countryLocationIds;
   for (var i = 0; i < geoTargets.length; i++) {
     var code = String(geoTargets[i]).toUpperCase();
@@ -215,85 +266,89 @@ function applyGeoTargets_(campaign, geoTargets) {
       Logger.log("SKIP geo target " + code + ": no location ID mapping; configure manually.");
       continue;
     }
-    try {
-      campaign.addLocation(locationId);
-    } catch (e) {
-      Logger.log("geo target failed " + code + ": " + e);
+    var rn = mutate_({ campaignCriterionOperation: { create: {
+      campaign: campaignRn,
+      location: { geoTargetConstant: "geoTargetConstants/" + locationId }
+    } } });
+    if (!rn) {
+      Logger.log("geo target failed " + code);
     }
   }
 }
 
-function createAdGroup_(campaign, block) {
+function createAdGroup_(campaignRn, block) {
   var g = block.group;
   var rsa = block.rsa;
-  var builder = campaign.newAdGroupBuilder()
-    .withName(g.name)
-    .withStatus("PAUSED");
+  var create = {
+    campaign: campaignRn,
+    name: g.name,
+    status: "PAUSED"
+  };
   if (g.maxCpc && typeof g.maxCpc.amount === "number" && g.maxCpc.amount > 0) {
-    builder.withCpc(g.maxCpc.amount);
+    create.cpcBidMicros = micros_(g.maxCpc.amount);
   }
-  var op = builder.build();
-  if (!op.isSuccessful()) {
-    Logger.log('ad group "' + g.name + '" build failed: ' + describeErrors_(op.getErrors()));
+  var adGroupRn = mutate_({ adGroupOperation: { create: create } });
+  if (!adGroupRn) {
+    Logger.log('ad group "' + g.name + '" creation failed');
     return false;
   }
-  var adGroup = op.getResult();
 
-  var i, kop;
+  var i;
   for (i = 0; i < (g.keywords || []).length; i++) {
     var kw = g.keywords[i];
-    kop = adGroup.newKeywordBuilder().withText(toKeywordText_(kw)).build();
-    if (!kop.isSuccessful()) {
-      Logger.log("keyword failed [" + kw.text + "]: " + describeErrors_(kop.getErrors()));
+    var kop = { adGroupCriterionOperation: { create: {
+      adGroup: adGroupRn,
+      keyword: { text: String(kw.text), matchType: kw.matchType || "BROAD" },
+      status: "ENABLED"
+    } } };
+    if (!mutate_(kop)) {
+      Logger.log("keyword failed [" + kw.text + "]");
     }
   }
   for (i = 0; i < (g.negativeKeywords || []).length; i++) {
     var neg = g.negativeKeywords[i];
-    var nop = adGroup.newNegativeKeywordBuilder().withText(toKeywordText_(neg)).build();
-    if (!nop.isSuccessful()) {
-      Logger.log("negative keyword failed [" + neg.text + "]: " + describeErrors_(nop.getErrors()));
+    var nop = { adGroupCriterionOperation: { create: {
+      adGroup: adGroupRn,
+      negative: true,
+      keyword: { text: String(neg.text), matchType: neg.matchType || "PHRASE" },
+      status: "ENABLED"
+    } } };
+    if (!mutate_(nop)) {
+      Logger.log("negative keyword failed [" + neg.text + "]");
     }
   }
 
-  var adBuilder = adGroup.newAd().responsiveSearchAdBuilder()
-    .withFinalUrl(rsa.finalUrl);
+  var headlines = [];
   for (i = 0; i < rsa.headlines.length; i++) {
-    adBuilder.addHeadline(String(rsa.headlines[i]));
+    headlines.push({ text: String(rsa.headlines[i]) });
   }
+  var descriptions = [];
   for (i = 0; i < rsa.descriptions.length; i++) {
-    adBuilder.addDescription(String(rsa.descriptions[i]));
+    descriptions.push({ text: String(rsa.descriptions[i]) });
   }
+  var rsaBody = {
+    headlines: headlines,
+    descriptions: descriptions
+  };
   if (rsa.path1) {
-    adBuilder.withPath1(String(rsa.path1));
+    rsaBody.path1 = String(rsa.path1);
   }
   if (rsa.path2) {
-    adBuilder.withPath2(String(rsa.path2));
+    rsaBody.path2 = String(rsa.path2);
   }
-  var aop = adBuilder.build();
-  if (!aop.isSuccessful()) {
-    Logger.log('RSA build failed in "' + g.name + '": ' + describeErrors_(aop.getErrors()));
+  var aop = { adGroupAdOperation: { create: {
+    adGroup: adGroupRn,
+    status: "PAUSED",
+    ad: {
+      responsiveSearchAd: rsaBody,
+      finalUrls: [String(rsa.finalUrl)]
+    }
+  } } };
+  if (!mutate_(aop)) {
+    Logger.log('RSA creation failed in "' + g.name + '"');
     return false;
   }
   return true;
-}
-
-function toKeywordText_(kw) {
-  var text = String(kw.text || "").replace(/[\\[\\]"]/g, "").trim();
-  if (kw.matchType === "EXACT") {
-    return "[" + text + "]";
-  }
-  if (kw.matchType === "PHRASE") {
-    return '"' + text + '"';
-  }
-  return text;
-}
-
-function describeErrors_(errors) {
-  var out = [];
-  for (var i = 0; i < errors.length; i++) {
-    out.push(String(errors[i]));
-  }
-  return out.join("; ");
 }
 `;
 }

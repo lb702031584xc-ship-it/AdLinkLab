@@ -76,16 +76,19 @@ describe("buildCreateCampaignScript", () => {
     const src = buildCreateCampaignScript(samplePlan());
     expect(src).toContain("Auto Test Campaign");
     expect(src).toContain("Auto Test Group");
-    // Budget flows from the plan; the script aborts when it is not positive.
-    expect(src).toContain("withBudget(c.dailyBudget.amount)");
+    // Budget flows from the plan into the campaign-budget mutate; the
+    // script aborts when it is not positive. No hardcoded budget anywhere.
+    expect(src).toContain("campaignBudgetOperation");
+    expect(src).toContain("dailyBudget.amount");
     expect(src).toContain("must be a positive number");
     expect(src).not.toContain("withBudget(50)");
     expect(src).not.toContain("withBudget(100)");
+    expect(src).not.toContain("amountMicros: \"50000000\"");
   });
 
   it("creates everything PAUSED and never touches existing entities", () => {
     const src = buildCreateCampaignScript(samplePlan());
-    expect(src).toContain('withStatus("PAUSED")');
+    expect(src).toContain('status: "PAUSED"');
     // Existence check by exact name → skip whole run (idempotent).
     expect(src).toContain("campaignExists_");
     expect(src).toContain("already exists");
@@ -97,13 +100,28 @@ describe("buildCreateCampaignScript", () => {
     expect(src).not.toContain("enable()");
   });
 
-  it("creates keywords with match-type syntax and negatives", () => {
+  it("creates via AdsApp.mutate — no newCampaignBuilder (does not exist)", () => {
     const src = buildCreateCampaignScript(samplePlan());
-    expect(src).toContain("newKeywordBuilder");
-    expect(src).toContain("newNegativeKeywordBuilder");
-    expect(src).toContain("responsiveSearchAdBuilder");
-    expect(src).toContain("addHeadline");
-    expect(src).toContain("addDescription");
+    expect(src).toContain("AdsApp.mutate");
+    expect(src).not.toContain("newCampaignBuilder");
+    expect(src).not.toContain("newKeywordBuilder");
+    expect(src).not.toContain("newNegativeKeywordBuilder");
+    expect(src).not.toContain("responsiveSearchAdBuilder");
+    // Budget first, then campaign, then ad group / criteria / RSA.
+    expect(src).toContain("campaignBudgetOperation");
+    expect(src).toContain("campaignOperation");
+    expect(src).toContain("adGroupOperation");
+    expect(src).toContain("adGroupCriterionOperation");
+    expect(src).toContain("adGroupAdOperation");
+    expect(src).toContain("responsiveSearchAd");
+  });
+
+  it("creates keywords with match-type enum and negatives", () => {
+    const src = buildCreateCampaignScript(samplePlan());
+    expect(src).toContain("matchType");
+    expect(src).toContain("negative: true");
+    expect(src).toContain("headlines");
+    expect(src).toContain("descriptions");
   });
 
   it("passes the static security audit", () => {
