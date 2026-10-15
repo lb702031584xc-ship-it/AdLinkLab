@@ -982,6 +982,98 @@ describe("Phase 8.4.9 Script Integration Admin API", () => {
     });
   });
 
+  describe("Manual ad registration", () => {
+    const manualPayload = {
+      googleCampaignId: "111111",
+      campaignName: "Manual Campaign",
+      googleAdGroupId: "222222",
+      adGroupName: "Manual AdGroup",
+      googleAdId: "333333",
+      adName: "Manual Ad",
+    };
+    async function createIntegration(app: Awaited<ReturnType<typeof buildApp>>) {
+      const created = (
+        await app.inject({
+          method: "POST",
+          url: ADMIN,
+          headers: authHeaders(KEY_A),
+          payload: { name: "Man", googleAccountId: TenantA.account },
+        })
+      ).json() as { integrationId: string };
+      return created.integrationId;
+    }
+
+    it("35. register manual ad → attach works end to end", async () => {
+      const h = createHarness();
+      const app = await buildApp(h.services);
+      apps.push(app);
+      const integrationId = await createIntegration(app);
+      const reg = await app.inject({
+        method: "POST",
+        url: `${ADMIN}/${integrationId}/manual-ads`,
+        headers: authHeaders(KEY_A),
+        payload: manualPayload,
+      });
+      expect(reg.statusCode).toBe(200);
+      const ad = reg.json() as { id: string; googleAdId: string; name: string };
+      expect(ad.googleAdId).toBe("333333");
+      expect(ad.name).toBe("Manual Ad");
+      const att = await app.inject({
+        method: "POST",
+        url: `${ADMIN}/${integrationId}/targets`,
+        headers: authHeaders(KEY_A),
+        payload: { entityType: "AD", entityId: ad.id },
+      });
+      expect(att.statusCode).toBe(200);
+      const targets = (
+        await app.inject({
+          method: "GET",
+          url: `${ADMIN}/${integrationId}/targets`,
+          headers: authHeaders(KEY_A),
+        })
+      ).json() as { items: Array<{ googleAdId: string }> };
+      expect(targets.items.map((t) => t.googleAdId)).toContain("333333");
+    });
+
+    it("36. re-register same Google ad id is idempotent + renames", async () => {
+      const h = createHarness();
+      const app = await buildApp(h.services);
+      apps.push(app);
+      const integrationId = await createIntegration(app);
+      const first = (
+        await app.inject({
+          method: "POST",
+          url: `${ADMIN}/${integrationId}/manual-ads`,
+          headers: authHeaders(KEY_A),
+          payload: manualPayload,
+        })
+      ).json() as { id: string };
+      const second = await app.inject({
+        method: "POST",
+        url: `${ADMIN}/${integrationId}/manual-ads`,
+        headers: authHeaders(KEY_A),
+        payload: { ...manualPayload, adName: "Renamed Ad" },
+      });
+      expect(second.statusCode).toBe(200);
+      expect((second.json() as { id: string }).id).toBe(first.id);
+      expect((second.json() as { name: string }).name).toBe("Renamed Ad");
+    });
+
+    it("37. missing required fields → 400", async () => {
+      const h = createHarness();
+      const app = await buildApp(h.services);
+      apps.push(app);
+      const integrationId = await createIntegration(app);
+      const res = await app.inject({
+        method: "POST",
+        url: `${ADMIN}/${integrationId}/manual-ads`,
+        headers: authHeaders(KEY_A),
+        payload: { googleCampaignId: "111", googleAdGroupId: "222" },
+      });
+      expect(res.statusCode).toBe(400);
+    });
+  });
+
   describe("Tenant isolation", () => {
     it("36. Tenant B cannot GET Tenant A integration", async () => {
       const h = createHarness();

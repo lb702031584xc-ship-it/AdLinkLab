@@ -105,6 +105,27 @@ export async function deleteIntegrationAction(
   }
 }
 
+export async function registerManualAdAction(input: {
+  integrationId: string;
+  googleCampaignId: string;
+  campaignName?: string;
+  googleAdGroupId: string;
+  adGroupName?: string;
+  googleAdId: string;
+  adName: string;
+}): Promise<AdminActionResult<{ id: string; name: string; googleAdId: string }>> {
+  try {
+    const data = await adminScriptApi.registerManualAd(
+      input.integrationId,
+      input
+    );
+    revalidateIntegration(input.integrationId);
+    return { ok: true, data };
+  } catch (error) {
+    return { ok: false, error: mapAdminErrorMessage(error, await getLang()) };
+  }
+}
+
 export async function attachTargetAction(input: {
   integrationId: string;
   entityId: string;

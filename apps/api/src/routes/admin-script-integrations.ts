@@ -99,6 +99,37 @@ export async function registerAdminScriptIntegrationRoutes(
     }
   );
 
+  app.post<{
+    Params: { integrationId: string };
+    Body: {
+      googleCampaignId?: string;
+      campaignName?: string;
+      googleAdGroupId?: string;
+      adGroupName?: string;
+      googleAdId?: string;
+      adName?: string;
+      tenantId?: string;
+    };
+  }>(
+    "/api/v1/admin/script-integrations/:integrationId/manual-ads",
+    async (request) => {
+      const body = request.body ?? {};
+      const tenantId = tenantOf(request, body.tenantId);
+      return admin.registerManualAd(
+        tenantId,
+        request.params.integrationId,
+        {
+          googleCampaignId: body.googleCampaignId ?? "",
+          campaignName: body.campaignName,
+          googleAdGroupId: body.googleAdGroupId ?? "",
+          adGroupName: body.adGroupName,
+          googleAdId: body.googleAdId ?? "",
+          adName: body.adName ?? "",
+        }
+      );
+    }
+  );
+
   app.get<{
     Params: { integrationId: string };
     Querystring: { page?: string; pageSize?: string };

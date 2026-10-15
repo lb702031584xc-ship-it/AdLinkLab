@@ -135,6 +135,22 @@ export const adminScriptApi = {
       { method: "DELETE" }
     );
   },
+  registerManualAd(
+    id: string,
+    input: {
+      googleCampaignId: string;
+      campaignName?: string;
+      googleAdGroupId: string;
+      adGroupName?: string;
+      googleAdId: string;
+      adName: string;
+    }
+  ) {
+    return adminFetch<{ id: string; name: string; googleAdId: string; adGroupId: string }>(
+      `/api/v1/admin/script-integrations/${id}/manual-ads`,
+      { method: "POST", body: JSON.stringify(input) }
+    );
+  },
   listTargets(id: string) {
     return adminFetch<{ items: AdminTarget[] }>(
       `/api/v1/admin/script-integrations/${id}/targets`

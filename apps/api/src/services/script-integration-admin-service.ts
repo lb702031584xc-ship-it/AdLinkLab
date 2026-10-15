@@ -15,6 +15,7 @@ import type {
   UrlVersionRepository,
 } from "@adlinklab/domain";
 import {
+  assertSameTenant,
   assertScriptSyncTargetAdOnly,
   AuditActions,
   deriveSyncState,
@@ -215,6 +216,137 @@ export class ScriptIntegrationAdminService {
   async delete(tenantId: string, integrationId: string) {
     const integration = await this.lifecycle.delete(tenantId, integrationId);
     return toAdminIntegrationDto(integration, 0);
+  }
+
+  /**
+   * 手动登记真实 Google 广告（真实 Google Ads API 同步未接通时的过渡办法）。
+   * 用户从 Google Ads 里复制系列 / 广告组 / 广告三级 ID 进来；按 Google ID
+   * 幂等 upsert 整条链（系列 → 广告组 → 广告），登记后即可在目标下拉里
+   * 选中并关联。系列归属集成绑定的 Google 账号——关联时要求账号一致。
+   * 已存在的记录若属于其他租户 / 其他账号 / 其他父级，拒绝复用。
+   */
+  async registerManualAd(
+    tenantId: string,
+    integrationId: string,
+    input: {
+      googleCampaignId: string;
+      campaignName?: string;
+      googleAdGroupId: string;
+      adGroupName?: string;
+      googleAdId: string;
+      adName: string;
+    }
+  ): Promise<{ id: string; name: string; googleAdId: string; adGroupId: string }> {
+    const integration = await this.requireIntegration(tenantId, integrationId);
+    const googleCampaignId = input.googleCampaignId.trim();
+    const googleAdGroupId = input.googleAdGroupId.trim();
+    const googleAdId = input.googleAdId.trim();
+    const adName = input.adName.trim();
+    if (!googleCampaignId || !googleAdGroupId || !googleAdId || !adName) {
+      throw new ValidationError(
+        "googleCampaignId, googleAdGroupId, googleAdId and adName are required"
+      );
+    }
+
+    let campaign = await this.campaigns.findByGoogleCampaignId(googleCampaignId);
+    if (campaign) {
+      assertSameTenant(tenantId, campaign.tenantId, "Campaign");
+      if (campaign.googleAccountId !== integration.googleAccountId) {
+        throw new ValidationError(
+          "Campaign belongs to a different Google account than this Integration"
+        );
+      }
+      if (campaign.deletedAt) {
+        campaign = await this.campaigns.update(campaign.id, {
+          deletedAt: null as unknown as undefined,
+          name: input.campaignName?.trim() || campaign.name,
+          status: "ACTIVE",
+        });
+      } else if (input.campaignName?.trim() && input.campaignName.trim() !== campaign.name) {
+        campaign = await this.campaigns.update(campaign.id, {
+          name: input.campaignName.trim(),
+        });
+      }
+    } else {
+      campaign = await this.campaigns.create({
+        id: randomUUID(),
+        tenantId,
+        googleAccountId: integration.googleAccountId,
+        googleCampaignId,
+        name: input.campaignName?.trim() || googleCampaignId,
+        status: "ACTIVE",
+      });
+    }
+
+    let adGroup = await this.adGroups.findByGoogleAdGroupId(googleAdGroupId);
+    if (adGroup) {
+      assertSameTenant(tenantId, adGroup.tenantId, "AdGroup");
+      if (adGroup.campaignId !== campaign.id) {
+        throw new ValidationError(
+          "AdGroup belongs to a different Campaign"
+        );
+      }
+      if (adGroup.deletedAt) {
+        adGroup = await this.adGroups.update(adGroup.id, {
+          deletedAt: null as unknown as undefined,
+          name: input.adGroupName?.trim() || adGroup.name,
+          status: "ACTIVE",
+        });
+      } else if (input.adGroupName?.trim() && input.adGroupName.trim() !== adGroup.name) {
+        adGroup = await this.adGroups.update(adGroup.id, {
+          name: input.adGroupName.trim(),
+        });
+      }
+    } else {
+      adGroup = await this.adGroups.create({
+        id: randomUUID(),
+        tenantId,
+        campaignId: campaign.id,
+        googleAdGroupId,
+        name: input.adGroupName?.trim() || googleAdGroupId,
+        status: "ACTIVE",
+      });
+    }
+
+    let ad = await this.ads.findByGoogleAdId(googleAdId);
+    if (ad) {
+      assertSameTenant(tenantId, ad.tenantId, "Ad");
+      if (ad.adGroupId !== adGroup.id) {
+        throw new ValidationError("Ad belongs to a different AdGroup");
+      }
+      if (ad.deletedAt) {
+        ad = await this.ads.update(ad.id, {
+          deletedAt: null as unknown as undefined,
+          name: adName,
+          status: "ACTIVE",
+        });
+      } else if (adName !== ad.name) {
+        ad = await this.ads.update(ad.id, { name: adName });
+      }
+    } else {
+      ad = await this.ads.create({
+        id: randomUUID(),
+        tenantId,
+        adGroupId: adGroup.id,
+        googleAdId,
+        name: adName,
+        status: "ACTIVE",
+      });
+    }
+
+    await this.audit?.record({
+      action: AuditActions.SCRIPT_MANUAL_AD_REGISTERED,
+      tenantId,
+      entityType: "Ad",
+      entityId: ad.id,
+      after: {
+        integrationId,
+        googleCampaignId,
+        googleAdGroupId,
+        googleAdId,
+      },
+    });
+    return { id: ad.id, name: ad.name, googleAdId: ad.googleAdId, adGroupId: ad.adGroupId };
   }
 
   async listTargets(

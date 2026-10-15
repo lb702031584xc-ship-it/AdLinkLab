@@ -12,6 +12,7 @@ import {
   disableIntegrationAction,
   enableIntegrationAction,
   generateScriptAction,
+  registerManualAdAction,
   revokeIntegrationAction,
   rotateTokenAction,
 } from "@/lib/api/admin-script-actions";
@@ -34,6 +35,14 @@ export function IntegrationDetailClient(props: {
   } | null>(null);
   const [adId, setAdId] = useState(props.ads[0]?.id ?? "");
   const [copiedScript, setCopiedScript] = useState(false);
+  const [showManualAd, setShowManualAd] = useState(false);
+  const [manualCampaignId, setManualCampaignId] = useState("");
+  const [manualCampaignName, setManualCampaignName] = useState("");
+  const [manualAdGroupId, setManualAdGroupId] = useState("");
+  const [manualAdGroupName, setManualAdGroupName] = useState("");
+  const [manualGoogleAdId, setManualGoogleAdId] = useState("");
+  const [manualAdName, setManualAdName] = useState("");
+  const [manualAdDone, setManualAdDone] = useState<string | null>(null);
   const id = props.integration.integrationId;
 
   function run(fn: () => Promise<void>) {
@@ -215,6 +224,112 @@ export function IntegrationDetailClient(props: {
           >
             {t.integrations.detail.attachAd}
           </button>
+        </div>
+        <div>
+          <button
+            type="button"
+            className="text-sm underline"
+            onClick={() => setShowManualAd((v) => !v)}
+          >
+            {t.integrations.detail.manualAdTitle}
+          </button>
+          <p className="mt-1 text-xs text-ink/55">
+            {t.integrations.detail.manualAdHint}
+          </p>
+          {showManualAd ? (
+            <div className="mt-2 grid gap-2 rounded-xl border border-ink/10 p-3 sm:grid-cols-2">
+              <label className="text-sm">
+                {t.integrations.detail.manualGoogleCampaignId} *
+                <input
+                  className="mt-1 w-full rounded border border-ink/15 px-2 py-1 font-mono text-xs"
+                  value={manualCampaignId}
+                  onChange={(e) => setManualCampaignId(e.target.value)}
+                  placeholder="1234567890"
+                />
+              </label>
+              <label className="text-sm">
+                {t.integrations.detail.manualCampaignName}
+                <input
+                  className="mt-1 w-full rounded border border-ink/15 px-2 py-1 text-xs"
+                  value={manualCampaignName}
+                  onChange={(e) => setManualCampaignName(e.target.value)}
+                />
+              </label>
+              <label className="text-sm">
+                {t.integrations.detail.manualGoogleAdGroupId} *
+                <input
+                  className="mt-1 w-full rounded border border-ink/15 px-2 py-1 font-mono text-xs"
+                  value={manualAdGroupId}
+                  onChange={(e) => setManualAdGroupId(e.target.value)}
+                  placeholder="12345678901"
+                />
+              </label>
+              <label className="text-sm">
+                {t.integrations.detail.manualAdGroupName}
+                <input
+                  className="mt-1 w-full rounded border border-ink/15 px-2 py-1 text-xs"
+                  value={manualAdGroupName}
+                  onChange={(e) => setManualAdGroupName(e.target.value)}
+                />
+              </label>
+              <label className="text-sm">
+                {t.integrations.detail.manualGoogleAdId} *
+                <input
+                  className="mt-1 w-full rounded border border-ink/15 px-2 py-1 font-mono text-xs"
+                  value={manualGoogleAdId}
+                  onChange={(e) => setManualGoogleAdId(e.target.value)}
+                  placeholder="123456789012"
+                />
+              </label>
+              <label className="text-sm">
+                {t.integrations.detail.manualAdName} *
+                <input
+                  className="mt-1 w-full rounded border border-ink/15 px-2 py-1 text-xs"
+                  value={manualAdName}
+                  onChange={(e) => setManualAdName(e.target.value)}
+                />
+              </label>
+              <div className="flex items-center gap-3 sm:col-span-2">
+                <button
+                  type="button"
+                  disabled={
+                    pending ||
+                    !manualCampaignId.trim() ||
+                    !manualAdGroupId.trim() ||
+                    !manualGoogleAdId.trim() ||
+                    !manualAdName.trim()
+                  }
+                  className="rounded-lg bg-ink px-3 py-1.5 text-sm text-paper disabled:opacity-50"
+                  onClick={() =>
+                    run(async () => {
+                      const r = await registerManualAdAction({
+                        integrationId: id,
+                        googleCampaignId: manualCampaignId,
+                        campaignName: manualCampaignName || undefined,
+                        googleAdGroupId: manualAdGroupId,
+                        adGroupName: manualAdGroupName || undefined,
+                        googleAdId: manualGoogleAdId,
+                        adName: manualAdName,
+                      });
+                      if (!r.ok) {
+                        setError(r.error);
+                        return;
+                      }
+                      setManualAdDone(r.data.name);
+                      window.location.reload();
+                    })
+                  }
+                >
+                  {t.integrations.detail.manualRegisterAd}
+                </button>
+                {manualAdDone ? (
+                  <span className="text-sm text-emerald-700">
+                    {t.integrations.detail.manualRegistered}：{manualAdDone}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
         </div>
         <div className="overflow-x-auto rounded-xl border border-ink/10">
           <table className="min-w-full text-left text-sm">
