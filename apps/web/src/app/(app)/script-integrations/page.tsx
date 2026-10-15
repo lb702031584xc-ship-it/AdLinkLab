@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { adminScriptApi } from "@/lib/api/admin-script";
 import { mapAdminErrorMessage } from "@/lib/api/admin-script-config";
+import { IntegrationDeleteButton } from "@/components/admin/integration-delete-button";
 import { getLang } from "@/i18n/lang";
 import { getDictionary } from "@/i18n/dictionaries";
 
@@ -59,6 +60,7 @@ export default async function ScriptIntegrationsPage() {
               <th className="px-3 py-2">{t.integrations.list.columns.targets}</th>
               <th className="px-3 py-2">{t.integrations.list.columns.token}</th>
               <th className="px-3 py-2">{t.integrations.list.columns.lastSeen}</th>
+              <th className="px-3 py-2">{t.common.misc.actions}</th>
             </tr>
           </thead>
           <tbody>
@@ -81,11 +83,14 @@ export default async function ScriptIntegrationsPage() {
                   {i.tokenStatus} · {i.tokenPrefix}…
                 </td>
                 <td className="px-3 py-2 text-xs">{i.lastSeenAt ?? "—"}</td>
+                <td className="px-3 py-2">
+                  <IntegrationDeleteButton integrationId={i.integrationId} />
+                </td>
               </tr>
             ))}
             {items.length === 0 && !error ? (
               <tr>
-                <td className="px-3 py-6 text-ink/50" colSpan={6}>
+                <td className="px-3 py-6 text-ink/50" colSpan={7}>
                   {t.integrations.list.empty}
                 </td>
               </tr>
