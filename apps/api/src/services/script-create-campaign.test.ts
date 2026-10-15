@@ -133,6 +133,8 @@ describe("buildCreateCampaignScript", () => {
     // A budget another campaign uses is never touched — fallback name.
     expect(src).toContain("is in use by another campaign");
   });
+
+  it("surfaces real Google errors via getErrorMessages (no silent failures)", () => {
     const src = buildCreateCampaignScript(samplePlan());
     // mutate() returns a failed MutateResult instead of throwing — the
     // script must read getErrorMessages() or the log hides the real cause.
