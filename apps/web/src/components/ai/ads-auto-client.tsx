@@ -136,6 +136,11 @@ function PlanPreview({ plan, d }: { plan: AdPlan; d: AdsAutoDict }) {
                   <li key={i}>{keywordText(k)}</li>
                 ))}
               </ul>
+              {block.group.keywords.length === 0 && (
+                <p className="mt-1 text-xs text-amber-700">
+                  ⚠️ {d.preview.emptyKeywordsHint}
+                </p>
+              )}
               <p className={`${sectionTitleClass} mt-3`}>
                 {d.preview.negatives}（{block.group.negativeKeywords.length}）
               </p>

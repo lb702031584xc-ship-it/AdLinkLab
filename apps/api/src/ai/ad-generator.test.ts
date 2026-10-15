@@ -191,6 +191,20 @@ describe("finalizeAdPlan", () => {
     }
   });
 
+  it("official 口吻保留品牌关键词，不转否词", () => {
+    const plan = finalizeAdPlan(
+      [validDraft()],
+      finalizeCtx({ copyStyle: "official" })
+    );
+    const group = plan.adGroups[0]!.group;
+    expect(group.keywords.map((k) => k.text)).toContain("acme running shoes sale");
+    const texts = group.negativeKeywords.map((n) => `${n.matchType}:${n.text}`);
+    expect(texts).not.toContain("EXACT:acme running shoes sale");
+    expect(texts).not.toContain("PHRASE:acme running shoes sale");
+    // AI 建议的非品牌否词仍保留
+    expect(texts).toContain("PHRASE:free");
+  });
+
   it("clamps absurd budgets into the safe range", () => {
     const low = finalizeAdPlan(
       [validDraft({ dailyBudget: { amount: 0.5, currency: "USD" } })],

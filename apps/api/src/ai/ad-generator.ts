@@ -526,15 +526,20 @@ const adGroups: AdPlanAdGroupBlock[] = drafts.map((draft, i) => {
 const finalUrl = assertHttpUrl(ctx.finalUrls[i]!, `finalUrls[${i}]`);
 const keywordTexts = draft.keywords.map((k) => k.text);
 // 复用 brand-check 否词逻辑：品牌词 → exact/phrase 否词。
-// 与品牌词冲突的关键词不能出价：从正向关键词中移除，转为否词。
+// 联盟安全口吻：与品牌词冲突的关键词不能出价，从正向移除，转否词。
+// 官方口吻：用户已确认条款允许品牌词投放，保留品牌关键词，不转否词
+// （否则官方口吻 + 品牌词的计划会被清成 0 关键词，还反转为否词）。
 const brandResults = checkBrandConflicts(keywordTexts, draft.brandTerms);
-const conflicting = new Set(
-brandResults.filter((r) => r.conflict).map((r) => r.keyword)
-);
+const isOfficial = ctx.copyStyle === "official";
+const conflicting = isOfficial
+  ? new Set<string>()
+  : new Set(brandResults.filter((r) => r.conflict).map((r) => r.keyword));
 const positiveKeywords = draft.keywords.filter(
-(k) => !conflicting.has(normalizeKeyword(k.text))
+  (k) => !conflicting.has(normalizeKeyword(k.text))
 );
-const brandNegatives = buildNegativeKeywords(brandResults);
+const brandNegatives = isOfficial
+  ? { exact: [] as string[], phrase: [] as string[] }
+  : buildNegativeKeywords(brandResults);
 const negatives: AdPlanKeyword[] = [];
 const seen = new Set<string>();
 const positiveSet = new Set(positiveKeywords.map((k) => normalizeKeyword(k.text)));
