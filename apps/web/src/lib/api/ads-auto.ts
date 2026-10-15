@@ -166,10 +166,19 @@ export async function requestAdPlan(
   });
 }
 
-export async function confirmAdPlan(planId: string, maxCpc?: number): Promise<ConfirmResult> {
+export async function confirmAdPlan(
+  planId: string,
+  maxCpc?: number,
+  overrides?: { dailyBudget?: number; geoTargets?: string[] }
+): Promise<ConfirmResult> {
   return apiFetch<ConfirmResult>("/api/v1/ads/auto-create/confirm", {
     method: "POST",
-    body: JSON.stringify({ planId, maxCpc }),
+    body: JSON.stringify({
+      planId,
+      maxCpc,
+      dailyBudget: overrides?.dailyBudget,
+      geoTargets: overrides?.geoTargets,
+    }),
   });
 }
 

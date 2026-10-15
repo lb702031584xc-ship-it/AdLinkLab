@@ -40,10 +40,11 @@ export async function requestAdPlanAction(
 
 export async function confirmAdPlanAction(
   planId: string,
-  maxCpc?: number
+  maxCpc?: number,
+  overrides?: { dailyBudget?: number; geoTargets?: string[] }
 ): Promise<AdsAutoActionResult<ConfirmResult>> {
   try {
-    return { ok: true, data: await confirmAdPlan(planId, maxCpc) };
+    return { ok: true, data: await confirmAdPlan(planId, maxCpc, overrides) };
   } catch (e) {
     return mapError(e, "创建 Script 任务失败，请稍后重试。");
   }

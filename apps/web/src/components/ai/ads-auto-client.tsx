@@ -55,7 +55,21 @@ function normalizeKwText(text: string): string {
     .join("\n");
 }
 
-function PlanPreview({ plan, d }: { plan: AdPlan; d: AdsAutoDict }) {
+function PlanPreview({
+  plan,
+  d,
+  budget,
+  onBudgetChange,
+  geo,
+  onGeoChange,
+}: {
+  plan: AdPlan;
+  d: AdsAutoDict;
+  budget: string;
+  onBudgetChange: (v: string) => void;
+  geo: string[];
+  onGeoChange: (v: string[]) => void;
+}) {
   const c = plan.campaign;
   return (
     <div className="mt-6 space-y-4">
@@ -83,14 +97,44 @@ function PlanPreview({ plan, d }: { plan: AdPlan; d: AdsAutoDict }) {
         <dl className="mt-3 grid grid-cols-2 gap-2 text-sm md:grid-cols-4">
           <div>
             <dt className="text-ink/55">{d.preview.budget}</dt>
-            <dd className="font-medium text-ink">
-              {c.dailyBudget.amount} {c.dailyBudget.currency}
-              {d.preview.perDay}
+            <dd className="mt-1 flex items-center gap-1 font-medium text-ink">
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={budget}
+                onChange={(e) => onBudgetChange(e.target.value)}
+                className="w-20 rounded-md border border-ink/15 bg-paper px-2 py-1 text-sm text-ink"
+                aria-label={d.preview.budget}
+              />
+              <span>
+                {c.dailyBudget.currency}
+                {d.preview.perDay}
+              </span>
             </dd>
+            <p className="mt-0.5 text-xs text-ink/55">{d.preview.budgetEditHint}</p>
           </div>
           <div>
             <dt className="text-ink/55">{d.preview.geo}</dt>
-            <dd className="font-medium text-ink">{c.geoTargets.join(", ") || "—"}</dd>
+            <dd className="mt-1 flex max-h-24 flex-wrap gap-x-3 gap-y-1 overflow-auto">
+              {d.preview.countries.map((ct) => (
+                <label key={ct.code} className="flex cursor-pointer items-center gap-1 text-sm text-ink">
+                  <input
+                    type="checkbox"
+                    checked={geo.includes(ct.code)}
+                    onChange={(e) =>
+                      onGeoChange(
+                        e.target.checked
+                          ? [...geo, ct.code]
+                          : geo.filter((g) => g !== ct.code)
+                      )
+                    }
+                  />
+                  {ct.name}
+                </label>
+              ))}
+            </dd>
+            <p className="mt-0.5 text-xs text-ink/55">{d.preview.geoEditHint}</p>
           </div>
           <div>
             <dt className="text-ink/55">{d.preview.bidding}</dt>
@@ -220,6 +264,9 @@ export function AdsAutoClient({
     { id: string; name: string; customerId: string }[]
   >([]);
   const [plan, setPlan] = useState<AdPlan | null>(null);
+  // 预览里可改：预算 + 地域（初始为 AI 建议值，确认时作为覆盖值传给服务端）。
+  const [editedBudget, setEditedBudget] = useState("");
+  const [editedGeo, setEditedGeo] = useState<string[]>([]);
   const [confirm, setConfirm] = useState<ConfirmResult | null>(null);
   const [scriptSource, setScriptSource] = useState<string | null>(null);
   const [showScript, setShowScript] = useState(false);
@@ -433,6 +480,8 @@ export function AdsAutoClient({
       });
       if (res.ok) {
         setPlan(res.data.plan);
+        setEditedBudget(String(res.data.plan.campaign.dailyBudget.amount));
+        setEditedGeo(res.data.plan.campaign.geoTargets);
         setCoachConfirmed(false);
         void runPlanCoachCheck(res.data.plan, brandTermsText);
       } else {
@@ -452,7 +501,11 @@ export function AdsAutoClient({
     try {
       const maxCpc =
         bidStrategy !== "plan" && bidCpc ? parseFloat(bidCpc) || undefined : undefined;
-      const res = await confirmAdPlanAction(plan.planId, maxCpc);
+      const budgetNum = parseFloat(editedBudget);
+      const res = await confirmAdPlanAction(plan.planId, maxCpc, {
+        dailyBudget: Number.isFinite(budgetNum) && budgetNum > 0 ? budgetNum : undefined,
+        geoTargets: editedGeo.length ? editedGeo : undefined,
+      });
       if (res.ok) {
         setConfirm(res.data);
         const s = await getCreateCampaignScriptAction(plan.planId);
@@ -767,7 +820,14 @@ export function AdsAutoClient({
       {plan ? (
         <>
           <h2 className="mt-6 text-base font-semibold text-ink">{d.preview.title}</h2>
-          <PlanPreview plan={plan} d={d} />
+          <PlanPreview
+            plan={plan}
+            d={d}
+            budget={editedBudget}
+            onBudgetChange={setEditedBudget}
+            geo={editedGeo}
+            onGeoChange={setEditedGeo}
+          />
 
           {/* Bid strategy selection */}
           <div className={`mt-4 ${cardClass}`}>

@@ -33,6 +33,8 @@ import { AiError, chatJson, chatJsonValidated } from "../ai/llm.js";
 import { fetchPage } from "../ai/fetch-page.js";
 import {
   MAX_URLS_PER_PLAN,
+  MIN_DAILY_BUDGET,
+  MAX_DAILY_BUDGET,
   PAGE_TEXT_LIMIT,
   adPlanStore,
   buildAdPlanPrompt,
@@ -47,7 +49,7 @@ import {
   type PlanStore,
 } from "../ai/ad-generator.js";
 import type { AnalysisLanguage } from "../ai/prompts.js";
-import { buildCreateCampaignScript } from "../services/script-create-campaign.js";
+import { buildCreateCampaignScript, COUNTRY_LOCATION_IDS } from "../services/script-create-campaign.js";
 import {
   buildRotationScript,
   validateRotationScriptInput,
@@ -293,7 +295,12 @@ export async function registerAdsAutoRoutes(
     Body: { planId?: unknown };
   }>("/api/v1/ads/auto-create/confirm", async (request) => {
     const info = await requireSession(deps, request);
-    const body = (request.body ?? {}) as { planId?: unknown; maxCpc?: unknown };
+    const body = (request.body ?? {}) as {
+      planId?: unknown;
+      maxCpc?: unknown;
+      dailyBudget?: unknown;
+      geoTargets?: unknown;
+    };
     const planId = asTrimmedString(body.planId);
     if (!planId || !UUID_RE.test(planId)) {
       throw new ValidationError("planId must be a UUID");
@@ -304,6 +311,43 @@ export async function registerAdsAutoRoutes(
         : null;
     if (maxCpcOverride !== null && (!Number.isFinite(maxCpcOverride) || maxCpcOverride <= 0)) {
       throw new ValidationError("maxCpc must be a positive number");
+    }
+    // Preview edits: daily budget + geo targets set by the user in the
+    // preview (overriding the AI suggestion). Same override pattern as maxCpc.
+    const dailyBudgetOverride =
+      body.dailyBudget !== undefined && body.dailyBudget !== null && body.dailyBudget !== ""
+        ? Number(body.dailyBudget)
+        : null;
+    if (
+      dailyBudgetOverride !== null &&
+      (!Number.isFinite(dailyBudgetOverride) || dailyBudgetOverride <= 0)
+    ) {
+      throw new ValidationError("dailyBudget must be a positive number");
+    }
+    let geoTargetsOverride: string[] | null = null;
+    if (body.geoTargets !== undefined && body.geoTargets !== null) {
+      if (
+        !Array.isArray(body.geoTargets) ||
+        body.geoTargets.length === 0 ||
+        body.geoTargets.length > 5
+      ) {
+        throw new ValidationError("geoTargets must contain 1-5 country codes");
+      }
+      const cleaned = [
+        ...new Set(
+          body.geoTargets.map((g) => String(g).trim().toUpperCase()).filter(Boolean)
+        ),
+      ];
+      if (cleaned.length === 0 || cleaned.length > 5) {
+        throw new ValidationError("geoTargets must contain 1-5 country codes");
+      }
+      const bad = cleaned.find((g) => !(g in COUNTRY_LOCATION_IDS));
+      if (bad) {
+        throw new ValidationError(
+          `geoTargets contains unsupported country code: ${bad}`
+        );
+      }
+      geoTargetsOverride = cleaned;
     }
     const plan = loadPlan(planId, info.tenantId);
 
@@ -316,6 +360,18 @@ export async function registerAdsAutoRoutes(
           dataQuality: "PREDICTED",
         };
       }
+    }
+
+    // Apply preview budget / geo overrides (clamped to the same sane range
+    // as AI-generated budgets).
+    if (dailyBudgetOverride !== null) {
+      plan.campaign.dailyBudget.amount = Math.min(
+        MAX_DAILY_BUDGET,
+        Math.max(MIN_DAILY_BUDGET, dailyBudgetOverride)
+      );
+    }
+    if (geoTargetsOverride !== null) {
+      plan.campaign.geoTargets = geoTargetsOverride;
     }
 
     // Resolve the Script integration that will execute the task.

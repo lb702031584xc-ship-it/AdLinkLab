@@ -425,6 +425,58 @@ describe("POST /api/v1/ads/auto-create/confirm", () => {
     });
     expect(res.statusCode).toBe(410);
   });
+
+  it("applies preview budget + geo overrides to the plan and audit log", async () => {
+    await (fake as any).googleAdsScriptIntegration.create({
+      data: {
+        id: randomUUID(),
+        tenantId,
+        googleAccountId: randomUUID(),
+        name: "Test integration",
+        status: "ACTIVE",
+        tokenKeyId: "k1",
+        tokenPrefix: "alk_s_ab12",
+        tokenHash: "hash-1",
+      },
+    });
+    const app = await buildApp(fake, planStore);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/ads/auto-create/confirm",
+      headers: cookie(token),
+      payload: { planId, dailyBudget: 50, geoTargets: ["US", "CA"] },
+    });
+    expect(res.statusCode).toBe(200);
+    const stored = planStore.get(planId);
+    expect(stored?.plan.campaign.dailyBudget.amount).toBe(50);
+    expect(stored?.plan.campaign.geoTargets).toEqual(["US", "CA"]);
+    const logs = await (fake as any).auditLog.findMany({});
+    expect(logs[0].after.dailyBudget.amount).toBe(50);
+  });
+
+  it("rejects invalid budget / geo overrides", async () => {
+    const app = await buildApp(fake, planStore);
+    for (const payload of [
+      { planId, dailyBudget: 0 },
+      { planId, dailyBudget: -10 },
+      { planId, dailyBudget: "abc" },
+      { planId, geoTargets: [] },
+      { planId, geoTargets: ["US", "XX"] },
+      { planId, geoTargets: ["US", "GB", "CA", "AU", "DE", "FR"] },
+    ]) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/ads/auto-create/confirm",
+        headers: cookie(token),
+        payload,
+      });
+      expect(res.statusCode).toBe(400);
+    }
+    // Failed overrides leave the plan untouched.
+    const stored = planStore.get(planId);
+    expect(stored?.plan.campaign.dailyBudget.amount).toBe(25);
+    expect(stored?.plan.campaign.geoTargets).toEqual(["US"]);
+  });
 });
 
 describe("GET copy-pack and script", () => {
@@ -477,7 +529,7 @@ describe("GET copy-pack and script", () => {
     expect(body.planId).toBe(planId);
     expect(body.source).toContain("Route Test Campaign");
     expect(body.source).toContain("create-campaign");
-    expect(body.source).toContain('withStatus("PAUSED")');
+    expect(body.source).toContain('status: "PAUSED"');
   });
 
   it("tenant isolation: another tenant cannot read the plan", async () => {
