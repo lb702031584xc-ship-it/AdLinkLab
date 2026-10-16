@@ -7,6 +7,10 @@
  */
 import { AiError } from "./llm.js";
 import type { SerpReferenceAd } from "./ad-generator.js";
+import {
+  dataForSeoErrorMessage,
+  readDataForSeoErrorDetail,
+} from "./dataforseo-error.js";
 
 const SERP_API_URL =
   "https://api.dataforseo.com/v3/serp/google/organic/live/advanced";
@@ -72,7 +76,9 @@ export async function fetchSerpAds(
       ]),
     });
     if (!res.ok) {
-      throw new AiError(`DataForSEO 请求失败（HTTP ${res.status}）`);
+      // 读一次 body 提取 status_message（真实原因），不只剩状态码。
+      const detail = await readDataForSeoErrorDetail(res);
+      throw new AiError(dataForSeoErrorMessage(res.status, detail));
     }
     const data = (await res.json()) as {
       tasks?: Array<{

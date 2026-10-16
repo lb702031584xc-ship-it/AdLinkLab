@@ -131,4 +131,23 @@ describe("checkBrandBidding", () => {
       checkBrandBidding("  ", "nordvpn.com", { prisma: fakePrismaNoCreds })
     ).rejects.toThrow();
   });
+
+  it("403 + JSON status_message → 错误含真实原因", async () => {
+    const fetchImpl = async () =>
+      ({
+        ok: false,
+        status: 403,
+        text: async () =>
+          JSON.stringify({
+            status_code: 40300,
+            status_message: "Invalid login or password.",
+          }),
+      }) as never;
+    await expect(
+      checkBrandBidding("nordvpn", "nordvpn.com", {
+        prisma: fakePrismaWithCreds,
+        fetchImpl,
+      })
+    ).rejects.toThrow("Invalid login or password");
+  });
 });

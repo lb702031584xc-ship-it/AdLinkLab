@@ -14,6 +14,10 @@ import {
   DATAFORSEO_LOGIN_SETTING,
   DATAFORSEO_PASSWORD_SETTING,
 } from "../traffic/dataforseo.js";
+import {
+  dataForSeoErrorMessage,
+  readDataForSeoErrorDetail,
+} from "./dataforseo-error.js";
 
 export class BrandBiddingError extends AppError {
   constructor(message: string) {
@@ -180,7 +184,9 @@ export async function checkBrandBidding(
       ]),
     });
     if (!res.ok) {
-      throw new BrandBiddingError(`DataForSEO 请求失败（HTTP ${res.status}）`);
+      // 读一次 body 提取 status_message（真实原因），不只剩状态码。
+      const detail = await readDataForSeoErrorDetail(res);
+      throw new BrandBiddingError(dataForSeoErrorMessage(res.status, detail));
     }
     const data = (await res.json()) as {
       tasks?: Array<{ status_code?: number; result?: Array<{ items?: SerpPaidItem[] }> }>;
