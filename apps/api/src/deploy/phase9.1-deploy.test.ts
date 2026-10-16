@@ -207,7 +207,7 @@ describe("Phase 9.1 migration command availability", () => {
     expect(compose).not.toMatch(/prisma db push/);
   });
 
-  it("15. migration count is 33 (Phase 10 auth + Phase 11 AI + P1 traffic monitor + Phase 1 offer intel + Phase 2 traffic intel + Phase 3 optimization + Phase 4 research lab + Lander Intel + automation + automation-pack + launch wizard + lp rewriter + weekly report + network api + cashback automation pack + rotation interval + amazon discovery + lp rewrite deploy migrations + traffic gate/offer-metrics/pipeline/denylist/combo/asin-watch/onboard/coach/manual-spend selection-system migrations; no other new schema migration)", () => {
+  it("15. migration count is 40 (Phase 10 auth + Phase 11 AI + P1 traffic monitor + Phase 1 offer intel + Phase 2 traffic intel + Phase 3 optimization + Phase 4 research lab + Lander Intel + automation + automation-pack + launch wizard + lp rewriter + weekly report + network api + cashback automation pack + rotation interval + amazon discovery + lp rewrite deploy migrations + traffic gate/offer-metrics/pipeline/denylist/combo/asin-watch/onboard/coach/manual-spend selection-system migrations + link-health interval + offer source + offer price picked + work states + offer captures + offer captures html + offer-captures has_html; no other new schema migration)", () => {
     const migrationsDir = join(
       REPO_ROOT,
       "packages/database/prisma/migrations"
@@ -216,7 +216,7 @@ describe("Phase 9.1 migration command availability", () => {
     const names = readdirSync(migrationsDir).filter((n) =>
       existsSync(join(migrationsDir, n, "migration.sql"))
     );
-    expect(names.length).toBe(33);
+    expect(names.length).toBe(40);
     expect(names).toContain("20261003130000_auth_users_sessions");
     expect(names).toContain("20261003140000_ai_offer_analysis");
     expect(names).toContain("20261004040000_p1_monitoring");
@@ -242,6 +242,13 @@ describe("Phase 9.1 migration command availability", () => {
     expect(names).toContain("20261010070000_onboard_tasks");
     expect(names).toContain("20261010080000_coach_settings");
     expect(names).toContain("20261010090000_manual_spend");
+    expect(names).toContain("20261011040000_link_health_interval");
+    expect(names).toContain("20261012010300_offer_source");
+    expect(names).toContain("20261012070000_offer_price_picked");
+    expect(names).toContain("20261013010000_work_states");
+    expect(names).toContain("20261013120000_offer_captures");
+    expect(names).toContain("20261013130000_offer_captures_html");
+    expect(names).toContain("20261016000000_offer_captures_has_html");
   });
 });
 

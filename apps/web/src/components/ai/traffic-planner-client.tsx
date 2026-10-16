@@ -213,6 +213,22 @@ export function TrafficPlannerClient({
   const [epc, setEpc] = useState("");
   const [networkCvr, setNetworkCvr] = useState(initialInputs?.cvr ?? "");
   const [refundRate, setRefundRate] = useState(initialInputs?.refundRate ?? "");
+
+  /* ③→④ 同步：工作表嵌入时，③ 盈利测算的输入变化后同步到 ④ 的 payout/CVR/退款率。
+     useState 初始值只在挂载时生效，之前 ③ 改了之后 ④ 一直用旧值、重算也判不准。
+     按值比较（父级每次渲染都会新建 initialInputs 对象）；挂载时 initialInputs 已由
+     初始值 + 快照恢复处理，这里不重复覆盖——快照里的手改值优先。 */
+  const appliedInputsKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!initialInputs) return;
+    const key = `${initialInputs.payout ?? ""}::${initialInputs.cvr ?? ""}::${initialInputs.refundRate ?? ""}`;
+    if (appliedInputsKeyRef.current === key) return;
+    appliedInputsKeyRef.current = key;
+    if (initialInputs.payout != null) setPayout(initialInputs.payout);
+    if (initialInputs.cvr != null) setNetworkCvr(initialInputs.cvr);
+    if (initialInputs.refundRate != null) setRefundRate(initialInputs.refundRate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialInputs]);
   // Offervault
   const [bestPayout, setBestPayout] = useState("");
   const [bestPayoutNetwork, setBestPayoutNetwork] = useState("");

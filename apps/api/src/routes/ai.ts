@@ -1341,6 +1341,7 @@ export async function registerAiRoutes(
         currency: meta.currency,
         pageText: cleanText.slice(0, 20000),
         pageHtml: html || undefined,
+        hasHtml: html.length > 0,
         source: "extension",
       },
     });
@@ -1356,7 +1357,9 @@ export async function registerAiRoutes(
     };
   });
 
-  /** 插件抓取记录（本租户最近 10 条），供一键推演报告选用。 */
+  /** 插件抓取记录（本租户最近 10 条），供一键推演报告选用。
+      列表不拉 page_html（插件最多发 200KB/条，10 条就是 2MB，只为算一个布尔值）：
+      hasHtml 列在写入时同步，列表只查它。 */
   app.get("/api/v1/ai/offer-captures", async (request) => {
     const info = await requireSession(deps, request);
     const rows = await deps.prisma.offerCapture.findMany({
@@ -1365,7 +1368,7 @@ export async function registerAiRoutes(
       take: 10,
       select: {
         id: true, url: true, title: true, description: true,
-        price: true, currency: true, pageText: true, pageHtml: true, createdAt: true,
+        price: true, currency: true, pageText: true, hasHtml: true, createdAt: true,
       },
     });
     return {
@@ -1377,7 +1380,7 @@ export async function registerAiRoutes(
         price: r.price == null ? null : Number(r.price),
         currency: r.currency,
         text: (r.pageText ?? "").slice(0, 4000),
-        hasHtml: !!(r.pageHtml && r.pageHtml.length > 0),
+        hasHtml: r.hasHtml,
         source: "extension" as const,
         createdAt: r.createdAt.toISOString(),
       })),

@@ -1974,6 +1974,8 @@ model OfferCapture {
   currency    String?
   pageText    String   @map("page_text")
   pageHtml    String?  @map("page_html")
+  /** 是否带有插件发来的真实 HTML（列表接口用此列判断，不拉整页 HTML）。 */
+  hasHtml     Boolean  @default(false) @map("has_html")
   source      String   @default("extension")
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 

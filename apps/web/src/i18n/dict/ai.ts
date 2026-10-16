@@ -124,6 +124,9 @@ export const zh = {
     loading: "加载中…",
     empty: "暂无插件抓取记录。先在 Chrome 里装插件抓一页，回来这里选用。",
     use: "选用",
+    loadFailed: "抓取记录加载失败",
+    loadTimeout: "加载超时，请重试",
+    retry: "重试",
   },
   brandBidding: {
     title: "品牌词投流检查",
@@ -1089,6 +1092,9 @@ export const en: typeof zh = {
     loading: "Loading…",
     empty: "No extension captures yet. Capture a page with the Chrome extension first.",
     use: "Use",
+    loadFailed: "Failed to load captures",
+    loadTimeout: "Loading timed out, please retry",
+    retry: "Retry",
   },
   brandBidding: {
     title: "Brand keyword ad check",

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useDict } from "@/i18n/use-dict";
 import { listOfferCapturesAction } from "@/lib/api/ai-actions";
 import type { OfferCaptureItem } from "@/lib/api/ai";
@@ -9,6 +9,7 @@ import type { OfferCaptureItem } from "@/lib/api/ai";
  * 浏览器插件抓取记录选用器（多页面共用）。
  * 展开后列出最近 10 条插件抓取，点"选用"把整条记录交给调用方处理。
  * （各页面自己决定用哪几个字段：条款页用正文、合规页用 URL、投流页用标题……）
+ * 加载带 20 秒超时 + 失败提示 + 重试：任何情况下都不永久卡在"加载中"。
  */
 export function CapturePicker({
   onPick,
@@ -27,13 +28,33 @@ export function CapturePicker({
   const [items, setItems] = useState<OfferCaptureItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const reqRef = useRef(0);
 
   async function load() {
+    const req = ++reqRef.current;
     setLoading(true);
-    const res = await listOfferCapturesAction();
-    setLoading(false);
-    setLoaded(true);
-    if (res.ok) setItems(res.data);
+    setError(null);
+    try {
+      // 超时兜底：请求挂起时 20 秒后也结束 loading，显示重试
+      const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 20000));
+      const res = await Promise.race([listOfferCapturesAction(), timeout]);
+      if (req !== reqRef.current) return; // 已有更新的请求，丢弃过期结果
+      if (res === null) {
+        setError(d.loadTimeout);
+      } else if (res.ok) {
+        setItems(res.data);
+      } else {
+        setError(res.error || d.loadFailed);
+      }
+    } catch {
+      if (req === reqRef.current) setError(d.loadFailed);
+    } finally {
+      if (req === reqRef.current) {
+        setLoading(false);
+        setLoaded(true);
+      }
+    }
   }
 
   return (
@@ -52,6 +73,13 @@ export function CapturePicker({
         <div className="mt-2 space-y-1.5 rounded-lg border border-ink/10 bg-ink/[0.02] p-2">
           {loading ? (
             <p className="text-xs text-ink/50">{d.loading}</p>
+          ) : error ? (
+            <p className="text-xs text-red-600">
+              {error}{" "}
+              <button type="button" onClick={load} className="underline hover:text-red-800">
+                {d.retry}
+              </button>
+            </p>
           ) : items.length === 0 ? (
             <p className="text-xs text-ink/50">{d.empty}</p>
           ) : (
