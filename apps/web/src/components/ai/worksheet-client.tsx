@@ -123,6 +123,36 @@ function ProfitStep({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offerId]);
 
+  /* 转化率/退款率/payout 联动：为空时从该 offer 的投流决策（④）快照取——
+     前面在 ④ 填过的不用在 ③ 重填。只填空字段，不覆盖手改（函数式 setState 防竞态）。 */
+  useEffect(() => {
+    if (!offerId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await loadWorkStateAction("traffic-planner", offerId);
+        if (cancelled || !res.ok || !res.data.state) return;
+        const s = res.data.state as Record<string, unknown>;
+        const str = (v: unknown) => (v == null ? "" : String(v).trim());
+        const cvr = str(s.networkCvr);
+        if (cvr) setCvrPct((prev) => (prev.trim() ? prev : cvr));
+        const refund = str(s.refundRate);
+        if (refund) setRefundPct((prev) => (prev.trim() ? prev : refund));
+        // offer 佣金算不出 payout 时（按比例缺均价等），取 ④ 里手填过的 payout
+        if (!initialPayout) {
+          const p = str(s.payout);
+          if (p) setPayout((prev) => (prev.trim() ? prev : p));
+        }
+      } catch {
+        /* 取不到就不填 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offerId]);
+
   const inputClass =
     "w-full rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm text-ink placeholder:text-ink/35 focus:border-signal focus:outline-none";
   const labelClass = "mb-1 block text-sm font-medium text-ink/80";
