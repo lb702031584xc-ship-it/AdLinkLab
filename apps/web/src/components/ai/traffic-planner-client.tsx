@@ -442,49 +442,149 @@ export function TrafficPlannerClient({
     }
   };
 
-  /** 从投放选词页导入该 offer 的关键词（去重） */
+  /** 需求验证的枚举 → 投流表的值：竞争度 Low/Medium/High；意图用与需求验证页一致的标签 */
+  const researchCompetition = (v?: string) =>
+    v === "low" ? "Low" : v === "medium" ? "Medium" : v === "high" ? "High" : undefined;
+  const researchIntent = (v?: string) => {
+    const zhMap: Record<string, string> = { buy: "购买", review: "评测", compare: "对比", info: "纯信息" };
+    const enMap: Record<string, string> = { buy: "Buy", review: "Review", compare: "Compare", info: "Informational" };
+    return (lang === "en" ? enMap : zhMap)[v ?? ""] ?? undefined;
+  };
+
+  /** 从关键词页导入：投放选词（关键词 + 参考 CPC）+ 需求验证（搜索量 / 竞争度 / 意图），
+      合并后填表；已有的词只补空参数，不覆盖手填。 */
   const importLaunchKeywords = async () => {
     if (!selectedOfferId) {
       setMsg(d.selectOfferFirst);
       return;
     }
     try {
-      const res = await loadWorkStateAction("keyword-launch", selectedOfferId);
-      const rows = (res.ok && res.data.state
-        ? (res.data.state.rows as Array<{
+      const [launchRes, researchRes] = await Promise.all([
+        loadWorkStateAction("keyword-launch", selectedOfferId),
+        loadWorkStateAction("keyword-research", selectedOfferId),
+      ]);
+      const launchRows = (launchRes.ok && launchRes.data.state
+        ? (launchRes.data.state.rows as Array<{
             keyword?: string;
             refCpc?: string;
           }>)
         : []) as Array<{ keyword?: string; refCpc?: string }>;
-      const valid = (rows ?? []).filter((r) => r.keyword?.trim());
-      if (valid.length === 0) {
+      const researchRows = (researchRes.ok && researchRes.data.state
+        ? (researchRes.data.state.rows as Array<{
+            keyword?: string;
+            volume?: string;
+            competition?: string;
+            intent?: string;
+          }>)
+        : []) as Array<{
+        keyword?: string;
+        volume?: string;
+        competition?: string;
+        intent?: string;
+      }>;
+
+      // 需求验证的参数（投放选词里没有这些字段），按关键词归一
+      const researchByKw = new Map<
+        string,
+        { volume?: number; competition?: string; intent?: string }
+      >();
+      for (const r of researchRows ?? []) {
+        const key = r.keyword?.trim().toLowerCase();
+        if (!key || researchByKw.has(key)) continue;
+        const vol = r.volume != null && r.volume !== "" ? Number(r.volume) : NaN;
+        researchByKw.set(key, {
+          volume: Number.isFinite(vol) && vol > 0 ? vol : undefined,
+          competition: researchCompetition(r.competition),
+          intent: researchIntent(r.intent),
+        });
+      }
+
+      // 合并：投放选词为准（关键词 + 参考 CPC），需求验证补搜索量/竞争度/意图；
+      // 需求验证里有、投放选词里没有的词也一并带入。
+      type Merged = {
+        keyword: string;
+        cpc?: number;
+        volume?: number;
+        competition?: string;
+        intent?: string;
+      };
+      const merged = new Map<string, Merged>();
+      for (const r of launchRows ?? []) {
+        const kw = r.keyword?.trim();
+        if (!kw) continue;
+        const key = kw.toLowerCase();
+        const prev = merged.get(key) ?? { keyword: kw };
+        const cpc = r.refCpc != null && r.refCpc !== "" ? Number(r.refCpc) : NaN;
+        const rp = researchByKw.get(key) ?? {};
+        merged.set(key, {
+          ...prev,
+          cpc: prev.cpc ?? (Number.isFinite(cpc) && cpc > 0 ? cpc : undefined),
+          volume: prev.volume ?? rp.volume,
+          competition: prev.competition ?? rp.competition,
+          intent: prev.intent ?? rp.intent,
+        });
+      }
+      for (const [key, rp] of researchByKw) {
+        if (merged.has(key)) continue;
+        const raw =
+          (researchRows ?? []).find((r) => r.keyword?.trim().toLowerCase() === key)?.keyword?.trim() ?? key;
+        merged.set(key, { keyword: raw, ...rp });
+      }
+      if (merged.size === 0) {
         setMsg(d.noLaunchData);
         return;
       }
-      const existing = new Set(
-        keywords.map((k) => k.keyword.trim().toLowerCase()).filter(Boolean)
-      );
-      const toAdd = valid.filter(
-        (r) => !existing.has(r.keyword!.trim().toLowerCase())
-      );
-      if (toAdd.length === 0) {
-        setMsg(d.alreadyImported);
-        return;
+
+      const existingByKey = new Map<string, KwRow>();
+      for (const k of keywords) {
+        const key = k.keyword.trim().toLowerCase();
+        if (key) existingByKey.set(key, k);
+      }
+      const toAdd: KwRow[] = [];
+      const patches = new Map<string, Partial<KwRow>>();
+      let patched = 0;
+      for (const m of merged.values()) {
+        const ex = existingByKey.get(m.keyword.toLowerCase());
+        if (!ex) {
+          toAdd.push({
+            ...newKwRow(),
+            keyword: m.keyword,
+            cpc: m.cpc,
+            volume: m.volume,
+            competition: m.competition,
+            intent: m.intent,
+          });
+          continue;
+        }
+        // 已有的词：只补空参数，不覆盖手填
+        const patch: Partial<KwRow> = {};
+        if (ex.cpc == null && m.cpc != null) patch.cpc = m.cpc;
+        if (ex.volume == null && m.volume != null) patch.volume = m.volume;
+        if (!ex.competition && m.competition) patch.competition = m.competition;
+        if (!ex.intent && m.intent) patch.intent = m.intent;
+        if (Object.keys(patch).length > 0) {
+          patches.set(ex.id, patch);
+          patched++;
+        }
       }
       setKeywords((ks) => {
-        const base = ks.some((k) => !k.keyword.trim())
-          ? ks.filter((k) => k.keyword.trim())
-          : ks;
-        return [
-          ...base,
-          ...toAdd.map((r) => ({
-            ...newKwRow(),
-            keyword: r.keyword!.trim(),
-            cpc: r.refCpc && Number(r.refCpc) > 0 ? Number(r.refCpc) : undefined,
-          })),
-        ];
+        // 有新词时去掉空白行；只补参数时保留空白行
+        const base =
+          toAdd.length > 0 && ks.some((k) => !k.keyword.trim())
+            ? ks.filter((k) => k.keyword.trim())
+            : [...ks];
+        const next = patches.size > 0
+          ? base.map((k) => (patches.has(k.id) ? { ...k, ...patches.get(k.id) } : k))
+          : base;
+        return [...next, ...toAdd];
       });
-      setMsg(d.importedKeywords.replace("{n}", String(toAdd.length)));
+      if (toAdd.length > 0) {
+        setMsg(d.importedKeywords.replace("{n}", String(toAdd.length)));
+      } else if (patched > 0) {
+        setMsg(d.paramsFilled.replace("{n}", String(patched)));
+      } else {
+        setMsg(d.alreadyImported);
+      }
     } catch {
       setMsg(d.noLaunchData);
     }
