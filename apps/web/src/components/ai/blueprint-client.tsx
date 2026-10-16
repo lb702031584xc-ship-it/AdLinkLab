@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { OfferPipelineNav } from "@/components/ai/offer-pipeline-nav";
 import { loadWorkStateAction } from "@/lib/api/work-state-actions";
 import { useWorkState } from "@/lib/use-work-state";
+import { getLastOfferId, setLastOfferId } from "@/lib/current-offer";
 import { useI18n } from "@/i18n/I18nProvider";
 import { zh as bpZh, en as bpEn, type AiBlueprintDict } from "@/i18n/dict/ai-blueprint";
 import {
@@ -362,6 +363,7 @@ export function BlueprintClient({
     if (key && appliedOfferRef.current !== key) {
       appliedOfferRef.current = key;
       fillFromOffer(initialOffer!);
+      setLastOfferId(initialOffer!.id);
       void fillTermsFromSnapshot(initialOffer!.id, initialOffer!.name);
       void (async () => {
         const kws = await loadKeywordsFromSnapshots(initialOffer!.id);
@@ -376,6 +378,7 @@ export function BlueprintClient({
   const onSelectOffer = async (id: string) => {
     const o = (offers ?? []).find((x) => x.id === id) ?? null;
     if (!o) return;
+    setLastOfferId(o.id);
     // 先清空工作字段：新 offer 没历史时不留上一个 offer 的数据；
     // 再由下方 fillFromOffer / 快照恢复填入该 offer 自己的数据。
     setProductDescription("");
@@ -446,6 +449,17 @@ export function BlueprintClient({
     const avgPriceStr = snapAvgPrice || (o.avgPrice != null ? String(o.avgPrice) : "");
     void fillCommissionFromSnapshots(o.id, authoritativeType, avgPriceStr);
   };
+
+  /** 全局当前 offer：没带 ?offerId= 时用上次选的 offer（选一次，到处带）。 */
+  const lastOfferFallbackRef = useRef(false);
+  useEffect(() => {
+    if (initialOffer || lastOfferFallbackRef.current) return;
+    lastOfferFallbackRef.current = true;
+    const last = getLastOfferId();
+    const found = last ? (offers ?? []).find((x) => x.id === last) : undefined;
+    if (found) void onSelectOffer(found.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

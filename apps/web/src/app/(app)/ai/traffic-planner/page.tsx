@@ -48,8 +48,8 @@ export default async function TrafficPlannerPage({
       /* invalid id: render empty — no implicit fallback to a previous offer */
     }
   }
-  // 没带有效 offerId 时不接上次 offer：输入框保持空，旧数据是历史，
-  // 只有明确选了 offer 才载入该 offer 的快照。
+  // 没带有效 offerId 时，客户端用上次选的 offer 回落（选一次，到处带）；
+  // 仍可下拉换 offer。旧数据只留历史，不静默混入。
 
   let offers: PlannerOffer[] = [];
   try {

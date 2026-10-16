@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { loadWorkStateAction } from "@/lib/api/work-state-actions";
+import { getLastOfferId, setLastOfferId } from "@/lib/current-offer";
 import { useWorkState } from "@/lib/use-work-state";
 import { coachCheckAction, type CoachFinding } from "@/lib/api/coach-actions";
 import { CoachGate, hasCoachBlock } from "@/components/coach/coach-gate";
@@ -514,10 +515,21 @@ export function AdsAutoClient({
   };
   // 投放选词里定好的关键词（可选）：填了就用这套，不再 AI 生成
   const [kwText, setKwText] = useState("");
-  const [offerId] = useState<string | null>(initialOfferId ?? null);
+  const [offerId, setOfferId] = useState<string | null>(initialOfferId ?? null);
   const urlKwRef = useRef<string | null>(null);
   const urlUrlsRef = useRef<string | null>(null);
   const urlCsRef = useRef<string | null>(null);
+
+  /** 快照恢复（URL 参数优先于快照）。挂载恢复和上次 offer 回落共用。 */
+  const applyAdsAutoSnapshot = (snap: Record<string, unknown>) => {
+    const str = (v: unknown) => (v == null ? "" : String(v));
+    if (urlUrlsRef.current == null && str(snap.urlsText)) setUrlsText(str(snap.urlsText));
+    if (urlKwRef.current == null && str(snap.kwText)) setKwText(normalizeKwText(str(snap.kwText)));
+    if (urlCsRef.current == null && (snap.copyStyle === "official" || snap.copyStyle === "affiliate" || snap.copyStyle === "expert"))
+      setCopyStyle(snap.copyStyle);
+    if (snap.language === "zh" || snap.language === "en") setLanguage(snap.language);
+    if (str(snap.googleAccountId)) setGoogleAccountId(str(snap.googleAccountId));
+  };
 
   /* 自动保存：URL/关键词/口吻/语言按 offer 隔离，刷新不丢（URL 参数优先于快照） */
   const { restored } = useWorkState({
@@ -536,17 +548,31 @@ export function AdsAutoClient({
       Boolean(
         (snap.urlsText as string)?.trim() || (snap.kwText as string)?.trim()
       ),
-    applySnapshot: (snap) => {
-      const str = (v: unknown) => (v == null ? "" : String(v));
-      if (urlUrlsRef.current == null && str(snap.urlsText)) setUrlsText(str(snap.urlsText));
-      if (urlKwRef.current == null && str(snap.kwText)) setKwText(normalizeKwText(str(snap.kwText)));
-      if (urlCsRef.current == null && (snap.copyStyle === "official" || snap.copyStyle === "affiliate" || snap.copyStyle === "expert"))
-        setCopyStyle(snap.copyStyle);
-      if (snap.language === "zh" || snap.language === "en") setLanguage(snap.language);
-      if (str(snap.googleAccountId)) setGoogleAccountId(str(snap.googleAccountId));
-    },
+    applySnapshot: applyAdsAutoSnapshot,
     watch: [offerId, urlsText, kwText, language, copyStyle, googleAccountId],
   });
+
+  /* 全局当前 offer：?offerId= 显式传入时以 URL 为准并更新记忆；
+     直接进页面没带 offerId 时，用上次选的 offer（选一次，到处带）。
+     useWorkState 只在挂载时恢复一次（当时 offerId 还是 null），回落时这里显式补恢复。 */
+  useEffect(() => {
+    if (initialOfferId) {
+      setLastOfferId(initialOfferId);
+      return;
+    }
+    const last = getLastOfferId();
+    if (!last) return;
+    setOfferId(last);
+    void (async () => {
+      try {
+        const res = await loadWorkStateAction("ads-auto", last);
+        if (res.ok && res.data.state) applyAdsAutoSnapshot(res.data.state);
+      } catch {
+        /* 恢复失败不打断 */
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /* 取某 offer 的投放选词（优先）/ 投流关键词（回落），转成 kwText 行 */
   const loadLaunchKeywordLines = async (oid: string): Promise<string[]> => {
@@ -575,7 +601,7 @@ export function AdsAutoClient({
     return [];
   };
 
-  /* 生效 offer：只认 ?offerId= 显式传入的 offer，不取最近用过的 offer。
+  /* 生效 offer：?offerId= 显式传入，或上次选的 offer 回落（选一次，到处带）。
      没选 offer 时关键词框保持空（旧数据是历史，不自动进框）。 */
   const resolveOfferId = async (): Promise<string | null> => {
     return offerId;
@@ -602,7 +628,7 @@ export function AdsAutoClient({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [restored]);
+  }, [restored, offerId]);
   // 教练模式（第十三批）
   const [brandTermsText, setBrandTermsText] = useState("");
   const [coachFindings, setCoachFindings] = useState<CoachFinding[]>([]);

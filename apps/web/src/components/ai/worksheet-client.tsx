@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useDict } from "@/i18n/use-dict";
 import { EntityPageHeader } from "@/components/entities/ui";
 import { calcProfit } from "@/lib/profit-calc";
+import { getLastOfferId, setLastOfferId } from "@/lib/current-offer";
 import {
   listWorkStateHistoryAction,
   loadWorkStateAction,
@@ -601,14 +602,25 @@ export function WorksheetClient({
     }
   };
 
-  // 挂载时恢复：只有 ?offerId= 明确选了 offer 才恢复该 offer 的快照；
-  // 没选 offer 时不恢复（输入框保持空，旧数据只是历史）。
+  // 挂载时恢复：?offerId= 明确选了 offer 时恢复该 offer 的快照；
+  // 没带 offerId 时用上次选的 offer 回落（选一次，到处带）。
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        if (!initialOffer?.id) return;
-        const res = await loadWorkStateAction("ai-worksheet", initialOffer.id);
+        let oid: string | null = initialOffer?.id ?? null;
+        if (oid) {
+          setLastOfferId(oid);
+        } else {
+          const last = getLastOfferId();
+          const found = last ? offers.find((o) => o.id === last) : undefined;
+          if (found) {
+            oid = found.id;
+            setOffer(found);
+          }
+        }
+        if (!oid) return;
+        const res = await loadWorkStateAction("ai-worksheet", oid);
         if (cancelled || !res.ok || !res.data.state) return;
         if (!snapshotMeaningful(res.data.state)) return;
         applySnapshot(res.data.state);
@@ -882,6 +894,7 @@ export function WorksheetClient({
               setProfitState(null);
               setTrafficResult(null);
               setOffer(sel);
+              setLastOfferId(sel?.id ?? null);
               setManualOpen(false);
               // 再加载新 offer 的快照（有则恢复）
               if (sel) {
@@ -915,7 +928,10 @@ export function WorksheetClient({
           {offer && (
             <button
               type="button"
-              onClick={() => setOffer(null)}
+              onClick={() => {
+                setOffer(null);
+                setLastOfferId(null);
+              }}
               className="text-xs text-ink/40 hover:text-red-600"
             >
               {w.clearOffer ?? "清除"}

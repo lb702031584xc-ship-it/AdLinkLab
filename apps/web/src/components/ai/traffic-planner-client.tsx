@@ -22,6 +22,7 @@ import {
 import { loadWorkStateAction } from "@/lib/api/work-state-actions";
 import { checkKeywordsAction, type KeywordCheckResult } from "@/lib/api/keyword-check-actions";
 import { calcProfit } from "@/lib/profit-calc";
+import { getLastOfferId, setLastOfferId } from "@/lib/current-offer";
 import { useWorkState } from "@/lib/use-work-state";
 import type {
   TrafficPlanKeywordInput,
@@ -496,6 +497,8 @@ export function TrafficPlannerClient({
     if (key && appliedOfferRef.current !== key) {
       appliedOfferRef.current = key;
       fillFromOffer(initialOffer!);
+      // 显式 offer（?offerId= / 工作表）→ 更新全局当前 offer 记忆（手动 offer id 为空时不记）
+      if (initialOffer!.id) setLastOfferId(initialOffer!.id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialOffer]);
@@ -535,6 +538,7 @@ export function TrafficPlannerClient({
     setResult(null);
     setMsg(null);
     fillFromOffer(o);
+    setLastOfferId(o.id);
     try {
       const res = await loadWorkStateAction("traffic-planner", o.id);
       if (res.ok && res.data.state && snapshotMeaningful(res.data.state)) {
@@ -544,6 +548,18 @@ export function TrafficPlannerClient({
       /* 恢复失败不打断 */
     }
   };
+
+  /** 全局当前 offer：没带 ?offerId=、工作表也没传 offer 时，用上次选的 offer
+      （选一次，到处带）。嵌入版没传 offers 列表时不做回落，由工作表自己回落。 */
+  const lastOfferFallbackRef = useRef(false);
+  useEffect(() => {
+    if (initialOffer || lastOfferFallbackRef.current) return;
+    lastOfferFallbackRef.current = true;
+    const last = getLastOfferId();
+    const found = last ? (offers ?? []).find((x) => x.id === last) : undefined;
+    if (found) void onSelectOffer(found.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /** 需求验证的枚举 → 投流表的值：竞争度 Low/Medium/High；意图用与需求验证页一致的标签 */
   const researchCompetition = (v?: string) =>
