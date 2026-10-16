@@ -51,6 +51,10 @@ import {
 } from "../ai/ad-generator.js";
 import type { AnalysisLanguage } from "../ai/prompts.js";
 import { fetchSerpAds } from "../ai/serp-ads.js";
+import {
+  assertPlanCurrencyMatches,
+  convertPlanCurrency,
+} from "../ai/plan-currency.js";
 import { readEncryptedTrafficSetting } from "../traffic/settings.js";
 import {
   DATAFORSEO_LOGIN_SETTING,
@@ -185,6 +189,8 @@ export async function registerAdsAutoRoutes(
       copyStyle?: unknown;
       /** 可选：expert 口吻时，用户选用的插件 SERP 抓取记录 id（Google 搜索结果页） */
       serpCaptureId?: unknown;
+      /** 可选：汇率（1 USD = X 目标货币）。计划货币与广告账户货币不一致时必填，用于换算。 */
+      fxRate?: unknown;
     };
   }>("/api/v1/ads/auto-create", async (request) => {
     const info = await requireSession(deps, request);
@@ -207,6 +213,15 @@ export async function registerAdsAutoRoutes(
     const offerId = asUuid(body.offerId, "offerId") ?? null;
     const googleAccountId = asUuid(body.googleAccountId, "googleAccountId") ?? null;
     const language: AnalysisLanguage = body.language === "en" ? "en" : "zh";
+    // 汇率（可选）：1 USD = X 目标货币。提供时必须为正数，否则报错。
+    let fxRate: number | null = null;
+    if (body.fxRate !== undefined && body.fxRate !== null && body.fxRate !== "") {
+      const n = Number(body.fxRate);
+      if (!Number.isFinite(n) || n <= 0) {
+        throw new ValidationError("fxRate 必须是正数（1 USD = X 目标货币）");
+      }
+      fxRate = n;
+    }
     // 手动页面文字：与 urls 一一对应，提供则跳过抓取（Amazon 等反爬站点用）
     const pageTexts: Array<string | null> = Array.isArray(body.pageTexts)
       ? body.pageTexts.map((t) =>
@@ -352,6 +367,27 @@ export async function registerAdsAutoRoutes(
       copyStyle,
       finalUrls,
     });
+
+    // 按广告账户结算货币换算计划金额：计划按 USD 生成，账户为 CNY 时必须换算，
+    // 否则 Script 会把 USD 数值当成账户货币推出去（差一个汇率）。账户找不到时不换算。
+    if (googleAccountId) {
+      const account = await prisma.googleAccount.findFirst({
+        where: { id: googleAccountId, tenantId: info.tenantId },
+        select: { currency: true },
+      });
+      const accountCurrency = account?.currency?.trim().toUpperCase() || "";
+      const planCurrency = plan.campaign.dailyBudget.currency.trim().toUpperCase();
+      if (accountCurrency && accountCurrency !== planCurrency) {
+        if (fxRate === null) {
+          throw new ValidationError(
+            `计划货币 ${planCurrency} 与广告账户货币 ${accountCurrency} 不一致，请提供汇率 fxRate（1 USD = X ${accountCurrency}）以换算`
+          );
+        }
+        // 计划货币既非 USD 也非账户货币时 convertPlanCurrency 抛不支持的货币对。
+        convertPlanCurrency(plan, accountCurrency, fxRate);
+      }
+    }
+
     planStore.put(plan);
 
     return {
@@ -443,6 +479,29 @@ export async function registerAdsAutoRoutes(
     }
     const plan = loadPlan(planId, info.tenantId);
 
+    // 防贴标签：货币只能换算、不能只改标签。只改货币、不改金额时拒绝——
+    // 金额还是旧货币的数、标签却变了。货币 + 金额一起改时放行（调用方已按
+    // 新货币换算过金额，如自动化广告页切换货币时同时换算预算/出价）。
+    const originalCurrency = plan.campaign.dailyBudget.currency.trim().toUpperCase();
+    if (
+      dailyBudgetCurrencyOverride !== null &&
+      dailyBudgetCurrencyOverride !== originalCurrency &&
+      dailyBudgetOverride === null
+    ) {
+      throw new ValidationError(
+        `预算货币已变更（${originalCurrency} → ${dailyBudgetCurrencyOverride}）但金额未改，请重新生成计划（生成时按广告账户货币换算），不要只改货币标签`
+      );
+    }
+    if (
+      maxCpcCurrencyOverride !== null &&
+      maxCpcCurrencyOverride !== originalCurrency &&
+      maxCpcOverride === null
+    ) {
+      throw new ValidationError(
+        `出价货币已变更（${originalCurrency} → ${maxCpcCurrencyOverride}）但金额未改，请重新生成计划（生成时按广告账户货币换算），不要只改货币标签`
+      );
+    }
+
     // Budget currency first: the maxCpc override below falls back to the
     // (possibly just-updated) budget currency when no explicit maxCpc
     // currency was sent.
@@ -493,6 +552,19 @@ export async function registerAdsAutoRoutes(
           (plan.googleAccountId ? " and Google account" : "") +
           ". Set up a Script integration first."
       );
+    }
+
+    // 校验拦截：计划货币必须 == 广告账户结算货币，否则拒绝（防止错货币的
+    // 计划推到 Google Ads）。账户查不到时跳过；integration 没有 googleAccountId
+    // 时跳过校验（保持旧行为）。
+    if (integration.googleAccountId) {
+      const account = await prisma.googleAccount.findFirst({
+        where: { id: integration.googleAccountId, tenantId: info.tenantId },
+        select: { currency: true },
+      });
+      if (account?.currency?.trim()) {
+        assertPlanCurrencyMatches(plan, account.currency);
+      }
     }
 
     // Idempotent: confirming the same plan twice returns the existing target.

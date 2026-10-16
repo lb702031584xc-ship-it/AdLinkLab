@@ -389,6 +389,11 @@ export const entityApi = {
       currency?: string;
       timezone?: string;
     }) => post<GoogleAccount>(`/api/v1/google-accounts`, input),
+    update: (id: string, input: { currency: string }) =>
+      patch<GoogleAccount>(
+        `/api/v1/google-accounts/${encodeURIComponent(id)}`,
+        input
+      ),
     getStatus: (id: string) =>
       apiFetch<GoogleAccountStatus>(
         `/api/v1/google-accounts/${encodeURIComponent(id)}/status`

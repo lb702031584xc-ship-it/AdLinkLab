@@ -29,7 +29,7 @@ function mapError(e: unknown, fallback: string): { ok: false; error: string } {
 
 export async function requestAdPlanAction(
   urls: string[],
-  opts: { language?: "zh" | "en"; googleAccountId?: string; pageTexts?: Array<string | null>; keywords?: Array<{ text: string; matchType?: string }>; copyStyle?: "official" | "affiliate" | "expert"; serpCaptureId?: string } = {}
+  opts: { language?: "zh" | "en"; googleAccountId?: string; pageTexts?: Array<string | null>; keywords?: Array<{ text: string; matchType?: string }>; copyStyle?: "official" | "affiliate" | "expert"; serpCaptureId?: string; fxRate?: number } = {}
 ): Promise<AdsAutoActionResult<AutoCreateResult>> {
   try {
     return { ok: true, data: await requestAdPlan(urls, opts) };

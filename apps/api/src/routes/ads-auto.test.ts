@@ -63,6 +63,7 @@ function makeFakePrisma() {
   const targets: Row[] = [];
   const auditLogs: Row[] = [];
   const offerCaptures: Row[] = [];
+  const googleAccounts: Row[] = [];
   return {
     tenant: mkStore(tenants),
     user: mkStore(users),
@@ -87,7 +88,8 @@ function makeFakePrisma() {
     scriptSyncTarget: mkStore(targets),
     auditLog: mkStore(auditLogs),
     offerCapture: mkStore(offerCaptures),
-    _rows: { tenants, users, sessions, aiSettings, integrations, targets, auditLogs, offerCaptures },
+    googleAccount: mkStore(googleAccounts),
+    _rows: { tenants, users, sessions, aiSettings, integrations, targets, auditLogs, offerCaptures, googleAccounts },
   };
 }
 
@@ -528,6 +530,70 @@ describe("POST /api/v1/ads/auto-create/confirm", () => {
     expect(stored?.plan.campaign.geoTargets).toEqual(["US", "CA"]);
     const logs = await (fake as any).auditLog.findMany({});
     expect(logs[0].after.dailyBudget.amount).toBe(50);
+  });
+
+  it("allows currency change when the amount changes with it (client already converted)", async () => {
+    await (fake as any).googleAdsScriptIntegration.create({
+      data: {
+        id: randomUUID(),
+        tenantId,
+        googleAccountId: randomUUID(),
+        name: "Test integration",
+        status: "ACTIVE",
+        tokenKeyId: "k1",
+        tokenPrefix: "alk_s_ab12",
+        tokenHash: "hash-1",
+      },
+    });
+    const app = await buildApp(fake, planStore);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/ads/auto-create/confirm",
+      headers: cookie(token),
+      payload: {
+        planId,
+        dailyBudget: 175.5,
+        dailyBudgetCurrency: "CNY",
+        maxCpc: 8.88,
+        maxCpcCurrency: "CNY",
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const stored = planStore.get(planId);
+    expect(stored?.plan.campaign.dailyBudget).toEqual(
+      expect.objectContaining({ amount: 175.5, currency: "CNY" })
+    );
+    for (const g of stored?.plan.adGroups ?? []) {
+      expect(g.group.maxCpc).toEqual(
+        expect.objectContaining({ amount: 8.88, currency: "CNY" })
+      );
+    }
+  });
+
+  it("rejects currency-only change (relabel without converting the amount)", async () => {
+    await (fake as any).googleAdsScriptIntegration.create({
+      data: {
+        id: randomUUID(),
+        tenantId,
+        googleAccountId: randomUUID(),
+        name: "Test integration",
+        status: "ACTIVE",
+        tokenKeyId: "k1",
+        tokenPrefix: "alk_s_ab12",
+        tokenHash: "hash-1",
+      },
+    });
+    const app = await buildApp(fake, planStore);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/ads/auto-create/confirm",
+      headers: cookie(token),
+      payload: { planId, dailyBudgetCurrency: "CNY" },
+    });
+    expect(res.statusCode).toBe(400);
+    // Failed override leaves the plan untouched (still USD).
+    const stored = planStore.get(planId);
+    expect(stored?.plan.campaign.dailyBudget.currency).toBe("USD");
   });
 
   it("rejects invalid budget / geo overrides", async () => {

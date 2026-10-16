@@ -13,6 +13,7 @@ import {
   type Column,
 } from "@/components/entities/ui";
 import { SyncAccountButton } from "@/components/entities/sync-account-button";
+import { GoogleAccountCurrencySelect } from "@/components/entities/google-account-currency-select";
 import { getLang } from "@/i18n/lang";
 import { getDictionary } from "@/i18n/dictionaries";
 
@@ -85,7 +86,12 @@ export default async function GoogleAccountsPage({
     },
     {
       header: t.common.misc.actions,
-      render: (a) => <SyncAccountButton accountId={a.id} />,
+      render: (a) => (
+        <span className="inline-flex items-start justify-end gap-2">
+          <GoogleAccountCurrencySelect accountId={a.id} currency={a.currency} />
+          <SyncAccountButton accountId={a.id} />
+        </span>
+      ),
       className: "text-right",
     },
   ];

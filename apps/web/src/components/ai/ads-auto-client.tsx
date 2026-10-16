@@ -86,6 +86,7 @@ function PlanPreview({
   onBudgetChange,
   budgetCurrency,
   onBudgetCurrencyChange,
+  currencyOptions,
   geo,
   onGeoChange,
   keywordCheck,
@@ -98,6 +99,8 @@ function PlanPreview({
   onBudgetChange: (v: string) => void;
   budgetCurrency: string;
   onBudgetCurrencyChange: (v: string) => void;
+  /** 货币选项：[USD, X]，X = 已选账户货币（非 USD 时）否则 CNY。 */
+  currencyOptions: string[];
   geo: string[];
   onGeoChange: (v: string[]) => void;
   keywordCheck: KeywordCheckState;
@@ -155,7 +158,7 @@ function PlanPreview({
                 className="rounded-md border border-ink/15 bg-paper px-1 py-1 text-sm text-ink"
                 aria-label={d.preview.budgetCurrency}
               >
-                {["CNY", "USD"].map((cur) => (
+                {currencyOptions.map((cur) => (
                   <option key={cur} value={cur}>
                     {cur}
                   </option>
@@ -418,7 +421,7 @@ export function AdsAutoClient({
   const [brandCopied, setBrandCopied] = useState(false);
   const [googleAccountId, setGoogleAccountId] = useState("");
   const [googleAccounts, setGoogleAccounts] = useState<
-    { id: string; name: string; customerId: string }[]
+    { id: string; name: string; customerId: string; currency?: string }[]
   >([]);
   const [plan, setPlan] = useState<AdPlan | null>(null);
   // 关键词 AI 检查：结果驱动移除流程（移除 = 带过滤后关键词重新生成计划；
@@ -428,9 +431,9 @@ export function AdsAutoClient({
     results: [],
     error: null,
   });
-  // 预览里可改：预算 + 预算货币 + 地域（初始为 AI 建议值，确认时作为覆盖值传给服务端）。
+  // 预览里可改：预算 + 地域（初始为 AI 建议值，确认时作为覆盖值传给服务端）。
+  // 货币只有一个状态 bidCurrency（计划货币），预算货币下拉与出价区货币下拉共用它。
   const [editedBudget, setEditedBudget] = useState("");
-  const [editedBudgetCurrency, setEditedBudgetCurrency] = useState("USD");
   const [editedGeo, setEditedGeo] = useState<string[]>([]);
   const [confirm, setConfirm] = useState<ConfirmResult | null>(null);
   const [scriptSource, setScriptSource] = useState<string | null>(null);
@@ -530,6 +533,11 @@ export function AdsAutoClient({
   const urlUrlsRef = useRef<string | null>(null);
   const urlCsRef = useRef<string | null>(null);
 
+  // 计划货币与汇率 state 提前声明：useWorkState 的 watch 数组在 render 时立即读取它们，
+  // 若声明在后会触发 TDZ（ReferenceError）。汇率 helpers 仍在出价区 state 块里（闭包，运行时才用）。
+  const [bidCurrency, setBidCurrency] = useState("USD");
+  const [fxRate, setFxRate] = useState("7.10");
+
   /** 快照恢复（URL 参数优先于快照）。挂载恢复和上次 offer 回落共用。 */
   const applyAdsAutoSnapshot = (snap: Record<string, unknown>) => {
     const str = (v: unknown) => (v == null ? "" : String(v));
@@ -544,6 +552,15 @@ export function AdsAutoClient({
       setCopyStyle(snap.copyStyle);
     if (snap.language === "zh" || snap.language === "en") setLanguage(snap.language);
     if (str(snap.googleAccountId)) setGoogleAccountId(str(snap.googleAccountId));
+    if (typeof snap.bidCurrency === "string" && snap.bidCurrency.trim()) {
+      const bc = snap.bidCurrency.trim().toUpperCase();
+      setBidCurrency(bc);
+      if (typeof snap.fxRate === "string" && snap.fxRate.trim() && bc !== "USD") {
+        setFxRate(snap.fxRate.trim());
+        fxRateEditedRef.current = true;
+        fxRateCurrencyRef.current = bc;
+      }
+    }
   };
 
   /* 自动保存：URL/关键词/口吻/语言按 offer 隔离，刷新不丢（URL 参数优先于快照） */
@@ -558,13 +575,15 @@ export function AdsAutoClient({
       language,
       copyStyle,
       googleAccountId,
+      bidCurrency,
+      fxRate,
     }),
     isMeaningful: (snap) =>
       Boolean(
         (snap.urlsText as string)?.trim() || (snap.kwText as string)?.trim()
       ),
     applySnapshot: applyAdsAutoSnapshot,
-    watch: [offerId, urlsText, kwText, language, copyStyle, googleAccountId],
+    watch: [offerId, urlsText, kwText, language, copyStyle, googleAccountId, bidCurrency, fxRate],
   });
 
   /* 全局当前 offer：?offerId= 显式传入时以 URL 为准并更新记忆；
@@ -660,6 +679,7 @@ export function AdsAutoClient({
             id: a.id,
             name: a.name,
             customerId: a.customerId,
+            currency: a.currency,
           }))
         );
       }
@@ -716,13 +736,25 @@ export function AdsAutoClient({
         // 专家营销：选中 SERP 抓取时带上；其他口吻不传。
         serpCaptureId:
           copyStyle === "expert" && serpCaptureId ? serpCaptureId : undefined,
+        // 汇率（1 USD = X 目标货币）：只要合法就传，服务端只在需要换算时用；
+        // 不能只在 bidCurrency ≠ USD 时传——用户选了 CNY 账户直接点生成时，
+        // bidCurrency 还是 USD，但服务端按账户货币换算需要汇率，缺了会拒绝。
+        fxRate:
+          Number.isFinite(parseFloat(fxRate)) &&
+          parseFloat(fxRate) > 0
+            ? parseFloat(fxRate)
+            : undefined,
       });
       if (res.ok) {
         setPlan(res.data.plan);
         setEditedBudget(String(res.data.plan.campaign.dailyBudget.amount));
-        setEditedBudgetCurrency(
-          res.data.plan.campaign.dailyBudget.currency || "USD"
-        );
+        // 计划货币为准：已填的出价从旧货币换算到计划货币（预算刚从计划填入，已是计划货币，不换）。
+        const planCur = res.data.plan.campaign.dailyBudget.currency || "USD";
+        if (planCur !== bidCurrency) {
+          setBidCpc((prev) => convertAmount(prev, bidCurrency, planCur));
+          setBidCurrency(planCur);
+          ensureFxRateFor(planCur);
+        }
         setEditedGeo(res.data.plan.campaign.geoTargets);
         setCoachConfirmed(false);
         void runPlanCoachCheck(res.data.plan, brandTermsText);
@@ -824,8 +856,8 @@ export function AdsAutoClient({
       const budgetNum = parseFloat(editedBudget);
       const res = await confirmAdPlanAction(plan.planId, maxCpc, {
         dailyBudget: Number.isFinite(budgetNum) && budgetNum > 0 ? budgetNum : undefined,
-        dailyBudgetCurrency: editedBudgetCurrency || undefined,
-        // 出价货币跟随出价策略区的货币选择（只在提交了 maxCpc 时才传）。
+        // 预算与出价共用一个计划货币 bidCurrency。
+        dailyBudgetCurrency: bidCurrency || undefined,
         maxCpcCurrency: maxCpc !== undefined ? bidCurrency : undefined,
         geoTargets: editedGeo.length ? editedGeo : undefined,
       });
@@ -846,7 +878,74 @@ export function AdsAutoClient({
   const [bidCommission, setBidCommission] = useState("");
   const [bidCvr, setBidCvr] = useState("2");
   const [bidCpc, setBidCpc] = useState("");
-  const [bidCurrency, setBidCurrency] = useState("USD");
+  // bidCurrency / fxRate state 声明在 useWorkState 之前（见上方注释），这里只留 refs 与 helpers。
+
+  // 汇率：fxRate = "1 USD = X 目标货币"（如 7.10 表示 1 USD = 7.10 CNY）。
+  // 只在 bidCurrency ≠ USD 时显示。用户手改过则按货币记住（不被默认值覆盖）。
+  const fxRateEditedRef = useRef(false);
+  const fxRateCurrencyRef = useRef<string | null>(null);
+
+  const fxRateDefaultFor = (cur: string) => (cur === "CNY" ? "7.10" : "1.0");
+
+  // 某货币相对 USD 的汇率（USD 本身为 1；非 USD 若是用户手改过的该货币汇率则用手改值，否则用默认值）。
+  const rateForCurrency = (cur: string): number => {
+    if (cur === "USD") return 1;
+    if (fxRateEditedRef.current && fxRateCurrencyRef.current === cur) {
+      const r = parseFloat(fxRate);
+      if (Number.isFinite(r) && r > 0) return r;
+    }
+    const d = parseFloat(fxRateDefaultFor(cur));
+    return Number.isFinite(d) && d > 0 ? d : 1;
+  };
+
+  // 金额换算（走 USD 中转）：from → USD → to。非法数字原样返回。
+  const convertAmount = (value: string, from: string, to: string): string => {
+    const n = parseFloat(value);
+    if (!Number.isFinite(n) || from === to) return value;
+    const out = (n / rateForCurrency(from)) * rateForCurrency(to);
+    return String(Math.round(out * 10000) / 10000);
+  };
+
+  // 切到某货币后，若 fxRate 不是该货币的汇率，填该货币默认值并清手改标记。
+  const ensureFxRateFor = (cur: string) => {
+    if (cur !== "USD" && fxRateCurrencyRef.current !== cur) {
+      setFxRate(fxRateDefaultFor(cur));
+      fxRateEditedRef.current = false;
+      fxRateCurrencyRef.current = cur;
+    }
+  };
+
+  /** 切换计划货币：必须换算金额（editedBudget + bidCpc），不许只改标签。 */
+  const changePlanCurrency = (next: string) => {
+    const target = next || "USD";
+    if (target === bidCurrency) return;
+    setEditedBudget((prev) => convertAmount(prev, bidCurrency, target));
+    setBidCpc((prev) => convertAmount(prev, bidCurrency, target));
+    setBidCurrency(target);
+    ensureFxRateFor(target);
+  };
+
+  // 出价区展示用换算因子：USD 推导值 × 它 = 计划货币下的值。
+  const fxRateNum = parseFloat(fxRate);
+  const fxFactor =
+    bidCurrency === "USD"
+      ? 1
+      : Number.isFinite(fxRateNum) && fxRateNum > 0
+        ? fxRateNum
+        : 1;
+
+  // 货币选项只有两项：[USD, X]，X = 已选账户货币（非 USD 时）否则 CNY，去重。
+  const selectedAccountCurrency = (
+    googleAccounts.find((a) => a.id === googleAccountId)?.currency || ""
+  ).toUpperCase();
+  const planCurrencyOptions = Array.from(
+    new Set([
+      "USD",
+      selectedAccountCurrency && selectedAccountCurrency !== "USD"
+        ? selectedAccountCurrency
+        : "CNY",
+    ])
+  );
   // 佣金是否从上方 Offer 带入（展示提示用）。
   const [commissionFromOffer, setCommissionFromOffer] = useState<string | null>(null);
 
@@ -942,24 +1041,29 @@ export function AdsAutoClient({
   const recommendedBid = plannerProfit?.maxCpcAtTargetRoi ?? null;
   const plannerBreakEven = plannerProfit?.breakEvenCpc ?? null;
 
-  // 选中档位的单次点击利润 = EPC − 该档 CPC。
-  const selectedTierCpc =
+  // 选中档位的单次点击利润 = EPC − 该档 CPC（内部统一按 USD 算，展示时 × 换算因子）。
+  // 三档建议是 USD 推导值；自定义 bidCpc 是计划货币，需先换回 USD 再算。
+  const selectedTierCpcUsd =
     bidStrategy === "conservative" ||
     bidStrategy === "moderate" ||
     bidStrategy === "aggressive"
       ? (bidSuggestions?.[bidStrategy] ?? null)
       : bidStrategy === "custom"
-        ? parseFloat(bidCpc) || null
+        ? (() => {
+            const c = parseFloat(bidCpc);
+            return Number.isFinite(c) ? c / fxFactor : null;
+          })()
         : null;
   const selectedPerClickProfit =
-    bidProfit !== null && selectedTierCpc !== null
-      ? bidProfit.epc - selectedTierCpc
+    bidProfit !== null && selectedTierCpcUsd !== null
+      ? bidProfit.epc - selectedTierCpcUsd
       : null;
 
   function selectBidStrategy(s: "conservative" | "moderate" | "aggressive") {
     setBidStrategy(s);
     if (bidSuggestions) {
-      setBidCpc(bidSuggestions[s].toFixed(4));
+      // 采用换算后的值（计划货币），确认推出去的是计划货币的数。
+      setBidCpc((bidSuggestions[s] * fxFactor).toFixed(4));
     }
   }
 
@@ -1059,7 +1163,15 @@ export function AdsAutoClient({
             <select
               id="ads-auto-account"
               value={googleAccountId}
-              onChange={(e) => setGoogleAccountId(e.target.value)}
+              onChange={(e) => {
+                const id = e.target.value;
+                setGoogleAccountId(id);
+                // 选账户时货币跟随账户：账户货币非 USD 时把计划金额换算过去；USD 时不变。
+                const cur = (
+                  googleAccounts.find((a) => a.id === id)?.currency || ""
+                ).toUpperCase();
+                if (cur && cur !== "USD") changePlanCurrency(cur);
+              }}
               className={inputClass}
             >
               <option value="">{d.form.googleAccountPlaceholder}</option>
@@ -1070,6 +1182,30 @@ export function AdsAutoClient({
               ))}
             </select>
           </div>
+          {/* 汇率：选了非 USD 结算账户时在生成前可见（出价区的字段只在生成后才有，
+              只靠它的话，选 CNY 账户直接点生成会因缺汇率被拒绝）。与出价区字段共用同一 state。 */}
+          {selectedAccountCurrency && selectedAccountCurrency !== "USD" && (
+            <div>
+              <label className={labelClass} htmlFor="ads-auto-fxrate">
+                {d.bidStrategy.fxRateLabel}
+              </label>
+              <input
+                id="ads-auto-fxrate"
+                inputMode="decimal"
+                value={fxRate}
+                onChange={(e) => {
+                  setFxRate(e.target.value);
+                  fxRateEditedRef.current = true;
+                  fxRateCurrencyRef.current = selectedAccountCurrency;
+                }}
+                placeholder="7.10"
+                className={`${inputClass} w-28`}
+              />
+              <p className="mt-1 text-xs text-ink/55">
+                1 USD = {fxRate} {selectedAccountCurrency}
+              </p>
+            </div>
+          )}
           <button
             type="button"
             onClick={onGenerate}
@@ -1309,8 +1445,9 @@ export function AdsAutoClient({
             d={d}
             budget={editedBudget}
             onBudgetChange={setEditedBudget}
-            budgetCurrency={editedBudgetCurrency}
-            onBudgetCurrencyChange={setEditedBudgetCurrency}
+            budgetCurrency={bidCurrency}
+            onBudgetCurrencyChange={changePlanCurrency}
+            currencyOptions={planCurrencyOptions}
             geo={editedGeo}
             onGeoChange={setEditedGeo}
             keywordCheck={keywordCheck}
@@ -1325,7 +1462,7 @@ export function AdsAutoClient({
             <div className="mt-3 grid gap-3 md:grid-cols-3">
               <div>
                 <label className={labelClass}>
-                  {d.bidStrategy.commissionLabel} ({bidCurrency})
+                  {d.bidStrategy.commissionLabel} (USD)
                 </label>
                 <input
                   inputMode="decimal"
@@ -1354,22 +1491,44 @@ export function AdsAutoClient({
                 <label className={labelClass}>{d.bidStrategy.currencyLabel}</label>
                 <select
                   value={bidCurrency}
-                  onChange={(e) => setBidCurrency(e.target.value)}
+                  onChange={(e) => changePlanCurrency(e.target.value)}
                   className={inputClass}
                 >
-                  {["USD", "CNY", "EUR", "GBP", "JPY"].map((c) => (
+                  {planCurrencyOptions.map((c) => (
                     <option key={c} value={c}>{c}</option>
                   ))}
                 </select>
               </div>
             </div>
+            {/* 汇率：仅计划货币非 USD 时显示。1 USD = fxRate 计划货币。 */}
+            {bidCurrency !== "USD" && (
+              <div className="mt-3 flex flex-wrap items-end gap-2">
+                <div>
+                  <label className={labelClass}>{d.bidStrategy.fxRateLabel}</label>
+                  <input
+                    inputMode="decimal"
+                    value={fxRate}
+                    onChange={(e) => {
+                      setFxRate(e.target.value);
+                      fxRateEditedRef.current = true;
+                      fxRateCurrencyRef.current = bidCurrency;
+                    }}
+                    placeholder="7.10"
+                    className={`${inputClass} w-28`}
+                  />
+                </div>
+                <p className="text-xs text-ink/55">
+                  1 USD = {fxRate} {bidCurrency}
+                </p>
+              </div>
+            )}
             {/* 出价数据表：始终渲染，佣金未填时显示 — */}
             <dl className="mt-3 grid grid-cols-2 gap-2 text-sm md:grid-cols-3">
               <div className="rounded-lg bg-ink/[0.03] px-3 py-2">
                 <dt className="text-ink/55">{d.bidStrategy.breakEven}</dt>
                 <dd className="mt-0.5 font-medium text-ink">
                   {bidSuggestions
-                    ? `${bidSuggestions.breakEven.toFixed(4)} ${bidCurrency}`
+                    ? `${(bidSuggestions.breakEven * fxFactor).toFixed(4)} ${bidCurrency}`
                     : "—"}
                 </dd>
               </div>
@@ -1377,7 +1536,7 @@ export function AdsAutoClient({
                 <dt className="text-ink/55">{d.bidStrategy.epc}</dt>
                 <dd className="mt-0.5 font-medium text-ink">
                   {bidProfit !== null
-                    ? `${bidProfit.epc.toFixed(4)} ${bidCurrency}`
+                    ? `${(bidProfit.epc * fxFactor).toFixed(4)} ${bidCurrency}`
                     : "—"}
                 </dd>
               </div>
@@ -1393,7 +1552,7 @@ export function AdsAutoClient({
                   }`}
                 >
                   {selectedPerClickProfit !== null
-                    ? `${selectedPerClickProfit >= 0 ? "+" : ""}${selectedPerClickProfit.toFixed(4)} ${bidCurrency}`
+                    ? `${selectedPerClickProfit * fxFactor >= 0 ? "+" : ""}${(selectedPerClickProfit * fxFactor).toFixed(4)} ${bidCurrency}`
                     : "—"}
                 </dd>
               </div>
@@ -1414,7 +1573,7 @@ export function AdsAutoClient({
                     onClick={() => selectBidStrategy(s)}
                     className={`rounded-lg border px-3 py-2 text-sm ${bidStrategy === s ? "border-ink bg-ink text-white" : "border-ink/15"}`}
                   >
-                    {d.bidStrategy[s]}: {bidSuggestions[s].toFixed(4)}
+                    {d.bidStrategy[s]}: {(bidSuggestions[s] * fxFactor).toFixed(4)}
                   </button>
                 ))}
               </div>
@@ -1439,7 +1598,7 @@ export function AdsAutoClient({
                       <dt className="text-ink/55">{d.bidStrategy.recommendedBreakEven}</dt>
                       <dd className="mt-0.5 font-medium text-ink">
                         {plannerBreakEven !== null
-                          ? `${plannerBreakEven.toFixed(4)} ${bidCurrency}`
+                          ? `${(plannerBreakEven * fxFactor).toFixed(4)} ${bidCurrency}`
                           : "—"}
                       </dd>
                     </div>
@@ -1447,7 +1606,7 @@ export function AdsAutoClient({
                       <dt className="text-ink/55">{d.bidStrategy.recommendedValue}</dt>
                       <dd className="mt-0.5 font-medium text-ink">
                         {recommendedBid !== null
-                          ? `${recommendedBid.toFixed(4)} ${bidCurrency}`
+                          ? `${(recommendedBid * fxFactor).toFixed(4)} ${bidCurrency}`
                           : "—"}
                       </dd>
                     </div>
@@ -1467,7 +1626,8 @@ export function AdsAutoClient({
                       type="button"
                       onClick={() => {
                         if (recommendedBid === null) return;
-                        setBidCpc(recommendedBid.toFixed(4));
+                        // 采用换算后的值（计划货币），确认推出去的是计划货币的数。
+                        setBidCpc((recommendedBid * fxFactor).toFixed(4));
                         setBidStrategy("custom");
                       }}
                       disabled={recommendedBid === null}

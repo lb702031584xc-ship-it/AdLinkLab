@@ -51,6 +51,16 @@ export async function createGoogleAccountAction(input: {
   ]);
 }
 
+export async function updateGoogleAccountCurrencyAction(
+  id: string,
+  currency: string
+) {
+  return attempt(
+    () => entityApi.googleAccounts.update(id, { currency }),
+    ["/google-accounts"]
+  );
+}
+
 /* ---------- Offers ---------- */
 
 /** 取单条 offer（ads-auto 用 offerId 带入佣金时用；只读，不 revalidate）。 */

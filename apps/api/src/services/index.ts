@@ -67,6 +67,23 @@ export class GoogleAccountService {
     });
   }
 
+  /** 修改结算货币（CNY / USD 等 3 字母码）。租户隔离：账户不存在时抛 NotFoundError。 */
+  async updateCurrency(input: {
+    tenantId: string;
+    id: string;
+    currency: string;
+  }) {
+    const existing = await this.googleAccounts.findByIdForTenant(
+      input.tenantId,
+      input.id
+    );
+    if (!existing) throw new NotFoundError("GoogleAccount", input.id);
+    return this.googleAccounts.update(input.id, {
+      currency: input.currency,
+      currencyCode: input.currency,
+    });
+  }
+
   /**
    * Read-only provider/account status — no secrets, no mutations.
    * Always tenant-scoped (Phase 8.2).

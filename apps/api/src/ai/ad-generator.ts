@@ -107,6 +107,8 @@ language: AnalysisLanguage;
 sourceUrls: string[];
 offerId: string | null;
 googleAccountId: string | null;
+/** 货币换算记录（生成时按广告账户货币换算后写入）：fxRate = 1 USD = X to 货币。 */
+currencyConversion?: { from: string; to: string; fxRate: number };
 /** 文案口吻：official=官方口吻（Official Site 结构），affiliate=联盟安全口吻，expert=专家营销口吻 */
 copyStyle: AdCopyStyle;
 campaign: AdPlanCampaign;

@@ -151,7 +151,7 @@ async function apiFetchText(path: string): Promise<string> {
 
 export async function requestAdPlan(
   urls: string[],
-  opts: { language?: "zh" | "en"; googleAccountId?: string; pageTexts?: Array<string | null>; keywords?: Array<{ text: string; matchType?: string }>; copyStyle?: "official" | "affiliate" | "expert"; serpCaptureId?: string } = {}
+  opts: { language?: "zh" | "en"; googleAccountId?: string; pageTexts?: Array<string | null>; keywords?: Array<{ text: string; matchType?: string }>; copyStyle?: "official" | "affiliate" | "expert"; serpCaptureId?: string; fxRate?: number } = {}
 ): Promise<AutoCreateResult> {
   return apiFetch<AutoCreateResult>("/api/v1/ads/auto-create", {
     method: "POST",
@@ -163,6 +163,7 @@ export async function requestAdPlan(
       keywords: opts.keywords,
       copyStyle: opts.copyStyle,
       serpCaptureId: opts.serpCaptureId,
+      fxRate: opts.fxRate,
     }),
   });
 }

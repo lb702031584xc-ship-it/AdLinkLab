@@ -1051,6 +1051,26 @@ export async function registerRoutes(
     });
   });
 
+  app.patch<{
+    Params: { id: string };
+    Headers: { "x-tenant-id"?: string };
+    Body: { currency?: unknown };
+  }>("/api/v1/google-accounts/:id", async (request) => {
+    const tenantId = tenantOf(request);
+    const currency =
+      typeof request.body?.currency === "string"
+        ? request.body.currency.trim().toUpperCase()
+        : "";
+    if (!/^[A-Z]{3}$/.test(currency)) {
+      throw new ValidationError("currency must be a 3-letter currency code");
+    }
+    return services.googleAccounts.updateCurrency({
+      tenantId,
+      id: request.params.id,
+      currency,
+    });
+  });
+
   app.get<{
     Params: { id: string };
     Headers: { "x-tenant-id"?: string };
