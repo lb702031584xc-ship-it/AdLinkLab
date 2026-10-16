@@ -41,7 +41,12 @@ export async function requestAdPlanAction(
 export async function confirmAdPlanAction(
   planId: string,
   maxCpc?: number,
-  overrides?: { dailyBudget?: number; geoTargets?: string[] }
+  overrides?: {
+    dailyBudget?: number;
+    dailyBudgetCurrency?: string;
+    maxCpcCurrency?: string;
+    geoTargets?: string[];
+  }
 ): Promise<AdsAutoActionResult<ConfirmResult>> {
   try {
     return { ok: true, data: await confirmAdPlan(planId, maxCpc, overrides) };

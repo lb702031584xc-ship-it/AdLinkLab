@@ -13,7 +13,11 @@ import { zh as coachZh, en as coachEn } from "@/i18n/dict/coach";
 import { EntityPageHeader } from "@/components/entities/ui";
 import { DataQualityBadge } from "@/components/data-quality-badge";
 import type { AdsAutoDict } from "@/i18n/dict/ads-auto";
-import { listGoogleAccountsAction } from "@/lib/api/entity-actions";
+import {
+  getOfferAction,
+  listGoogleAccountsAction,
+} from "@/lib/api/entity-actions";
+import { calcProfit } from "@/lib/profit-calc";
 import { parseProductCaptureAiAction } from "@/lib/api/ai-actions";
 import { CapturePicker } from "@/components/ai/capture-picker";
 import type { OfferCaptureItem } from "@/lib/api/ai";
@@ -57,6 +61,8 @@ function PlanPreview({
   d,
   budget,
   onBudgetChange,
+  budgetCurrency,
+  onBudgetCurrencyChange,
   geo,
   onGeoChange,
 }: {
@@ -64,6 +70,8 @@ function PlanPreview({
   d: AdsAutoDict;
   budget: string;
   onBudgetChange: (v: string) => void;
+  budgetCurrency: string;
+  onBudgetCurrencyChange: (v: string) => void;
   geo: string[];
   onGeoChange: (v: string[]) => void;
 }) {
@@ -104,12 +112,23 @@ function PlanPreview({
                 className="w-20 rounded-md border border-ink/15 bg-paper px-2 py-1 text-sm text-ink"
                 aria-label={d.preview.budget}
               />
-              <span>
-                {c.dailyBudget.currency}
-                {d.preview.perDay}
-              </span>
+              <select
+                value={budgetCurrency}
+                onChange={(e) => onBudgetCurrencyChange(e.target.value)}
+                className="rounded-md border border-ink/15 bg-paper px-1 py-1 text-sm text-ink"
+                aria-label={d.preview.budgetCurrency}
+              >
+                {["CNY", "USD"].map((cur) => (
+                  <option key={cur} value={cur}>
+                    {cur}
+                  </option>
+                ))}
+              </select>
+              <span>{d.preview.perDay}</span>
             </dd>
-            <p className="mt-0.5 text-xs text-ink/55">{d.preview.budgetEditHint}</p>
+            <p className="mt-0.5 text-xs text-ink/55">
+              {d.preview.budgetEditHint} · {d.preview.currencyHint}
+            </p>
           </div>
           <div>
             <dt className="text-ink/55">{d.preview.geo}</dt>
@@ -136,6 +155,12 @@ function PlanPreview({
           <div>
             <dt className="text-ink/55">{d.preview.bidding}</dt>
             <dd className="font-medium text-ink">{c.bidding.strategy}</dd>
+            <dd className="mt-1 text-sm text-ink">
+              {d.preview.maxCpc}:{" "}
+              {c.bidding.maxCpc
+                ? `${c.bidding.maxCpc.amount.toFixed(4)} ${c.bidding.maxCpc.currency}`
+                : "—"}
+            </dd>
           </div>
           <div>
             <dt className="text-ink/55">{d.preview.status}</dt>
@@ -157,6 +182,12 @@ function PlanPreview({
           <div className="flex flex-wrap items-center gap-2">
             <h4 className="text-sm font-semibold text-ink">{block.group.name}</h4>
             <DataQualityBadge quality={block.group.dataQuality} />
+            <span className="text-xs text-ink/60">
+              {d.preview.maxCpc}:{" "}
+              {block.group.maxCpc
+                ? `${block.group.maxCpc.amount.toFixed(4)} ${block.group.maxCpc.currency}`
+                : "—"}
+            </span>
           </div>
           <p className="mt-1 break-all text-xs text-ink/55">
             {d.preview.finalUrl}: {block.group.finalUrl}
@@ -261,8 +292,9 @@ export function AdsAutoClient({
     { id: string; name: string; customerId: string }[]
   >([]);
   const [plan, setPlan] = useState<AdPlan | null>(null);
-  // 预览里可改：预算 + 地域（初始为 AI 建议值，确认时作为覆盖值传给服务端）。
+  // 预览里可改：预算 + 预算货币 + 地域（初始为 AI 建议值，确认时作为覆盖值传给服务端）。
   const [editedBudget, setEditedBudget] = useState("");
+  const [editedBudgetCurrency, setEditedBudgetCurrency] = useState("USD");
   const [editedGeo, setEditedGeo] = useState<string[]>([]);
   const [confirm, setConfirm] = useState<ConfirmResult | null>(null);
   const [scriptSource, setScriptSource] = useState<string | null>(null);
@@ -472,6 +504,9 @@ export function AdsAutoClient({
       if (res.ok) {
         setPlan(res.data.plan);
         setEditedBudget(String(res.data.plan.campaign.dailyBudget.amount));
+        setEditedBudgetCurrency(
+          res.data.plan.campaign.dailyBudget.currency || "USD"
+        );
         setEditedGeo(res.data.plan.campaign.geoTargets);
         setCoachConfirmed(false);
         void runPlanCoachCheck(res.data.plan, brandTermsText);
@@ -495,6 +530,9 @@ export function AdsAutoClient({
       const budgetNum = parseFloat(editedBudget);
       const res = await confirmAdPlanAction(plan.planId, maxCpc, {
         dailyBudget: Number.isFinite(budgetNum) && budgetNum > 0 ? budgetNum : undefined,
+        dailyBudgetCurrency: editedBudgetCurrency || undefined,
+        // 出价货币跟随出价策略区的货币选择（只在提交了 maxCpc 时才传）。
+        maxCpcCurrency: maxCpc !== undefined ? bidCurrency : undefined,
         geoTargets: editedGeo.length ? editedGeo : undefined,
       });
       if (res.ok) {
@@ -515,21 +553,75 @@ export function AdsAutoClient({
   const [bidCvr, setBidCvr] = useState("2");
   const [bidCpc, setBidCpc] = useState("");
   const [bidCurrency, setBidCurrency] = useState("USD");
+  // 佣金是否从上方 Offer 带入（展示提示用）。
+  const [commissionFromOffer, setCommissionFromOffer] = useState<string | null>(null);
 
-  function calcBidSuggestions() {
-    const commission = parseFloat(bidCommission);
-    const cvr = parseFloat(bidCvr) || 2;
-    if (!Number.isFinite(commission) || commission <= 0) return null;
-    const breakEven = (commission * cvr) / 100;
-    return {
-      breakEven,
-      conservative: breakEven * 0.5,
-      moderate: breakEven * 0.7,
-      aggressive: breakEven * 0.9,
+  // 佣金从上方 Offer 带入：?offerId= 时按 commissionType 推导 payout
+  //（fixed → 固定金额；percentage → 均价 × 百分比）。只在输入框为空时带入，不覆盖手填。
+  const bidCommissionRef = useRef("");
+  bidCommissionRef.current = bidCommission;
+  useEffect(() => {
+    if (!offerId) return;
+    let cancelled = false;
+    void (async () => {
+      const res = await getOfferAction(offerId);
+      if (cancelled || !res.ok) return;
+      // 用户已手填则不带入（ref 读最新值，避免闭包旧值）。
+      if (bidCommissionRef.current.trim()) return;
+      const o = res.data;
+      const value = Number(o.commissionValue);
+      if (!Number.isFinite(value) || value <= 0) return;
+      let payout: number | null = null;
+      if (o.commissionType === "fixed") payout = value;
+      else if (o.commissionType === "percentage") {
+        const avg = Number(o.avgPrice);
+        payout = Number.isFinite(avg) && avg > 0 ? (avg * value) / 100 : null;
+      }
+      if (payout !== null && payout > 0) {
+        setBidCommission(String(Math.round(payout * 100) / 100));
+        setCommissionFromOffer(o.name);
+      }
+    })();
+    return () => {
+      cancelled = true;
     };
-  }
+    // 只在 offerId 变化时带入一次；commission 变化不重跑（避免覆盖手填）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offerId]);
 
-  const bidSuggestions = calcBidSuggestions();
+  // 出价测算：统一走 @/lib/profit-calc（与盈利测算/工作表同一套公式）。
+  const bidProfit = (() => {
+    const commission = parseFloat(bidCommission);
+    const cvrPct = parseFloat(bidCvr);
+    if (!Number.isFinite(commission) || commission <= 0) return null;
+    const cvrF = Number.isFinite(cvrPct) && cvrPct > 0 ? cvrPct / 100 : 0.02;
+    return calcProfit({ payout: commission, cpc: 0, cvrF });
+  })();
+
+  // 三档出价建议：盈亏平衡 CPC × 系数（保守 50% / 稳健 70% / 激进 90%）。
+  const bidSuggestions =
+    bidProfit?.breakEvenCpc !== null && bidProfit?.breakEvenCpc !== undefined
+      ? {
+          breakEven: bidProfit.breakEvenCpc,
+          conservative: bidProfit.breakEvenCpc * 0.5,
+          moderate: bidProfit.breakEvenCpc * 0.7,
+          aggressive: bidProfit.breakEvenCpc * 0.9,
+        }
+      : null;
+
+  // 选中档位的单次点击利润 = EPC − 该档 CPC。
+  const selectedTierCpc =
+    bidStrategy === "conservative" ||
+    bidStrategy === "moderate" ||
+    bidStrategy === "aggressive"
+      ? (bidSuggestions?.[bidStrategy] ?? null)
+      : bidStrategy === "custom"
+        ? parseFloat(bidCpc) || null
+        : null;
+  const selectedPerClickProfit =
+    bidProfit !== null && selectedTierCpc !== null
+      ? bidProfit.epc - selectedTierCpc
+      : null;
 
   function selectBidStrategy(s: "conservative" | "moderate" | "aggressive") {
     setBidStrategy(s);
@@ -816,19 +908,21 @@ export function AdsAutoClient({
             d={d}
             budget={editedBudget}
             onBudgetChange={setEditedBudget}
+            budgetCurrency={editedBudgetCurrency}
+            onBudgetCurrencyChange={setEditedBudgetCurrency}
             geo={editedGeo}
             onGeoChange={setEditedGeo}
           />
 
           {/* Bid strategy selection */}
           <div className={`mt-4 ${cardClass}`}>
-            <h3 className="text-sm font-semibold text-ink">出价策略</h3>
-            <p className="mt-1 text-sm text-ink/65">
-              输入预估佣金和转化率，系统给出三档出价建议。选择后将应用到所有广告组的最高 CPC。
-            </p>
+            <h3 className="text-sm font-semibold text-ink">{d.bidStrategy.title}</h3>
+            <p className="mt-1 text-sm text-ink/65">{d.bidStrategy.description}</p>
             <div className="mt-3 grid gap-3 md:grid-cols-3">
               <div>
-                <label className={labelClass}>预估佣金 ({bidCurrency})</label>
+                <label className={labelClass}>
+                  {d.bidStrategy.commissionLabel} ({bidCurrency})
+                </label>
                 <input
                   inputMode="decimal"
                   value={bidCommission}
@@ -836,9 +930,14 @@ export function AdsAutoClient({
                   placeholder="12.50"
                   className={inputClass}
                 />
+                {commissionFromOffer && (
+                  <p className="mt-1 text-xs text-ink/55">
+                    ✓ {d.bidStrategy.fromOffer}：{commissionFromOffer}
+                  </p>
+                )}
               </div>
               <div>
-                <label className={labelClass}>预期转化率 (%)</label>
+                <label className={labelClass}>{d.bidStrategy.cvrLabel}</label>
                 <input
                   inputMode="decimal"
                   value={bidCvr}
@@ -848,7 +947,7 @@ export function AdsAutoClient({
                 />
               </div>
               <div>
-                <label className={labelClass}>货币</label>
+                <label className={labelClass}>{d.bidStrategy.currencyLabel}</label>
                 <select
                   value={bidCurrency}
                   onChange={(e) => setBidCurrency(e.target.value)}
@@ -860,6 +959,41 @@ export function AdsAutoClient({
                 </select>
               </div>
             </div>
+            {/* 出价数据表：始终渲染，佣金未填时显示 — */}
+            <dl className="mt-3 grid grid-cols-2 gap-2 text-sm md:grid-cols-3">
+              <div className="rounded-lg bg-ink/[0.03] px-3 py-2">
+                <dt className="text-ink/55">{d.bidStrategy.breakEven}</dt>
+                <dd className="mt-0.5 font-medium text-ink">
+                  {bidSuggestions
+                    ? `${bidSuggestions.breakEven.toFixed(4)} ${bidCurrency}`
+                    : "—"}
+                </dd>
+              </div>
+              <div className="rounded-lg bg-ink/[0.03] px-3 py-2">
+                <dt className="text-ink/55">{d.bidStrategy.epc}</dt>
+                <dd className="mt-0.5 font-medium text-ink">
+                  {bidProfit !== null
+                    ? `${bidProfit.epc.toFixed(4)} ${bidCurrency}`
+                    : "—"}
+                </dd>
+              </div>
+              <div className="rounded-lg bg-ink/[0.03] px-3 py-2">
+                <dt className="text-ink/55">{d.bidStrategy.perClickProfit}</dt>
+                <dd
+                  className={`mt-0.5 font-medium ${
+                    selectedPerClickProfit !== null
+                      ? selectedPerClickProfit >= 0
+                        ? "text-emerald-700"
+                        : "text-red-600"
+                      : "text-ink"
+                  }`}
+                >
+                  {selectedPerClickProfit !== null
+                    ? `${selectedPerClickProfit >= 0 ? "+" : ""}${selectedPerClickProfit.toFixed(4)} ${bidCurrency}`
+                    : "—"}
+                </dd>
+              </div>
+            </dl>
             {bidSuggestions && (
               <div className="mt-3 grid gap-2 md:grid-cols-4">
                 <button
@@ -867,7 +1001,7 @@ export function AdsAutoClient({
                   onClick={() => setBidStrategy("plan")}
                   className={`rounded-lg border px-3 py-2 text-sm ${bidStrategy === "plan" ? "border-ink bg-ink text-white" : "border-ink/15"}`}
                 >
-                  使用计划默认
+                  {d.bidStrategy.usePlanDefault}
                 </button>
                 {(["conservative", "moderate", "aggressive"] as const).map((s) => (
                   <button
@@ -876,21 +1010,22 @@ export function AdsAutoClient({
                     onClick={() => selectBidStrategy(s)}
                     className={`rounded-lg border px-3 py-2 text-sm ${bidStrategy === s ? "border-ink bg-ink text-white" : "border-ink/15"}`}
                   >
-                    {s === "conservative" ? "保守" : s === "moderate" ? "稳健" : "激进"}: {bidSuggestions[s].toFixed(4)}
+                    {d.bidStrategy[s]}: {bidSuggestions[s].toFixed(4)}
                   </button>
                 ))}
               </div>
             )}
             <div className="mt-3">
-              <label className={labelClass}>自定义最高 CPC（可选，覆盖上方选择）</label>
+              <label className={labelClass}>{d.bidStrategy.customCpc}</label>
               <input
                 inputMode="decimal"
                 value={bidCpc}
                 onChange={(e) => { setBidCpc(e.target.value); setBidStrategy("custom"); }}
-                placeholder="留空则使用所选策略"
+                placeholder={d.bidStrategy.customPlaceholder}
                 className={`${inputClass} max-w-xs`}
               />
             </div>
+            <p className="mt-2 text-xs text-ink/55">{d.bidStrategy.currencyHint}</p>
           </div>
 
           <div className={`mt-4 ${cardClass}`}>

@@ -169,7 +169,12 @@ export async function requestAdPlan(
 export async function confirmAdPlan(
   planId: string,
   maxCpc?: number,
-  overrides?: { dailyBudget?: number; geoTargets?: string[] }
+  overrides?: {
+    dailyBudget?: number;
+    dailyBudgetCurrency?: string;
+    maxCpcCurrency?: string;
+    geoTargets?: string[];
+  }
 ): Promise<ConfirmResult> {
   return apiFetch<ConfirmResult>("/api/v1/ads/auto-create/confirm", {
     method: "POST",
@@ -177,6 +182,8 @@ export async function confirmAdPlan(
       planId,
       maxCpc,
       dailyBudget: overrides?.dailyBudget,
+      dailyBudgetCurrency: overrides?.dailyBudgetCurrency,
+      maxCpcCurrency: overrides?.maxCpcCurrency,
       geoTargets: overrides?.geoTargets,
     }),
   });

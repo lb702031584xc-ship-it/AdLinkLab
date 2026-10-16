@@ -299,6 +299,8 @@ export async function registerAdsAutoRoutes(
       planId?: unknown;
       maxCpc?: unknown;
       dailyBudget?: unknown;
+      dailyBudgetCurrency?: unknown;
+      maxCpcCurrency?: unknown;
       geoTargets?: unknown;
     };
     const planId = asTrimmedString(body.planId);
@@ -324,6 +326,22 @@ export async function registerAdsAutoRoutes(
     ) {
       throw new ValidationError("dailyBudget must be a positive number");
     }
+    // Currency overrides (CNY / USD / …): 3-letter codes only. Applied to the
+    // plan so the Script and copy-pack carry the currency the user picked
+    // (it must match the Google Ads account currency to spend as expected).
+    const asCurrency = (v: unknown, field: string): string | null => {
+      if (v === undefined || v === null || v === "") return null;
+      const c = String(v).trim().toUpperCase();
+      if (!/^[A-Z]{3}$/.test(c)) {
+        throw new ValidationError(`${field} must be a 3-letter currency code`);
+      }
+      return c;
+    };
+    const dailyBudgetCurrencyOverride = asCurrency(
+      body.dailyBudgetCurrency,
+      "dailyBudgetCurrency",
+    );
+    const maxCpcCurrencyOverride = asCurrency(body.maxCpcCurrency, "maxCpcCurrency");
     let geoTargetsOverride: string[] | null = null;
     if (body.geoTargets !== undefined && body.geoTargets !== null) {
       if (
@@ -351,12 +369,22 @@ export async function registerAdsAutoRoutes(
     }
     const plan = loadPlan(planId, info.tenantId);
 
+    // Budget currency first: the maxCpc override below falls back to the
+    // (possibly just-updated) budget currency when no explicit maxCpc
+    // currency was sent.
+    if (dailyBudgetCurrencyOverride !== null) {
+      plan.campaign.dailyBudget.currency = dailyBudgetCurrencyOverride;
+    }
+
     // Apply bid override to all ad groups if provided.
     if (maxCpcOverride !== null) {
       for (const g of plan.adGroups) {
         g.group.maxCpc = {
           amount: maxCpcOverride,
-          currency: g.group.maxCpc?.currency ?? plan.campaign.dailyBudget.currency,
+          currency:
+            maxCpcCurrencyOverride ??
+            g.group.maxCpc?.currency ??
+            plan.campaign.dailyBudget.currency,
           dataQuality: "PREDICTED",
         };
       }

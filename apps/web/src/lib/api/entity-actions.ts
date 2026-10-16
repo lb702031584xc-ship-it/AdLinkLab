@@ -53,6 +53,11 @@ export async function createGoogleAccountAction(input: {
 
 /* ---------- Offers ---------- */
 
+/** 取单条 offer（ads-auto 用 offerId 带入佣金时用；只读，不 revalidate）。 */
+export async function getOfferAction(id: string) {
+  return attempt(() => entityApi.offers.get(id), []);
+}
+
 export async function createOfferAction(input: {
   name: string;
   network: string;
