@@ -282,6 +282,9 @@ export function TermsClient({
     setSelectedOfferId(o.id);
     setSelectedOfferName(o.name);
     setSelectedOfferNetwork(o.network ?? null);
+    // 先清空：新 offer 没快照时不留上一个 offer 的数据。
+    setText("");
+    setRows([{ key: Date.now(), name: "", text: "" }]);
     try {
       const res = await loadWorkStateAction("ai-terms", o.id);
       const snap = res.ok ? res.data.state : null;

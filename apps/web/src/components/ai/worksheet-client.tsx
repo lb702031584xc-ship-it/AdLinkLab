@@ -398,12 +398,14 @@ export function WorksheetClient({
     }
   };
 
-  // 挂载时恢复：?offerId= 带来的 offer 优先恢复该 offer 的快照
+  // 挂载时恢复：只有 ?offerId= 明确选了 offer 才恢复该 offer 的快照；
+  // 没选 offer 时不恢复（输入框保持空，旧数据只是历史）。
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await loadWorkStateAction("ai-worksheet", initialOffer?.id ?? null);
+        if (!initialOffer?.id) return;
+        const res = await loadWorkStateAction("ai-worksheet", initialOffer.id);
         if (cancelled || !res.ok || !res.data.state) return;
         if (!snapshotMeaningful(res.data.state)) return;
         applySnapshot(res.data.state);

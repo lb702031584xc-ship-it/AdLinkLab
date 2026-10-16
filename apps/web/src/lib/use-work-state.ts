@@ -1,8 +1,10 @@
 "use client";
 
 /**
- * 工作台自动保存共享 hook：挂载时恢复最新快照，变化后防抖保存，提供历史入口。
+ * 工作台自动保存共享 hook：按 offer 恢复快照，变化后防抖保存，提供历史入口。
  * 解决刷新/隔夜后工作进度丢失的问题。保存失败静默，不打断用户操作。
+ * 规则：只有明确选了 offer 才恢复该 offer 的快照；没选 offer 时输入框
+ * 保持空（旧数据是历史，不自动进框），历史面板仍可手动恢复。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -41,12 +43,15 @@ export function useWorkState(opts: UseWorkStateOptions) {
   const cbRef = useRef(opts);
   cbRef.current = opts;
 
-  // 挂载时恢复该 offer 的最新快照
+  // 挂载时恢复该 offer 的最新快照。规则：没选 offer（offerId 为 null）
+  // 时不恢复——输入框保持空，旧数据只是历史，只有明确选了 offer
+  // 才载入该 offer 的快照。历史面板仍可手动恢复任意快照。
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const { page, offerId, isMeaningful, applySnapshot } = cbRef.current;
+        if (!offerId) return;
         const res = await loadWorkStateAction(page, offerId);
         if (cancelled || !res.ok || !res.data.state) return;
         if (!isMeaningful(res.data.state)) return;

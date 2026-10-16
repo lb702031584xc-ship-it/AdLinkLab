@@ -77,18 +77,14 @@ export function ComplianceClient({
     watch: [selectedOfferId, urlsText, domains],
   });
 
-  /* 选了 offer：把它的目标 URL 自动加进待查链接（去重，不覆盖手填） */
+  /* 选了 offer：链接框只显示该 offer 的数据（不再把旧内容带过来）。
+     没快照时只放该 offer 的目标 URL，域名重置为自有域名。 */
   const applyOfferUrl = (o: ComplianceOffer) => {
     setSelectedOfferId(o.id);
     setSelectedOfferName(o.name);
     setSelectedOfferNetwork(o.network ?? null);
-    if (o.destinationUrl) {
-      setUrlsText((prev) => {
-        const lines = prev.split("\n").map((s) => s.trim()).filter(Boolean);
-        if (lines.includes(o.destinationUrl.trim())) return prev;
-        return prev.trim() ? `${prev.trim()}\n${o.destinationUrl.trim()}` : o.destinationUrl.trim();
-      });
-    }
+    setDomains(initialOwnedDomains.join(", "));
+    setUrlsText(o.destinationUrl ? o.destinationUrl.trim() : "");
   };
 
   useEffect(() => {

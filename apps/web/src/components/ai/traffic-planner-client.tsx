@@ -400,13 +400,37 @@ export function TrafficPlannerClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialOffer]);
 
-  /** 下拉切换 offer：先填库参数，再恢复该 offer 的 planner 快照（有则覆盖） */
+  /** 下拉切换 offer：先清空工作字段，再填库参数，最后恢复该 offer 的 planner 快照（有则覆盖） */
   const onSelectOffer = async (id: string) => {
     const o = (offers ?? []).find((x) => x.id === id) ?? null;
     if (!o) {
       setSelectedOfferId(null);
       return;
     }
+    // 先清空：新 offer 没快照时不留上一个 offer 的数据。
+    setMode("landing");
+    setBrandPolicy("allowed");
+    setPayout("");
+    setCookieDays("");
+    setEpc("");
+    setNetworkCvr("");
+    setRefundRate("");
+    setBestPayout("");
+    setBestPayoutNetwork("");
+    setSpyfuKeywords("");
+    setSpyfuBudgetTrend("");
+    setCompetitorAds("");
+    setSimilarwebNotes("");
+    setEcommerceNotes("");
+    setTargetMargin("50");
+    setNotes("");
+    setKeywords([newKwRow()]);
+    setNegatives([]);
+    setNegInput("");
+    setKwImportText("");
+    setNegImportText("");
+    setResult(null);
+    setMsg(null);
     fillFromOffer(o);
     try {
       const res = await loadWorkStateAction("traffic-planner", o.id);

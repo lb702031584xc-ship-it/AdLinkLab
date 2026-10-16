@@ -5,9 +5,10 @@
  * 逐词填写月搜索量 / 趋势 / 竞争度 / 意图 → 自动输出「需求是否存在 / 竞争是否可打」结论。
  * 纯前端，无后端依赖。
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeywordStarterDict } from "@/i18n/dict/keyword-starter";
 import { useWorkState } from "@/lib/use-work-state";
+import { loadWorkStateAction } from "@/lib/api/work-state-actions";
 import {
   recommendKeywordsAction,
   parseKeywordCaptureAiAction,
@@ -196,6 +197,60 @@ export function DemandCheckClient({
       },
       watch: [offerId, rows, aiProductInput, aiKeywords],
     });
+
+  /* offer 切换时：载入该 offer 的快照（替换，不合并），没快照则清空，
+     不留上一个 offer 的词。首次挂载由 useWorkState 恢复，这里跳过。
+     aiProductInput 由下方 offer→AI 输入框同步 effect 负责。 */
+  const prevOfferRef = useRef(offerId ?? null);
+  useEffect(() => {
+    const prev = prevOfferRef.current;
+    prevOfferRef.current = offerId ?? null;
+    if (prev === (offerId ?? null)) return;
+    if (!offerId) {
+      setRows([]);
+      setAiKeywords([]);
+      setFillNotes({});
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await loadWorkStateAction("keyword-research", offerId);
+        if (cancelled) return;
+        const s = res.ok ? res.data.state : null;
+        const rs = s?.rows as DemandRow[] | undefined;
+        const ks = s?.aiKeywords as RecommendedKeyword[] | undefined;
+        const cleanRows = Array.isArray(rs)
+          ? rs.filter((r) => r && typeof r.keyword === "string" && r.keyword.trim())
+          : [];
+        const cleanKs = Array.isArray(ks)
+          ? ks.filter((k) => k && typeof k.keyword === "string" && k.keyword.trim())
+          : [];
+        if (cleanRows.length > 0 || cleanKs.length > 0) {
+          setRows(cleanRows.map((r) => ({ ...newRow(), ...r })));
+          setAiKeywords(cleanKs);
+          setFillNotes({});
+          if (typeof s?.aiProductInput === "string" && s.aiProductInput.trim()) {
+            setAiProductInput(s.aiProductInput);
+          }
+        } else {
+          setRows([]);
+          setAiKeywords([]);
+          setFillNotes({});
+        }
+      } catch {
+        if (!cancelled) {
+          setRows([]);
+          setAiKeywords([]);
+          setFillNotes({});
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offerId]);
 
   // offer 选择变化时同步到 AI 输入框
   useEffect(() => {

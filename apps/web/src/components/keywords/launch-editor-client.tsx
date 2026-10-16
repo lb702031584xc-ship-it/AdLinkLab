@@ -5,9 +5,10 @@
  * 关键词计划（分组 / 匹配方式 / 出价）+ 否定关键词（手动 / 批量 / 通用库 / 导出）。
  * 纯前端，无后端依赖。
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { UNIVERSAL_NEGATIVES } from "@/lib/keywords/negatives";
 import { useWorkState } from "@/lib/use-work-state";
+import { loadWorkStateAction } from "@/lib/api/work-state-actions";
 import type { KeywordStarterDict } from "@/i18n/dict/keyword-starter";
 import type { SeedImportSignal } from "./demand-check-client";
 
@@ -132,6 +133,56 @@ export function LaunchEditorClient({
       },
       watch: [offerId, rows, negatives],
     });
+
+  /* offer 切换时：载入该 offer 的快照（替换，不合并），没快照则清空，
+     不留上一个 offer 的词。首次挂载由 useWorkState 恢复，这里跳过。 */
+  const prevOfferRef = useRef(offerId ?? null);
+  useEffect(() => {
+    const prev = prevOfferRef.current;
+    prevOfferRef.current = offerId ?? null;
+    if (prev === (offerId ?? null)) return;
+    if (!offerId) {
+      setRows([newRow()]);
+      setNegatives([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await loadWorkStateAction("keyword-launch", offerId);
+        if (cancelled) return;
+        const s = res.ok ? res.data.state : null;
+        const rs = s?.rows as PlanRow[] | undefined;
+        const ns = s?.negatives as string[] | undefined;
+        const cleanRows = Array.isArray(rs)
+          ? rs.filter((r) => r && typeof r.keyword === "string" && r.keyword.trim())
+          : [];
+        const cleanNegs = Array.isArray(ns)
+          ? ns.filter((n) => typeof n === "string" && n.trim())
+          : [];
+        if (cleanRows.length > 0 || cleanNegs.length > 0) {
+          setRows(
+            cleanRows.length > 0
+              ? cleanRows.map((r) => ({ ...newRow(), ...r }))
+              : [newRow()]
+          );
+          setNegatives(cleanNegs);
+        } else {
+          setRows([newRow()]);
+          setNegatives([]);
+        }
+      } catch {
+        if (!cancelled) {
+          setRows([newRow()]);
+          setNegatives([]);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offerId]);
 
   // 从需求验证导入 ✅值得跟进 / ⚠️谨慎测试 的词（去重追加）
   useEffect(() => {

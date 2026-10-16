@@ -303,6 +303,19 @@ export function BlueprintClient({
   const onSelectOffer = async (id: string) => {
     const o = (offers ?? []).find((x) => x.id === id) ?? null;
     if (!o) return;
+    // 先清空工作字段：新 offer 没历史时不留上一个 offer 的数据；
+    // 再由下方 fillFromOffer / 快照恢复填入该 offer 自己的数据。
+    setProductDescription("");
+    setTermsText("");
+    setSeedKeywords("");
+    setCurrency("USD");
+    setTargetMarket("US");
+    setLandingMode("landing");
+    setBrandPolicy("forbidden");
+    setResult(null);
+    setPageText(null);
+    setFetchMsg(null);
+    setFetchOk(false);
     fillFromOffer(o);
     void fillTermsFromSnapshot(o.id);
     void (async () => {

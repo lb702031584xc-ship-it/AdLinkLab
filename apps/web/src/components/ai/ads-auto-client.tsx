@@ -5,10 +5,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import {
-  listWorkStateHistoryAction,
-  loadWorkStateAction,
-} from "@/lib/api/work-state-actions";
+import { loadWorkStateAction } from "@/lib/api/work-state-actions";
 import { useWorkState } from "@/lib/use-work-state";
 import { coachCheckAction, type CoachFinding } from "@/lib/api/coach-actions";
 import { CoachGate, hasCoachBlock } from "@/components/coach/coach-gate";
@@ -369,16 +366,10 @@ export function AdsAutoClient({
     return [];
   };
 
-  /* 解析生效 offer：?offerId= 优先，否则取最近用过的投放选词 offer */
+  /* 生效 offer：只认 ?offerId= 显式传入的 offer，不取最近用过的 offer。
+     没选 offer 时关键词框保持空（旧数据是历史，不自动进框）。 */
   const resolveOfferId = async (): Promise<string | null> => {
-    if (offerId) return offerId;
-    try {
-      const hist = await listWorkStateHistoryAction("keyword-launch", { limit: 5 });
-      if (hist.ok) return hist.data.find((h) => h.offerId)?.offerId ?? null;
-    } catch {
-      /* ignore */
-    }
-    return null;
+    return offerId;
   };
 
   /* 关键词联动：恢复完成后仍为空时，从该 offer 的投放选词快照取定好的词 */

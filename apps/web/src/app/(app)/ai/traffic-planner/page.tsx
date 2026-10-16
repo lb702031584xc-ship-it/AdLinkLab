@@ -45,22 +45,11 @@ export default async function TrafficPlannerPage({
     try {
       initialOffer = toPlannerOffer(await entityApi.offers.get(sp.offerId));
     } catch {
-      /* invalid id: fall through to last-used offer */
+      /* invalid id: render empty — no implicit fallback to a previous offer */
     }
   }
-  if (!initialOffer) {
-    // 没带有效 offerId：接上上次在这个页工作过的 offer（而不是全空）
-    try {
-      const { listWorkStateHistory } = await import("@/lib/api/work-state");
-      const hist = await listWorkStateHistory("traffic-planner", { limit: 5 });
-      const lastOfferId = hist.find((h) => h.offerId)?.offerId;
-      if (lastOfferId) {
-        initialOffer = toPlannerOffer(await entityApi.offers.get(lastOfferId));
-      }
-    } catch {
-      /* no history / offer gone: render empty */
-    }
-  }
+  // 没带有效 offerId 时不接上次 offer：输入框保持空，旧数据是历史，
+  // 只有明确选了 offer 才载入该 offer 的快照。
 
   let offers: PlannerOffer[] = [];
   try {
