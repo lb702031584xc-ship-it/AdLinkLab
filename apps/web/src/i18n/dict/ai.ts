@@ -832,11 +832,11 @@ export const zh = {
           "用于 Amazon 选品流量门。免费信号（Google Trends 热度、官网检测）无需配置；付费 key（SimilarWeb 月访问量、DataForSEO 月搜索量）在此配置。",
         similarwebKey: "SimilarWeb API Key",
         similarwebHelp:
-          "付费 key，用于获取官网月访问量。未配置时，SimilarWeb 信号显示“暂无数据”。",
+          "付费 key，用于获取官网月访问量。未配置时，SimilarWeb 信号显示“暂无数据”。已保存的凭证不会回显（留空则保持现有配置），保存后字段清空属正常。",
         dataforseoLogin: "DataForSEO 登录名",
         dataforseoPassword: "DataForSEO 密码",
         dataforseoHelp:
-          "付费 key，用于获取关键词月搜索量。未配置时，DataForSEO 信号显示“暂无数据”。",
+          "付费 key，用于获取关键词月搜索量。未配置时，DataForSEO 信号显示“暂无数据”。已保存的凭证不会回显（留空则保持现有配置），保存后字段清空属正常。",
       },
       keepa: {
         title: "Keepa API Key",
@@ -1825,11 +1825,11 @@ export const en: typeof zh = {
           "Used by the Amazon discovery traffic gate. Free signals (Google Trends interest, official-site detection) need no configuration; paid keys (SimilarWeb monthly visits, DataForSEO monthly search volume) are configured here.",
         similarwebKey: "SimilarWeb API key",
         similarwebHelp:
-          'Paid key, used to fetch official-site monthly visits. When unset, the SimilarWeb signal shows "no data".',
+          'Paid key, used to fetch official-site monthly visits. When unset, the SimilarWeb signal shows "no data". Saved credentials are never displayed (leave blank to keep the existing ones); fields clearing after save is normal.',
         dataforseoLogin: "DataForSEO login",
         dataforseoPassword: "DataForSEO password",
         dataforseoHelp:
-          'Paid key, used to fetch keyword monthly search volume. When unset, the DataForSEO signal shows "no data".',
+          'Paid key, used to fetch keyword monthly search volume. When unset, the DataForSEO signal shows "no data". Saved credentials are never displayed (leave blank to keep the existing ones); fields clearing after save is normal.',
       },
       keepa: {
         title: "Keepa API key",

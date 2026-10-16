@@ -413,7 +413,6 @@ export function AdsAutoClient({
   const [serpCaptureId, setSerpCaptureId] = useState<string | null>(null);
   const [serpCaptures, setSerpCaptures] = useState<OfferCaptureItem[]>([]);
   const [serpCapturesLoading, setSerpCapturesLoading] = useState(false);
-  const [serpCapturesLoaded, setSerpCapturesLoaded] = useState(false);
   const [serpCaptureError, setSerpCaptureError] = useState<string | null>(null);
   // 品牌符号生成器：Nike → Nike®（® 在 Google Ads 里显示为右上角小字）
   const [brandName, setBrandName] = useState("");
@@ -451,11 +450,16 @@ export function AdsAutoClient({
   const [captureNote, setCaptureNote] = useState<string | null>(null);
 
   /* 专家营销：加载插件抓取记录，客户端过滤出搜索结果页抓取（SERP）。
-     与服务端校验一致：url 含 /search 且含 google. */
+     与服务端校验一致：url 含 /search 且含 google.。
+     注意：之前列表只在第一次切到专家时加载，抓取后不会自动刷新——
+     用户先切专家、再去 Google 抓取、回来时列表还是旧的（空），只能整页刷新。
+     所以抽出 loadSerpCaptures：每次切到专家都重拉 + 提供刷新按钮。 */
   const isSerpCapture = (c: OfferCaptureItem) =>
     c.finalUrl.includes("/search") && c.finalUrl.includes("google.");
-  useEffect(() => {
-    if (copyStyle !== "expert" || serpCapturesLoaded || serpCapturesLoading) return;
+  const serpLoadingRef = useRef(false);
+  function loadSerpCaptures() {
+    if (serpLoadingRef.current) return;
+    serpLoadingRef.current = true;
     setSerpCapturesLoading(true);
     setSerpCaptureError(null);
     listOfferCapturesAction()
@@ -471,8 +475,12 @@ export function AdsAutoClient({
       })
       .finally(() => {
         setSerpCapturesLoading(false);
-        setSerpCapturesLoaded(true);
+        serpLoadingRef.current = false;
       });
+  }
+  useEffect(() => {
+    if (copyStyle !== "expert") return;
+    loadSerpCaptures();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [copyStyle]);
 
@@ -1360,6 +1368,14 @@ export function AdsAutoClient({
               <p className={labelClass}>{d.form.serpSourceLabel}</p>
               <p className="mt-1 text-xs text-ink/55">{d.form.serpSourceHint}</p>
               <p className="mt-0.5 text-xs text-ink/55">{d.form.serpSourceAuto}</p>
+              <button
+                type="button"
+                onClick={loadSerpCaptures}
+                disabled={serpCapturesLoading}
+                className="mt-2 rounded border border-ink/15 px-2 py-0.5 text-xs text-ink/70 hover:bg-ink/5 disabled:opacity-50"
+              >
+                {serpCapturesLoading ? d.form.serpSourceLoading : d.form.serpSourceRefresh}
+              </button>
               {serpCapturesLoading ? (
                 <p className="mt-2 text-xs text-ink/55">{d.form.serpSourceLoading}</p>
               ) : serpCaptures.length === 0 ? (
