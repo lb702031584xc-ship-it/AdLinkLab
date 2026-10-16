@@ -272,16 +272,89 @@ export function BlueprintClient({
     return out;
   };
 
-  /* 条款联动：为空时从该 offer 的条款解读快照取正文（前面页面已解析过的不用重贴） */
-  const fillTermsFromSnapshot = async (offerId: string) => {
+  /* 条款联动：为空时从该 offer 的条款解读快照取正文（前面页面已解析过的不用重贴）。
+     批量模式的条款在 rows 里（按 offer 名匹配；只有一行时直接取）。 */
+  const fillTermsFromSnapshot = async (offerId: string, offerName?: string) => {
     try {
       const res = await loadWorkStateAction("ai-terms", offerId);
       const snap = res.ok ? res.data.state : null;
-      const txt = snap && typeof snap.text === "string" ? snap.text.trim() : "";
-      if (txt) setTermsText((prev) => (prev.trim() ? prev : txt));
+      if (!snap) return;
+      const txt = typeof snap.text === "string" ? snap.text.trim() : "";
+      if (txt) {
+        setTermsText((prev) => (prev.trim() ? prev : txt));
+        return;
+      }
+      const rows = Array.isArray(snap.rows)
+        ? (snap.rows as Array<{ name?: unknown; text?: unknown }>)
+        : [];
+      const name = (offerName ?? "").trim().toLowerCase();
+      const matched = name
+        ? rows.find((r) => String(r.name ?? "").trim().toLowerCase() === name)
+        : undefined;
+      const row = matched ?? (rows.length === 1 ? rows[0] : undefined);
+      const rowTxt = row && typeof row.text === "string" ? row.text.trim() : "";
+      if (rowTxt) setTermsText((prev) => (prev.trim() ? prev : rowTxt));
     } catch {
       /* 取不到就不填 */
     }
+  };
+
+  /* 佣金联动：Offer 实体 + 本页快照都没有佣金数值时，从兄弟页快照取：
+     工作表 ③ 盈利测算的 profitState.inputs（commissionRate / payout + mode 最准），
+     回落投流页快照的 payout（按已知的佣金类型折算）。只补空，不覆盖；
+     兄弟页类型与已知类型冲突时不猜。 */
+  const fillCommissionFromSnapshots = async (
+    offerId: string,
+    authoritativeType: "percentage" | "fixed" | null,
+    avgPriceStr: string,
+  ) => {
+    const num = (v: unknown) => {
+      const n = typeof v === "string" ? Number(v.trim()) : typeof v === "number" ? v : NaN;
+      return Number.isFinite(n) && n > 0 ? n : null;
+    };
+    let derived: { type: "percentage" | "fixed"; value: string } | null = null;
+    try {
+      const res = await loadWorkStateAction("ai-worksheet", offerId);
+      const snap = res.ok ? (res.data.state as Record<string, unknown> | null) : null;
+      const inputs = (snap?.profitState as { inputs?: Record<string, unknown> } | null)?.inputs;
+      if (inputs) {
+        const rate = num(inputs.commissionRate);
+        const payout = num(inputs.payout);
+        if (inputs.mode === "ecommerce" && rate != null) {
+          derived = { type: "percentage", value: String(rate) };
+        } else if (inputs.mode === "other" && payout != null) {
+          derived = { type: "fixed", value: String(payout) };
+        }
+      }
+    } catch {
+      /* 取不到就回落 */
+    }
+    if (!derived) {
+      try {
+        const res = await loadWorkStateAction("traffic-planner", offerId);
+        const snap = res.ok ? (res.data.state as Record<string, unknown> | null) : null;
+        const payout = num(snap?.payout);
+        if (payout != null && authoritativeType) {
+          if (authoritativeType === "fixed") {
+            derived = { type: "fixed", value: String(payout) };
+          } else {
+            const avg = num(avgPriceStr);
+            if (avg != null) {
+              derived = {
+                type: "percentage",
+                value: String(Math.round((payout / avg) * 100 * 100) / 100),
+              };
+            }
+          }
+        }
+      } catch {
+        /* 取不到就不填 */
+      }
+    }
+    if (!derived) return;
+    if (authoritativeType && derived.type !== authoritativeType) return;
+    if (!authoritativeType) setCommissionType(derived.type);
+    setCommissionValue((prev) => (prev.trim() ? prev : derived!.value));
   };
 
   useEffect(() => {
@@ -289,7 +362,7 @@ export function BlueprintClient({
     if (key && appliedOfferRef.current !== key) {
       appliedOfferRef.current = key;
       fillFromOffer(initialOffer!);
-      void fillTermsFromSnapshot(initialOffer!.id);
+      void fillTermsFromSnapshot(initialOffer!.id, initialOffer!.name);
       void (async () => {
         const kws = await loadKeywordsFromSnapshots(initialOffer!.id);
         if (kws.length > 0) {
@@ -317,7 +390,7 @@ export function BlueprintClient({
     setFetchMsg(null);
     setFetchOk(false);
     fillFromOffer(o);
-    void fillTermsFromSnapshot(o.id);
+    void fillTermsFromSnapshot(o.id, o.name);
     void (async () => {
       const kws = await loadKeywordsFromSnapshots(o.id);
       if (kws.length > 0) {
@@ -334,6 +407,8 @@ export function BlueprintClient({
         });
       }
     })();
+    let snapCommissionType: "percentage" | "fixed" | null = null;
+    let snapAvgPrice = "";
     try {
       const res = await loadWorkStateAction("ai-blueprint", o.id);
       if (res.ok && res.data.state) {
@@ -343,9 +418,14 @@ export function BlueprintClient({
           setOfferName(str(snap.offerName));
           setProductDescription(str(snap.productDescription));
           setAvgPrice(str(snap.avgPrice));
-          if (snap.commissionType === "fixed" || snap.commissionType === "percentage")
+          if (snap.commissionType === "fixed" || snap.commissionType === "percentage") {
+            snapCommissionType = snap.commissionType;
             setCommissionType(snap.commissionType as "fixed" | "percentage");
-          setCommissionValue(str(snap.commissionValue));
+          }
+          /* 快照佣金为空时不覆盖 Offer 实体已有的值（否则后续兄弟页补填会用错来源）。 */
+          const snapCv = str(snap.commissionValue);
+          if (snapCv.trim()) setCommissionValue(snapCv);
+          snapAvgPrice = str(snap.avgPrice);
           if (typeof snap.currency === "string") setCurrency(snap.currency);
           if (typeof snap.targetMarket === "string") setTargetMarket(snap.targetMarket);
           setOfferUrl(str(snap.offerUrl));
@@ -359,6 +439,12 @@ export function BlueprintClient({
     } catch {
       /* 恢复失败不打断 */
     }
+    /* 佣金仍为空时，从工作表 / 投流页快照补（本页快照优先于 Offer 实体）。 */
+    const offerType =
+      o.commissionType === "fixed" || o.commissionType === "percentage" ? o.commissionType : null;
+    const authoritativeType = snapCommissionType ?? offerType;
+    const avgPriceStr = snapAvgPrice || (o.avgPrice != null ? String(o.avgPrice) : "");
+    void fillCommissionFromSnapshots(o.id, authoritativeType, avgPriceStr);
   };
 
   const [busy, setBusy] = useState(false);
