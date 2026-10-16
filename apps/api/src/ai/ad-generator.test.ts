@@ -95,8 +95,50 @@ describe("buildAdPlanPrompt", () => {
   it("normalizeCopyStyle falls back to affiliate", () => {
     expect(normalizeCopyStyle("official")).toBe("official");
     expect(normalizeCopyStyle("affiliate")).toBe("affiliate");
+    expect(normalizeCopyStyle("expert")).toBe("expert");
     expect(normalizeCopyStyle("bogus")).toBe("affiliate");
     expect(normalizeCopyStyle(undefined)).toBe("affiliate");
+  });
+
+  it("expert style uses expert playbook, forbids official claims, renders reference ads", () => {
+    const { system } = buildAdPlanPrompt({
+      url: "https://x.example",
+      pageText: "t",
+      language: "en",
+      copyStyle: "expert",
+      referenceAds: [
+        { title: "Save 40% on Running Shoes", description: "Top rated, free shipping over $50.", displayUrl: "example.com/shoes" },
+      ],
+    });
+    expect(system).toContain("20-year affiliate marketing expert");
+    expect(system).toContain("NEVER claim to be the official site");
+    expect(system).toContain("Do NOT copy any reference ad verbatim");
+    expect(system).toContain("Save 40% on Running Shoes");
+    expect(system).toContain("Top rated, free shipping over $50.");
+  });
+
+  it("expert style with SERP page text instructs paid-ad identification", () => {
+    const { system } = buildAdPlanPrompt({
+      url: "https://x.example",
+      pageText: "t",
+      language: "en",
+      copyStyle: "expert",
+      serpPageText: "Sponsored: Save Big on Shoes …",
+    });
+    expect(system).toContain("20-year affiliate marketing expert");
+    expect(system).toContain("identify the PAID ads in it");
+    expect(system).toContain("Sponsored: Save Big on Shoes");
+  });
+
+  it("expert style without references still has expert rules but no reference section", () => {
+    const { system } = buildAdPlanPrompt({
+      url: "https://x.example",
+      pageText: "t",
+      language: "en",
+      copyStyle: "expert",
+    });
+    expect(system).toContain("20-year affiliate marketing expert");
+    expect(system).not.toContain("Reference —");
   });
 });
 
@@ -203,6 +245,19 @@ describe("finalizeAdPlan", () => {
     expect(texts).not.toContain("PHRASE:acme running shoes sale");
     // AI 建议的非品牌否词仍保留
     expect(texts).toContain("PHRASE:free");
+  });
+
+  it("expert 口吻品牌词转否词（同 affiliate）", () => {
+    const plan = finalizeAdPlan(
+      [validDraft()],
+      finalizeCtx({ copyStyle: "expert" })
+    );
+    const group = plan.adGroups[0]!.group;
+    expect(group.keywords.map((k) => k.text)).not.toContain("acme running shoes sale");
+    const texts = group.negativeKeywords.map((n) => `${n.matchType}:${n.text}`);
+    expect(texts).toContain("EXACT:acme running shoes sale");
+    expect(texts).toContain("PHRASE:acme running shoes sale");
+    expect(plan.copyStyle).toBe("expert");
   });
 
   it("clamps absurd budgets into the safe range", () => {

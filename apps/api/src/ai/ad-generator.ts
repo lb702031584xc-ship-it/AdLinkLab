@@ -35,6 +35,15 @@ export const PAGE_TEXT_LIMIT = 12_000;
 
 export type KeywordMatchType = "EXACT" | "PHRASE" | "BROAD";
 export type BiddingStrategy = "MANUAL_CPC" | "MAXIMIZE_CLICKS";
+/** 文案口吻：official=官方口吻，affiliate=联盟安全口吻，expert=专家营销口吻 */
+export type AdCopyStyle = "official" | "affiliate" | "expert";
+
+/** 专家模式参考的成功广告（DataForSEO SERP 结构化结果）。 */
+export interface SerpReferenceAd {
+  title: string;
+  description: string;
+  displayUrl?: string;
+}
 
 export interface AdPlanMoney {
 amount: number;
@@ -98,8 +107,8 @@ language: AnalysisLanguage;
 sourceUrls: string[];
 offerId: string | null;
 googleAccountId: string | null;
-/** 文案口吻：official=官方口吻（Official Site 结构），affiliate=联盟安全口吻 */
-copyStyle: "official" | "affiliate";
+/** 文案口吻：official=官方口吻（Official Site 结构），affiliate=联盟安全口吻，expert=专家营销口吻 */
+copyStyle: AdCopyStyle;
 campaign: AdPlanCampaign;
 /** One ad group (+ its own RSA) per input URL. */
 adGroups: AdPlanAdGroupBlock[];
@@ -151,13 +160,19 @@ export interface AdPlanPromptInput {
 url: string;
 pageText: string;
 language: AnalysisLanguage;
-/** 文案口吻：official=官方口吻（Official Site 结构），affiliate=联盟安全口吻 */
-copyStyle: "official" | "affiliate";
+/** 文案口吻：official=官方口吻（Official Site 结构），affiliate=联盟安全口吻，expert=专家营销口吻 */
+copyStyle: AdCopyStyle;
+/** 专家模式：DataForSEO SERP 搜到的成功广告（结构化）。 */
+referenceAds?: SerpReferenceAd[];
+/** 专家模式：插件抓取的 Google SERP 原文（路由侧已截断到 8000 字符内）。 */
+serpPageText?: string;
 }
 
 /** 规范化 copyStyle 输入，非法值回退到 affiliate（安全口吻）。 */
-export function normalizeCopyStyle(input: unknown): "official" | "affiliate" {
-return input === "official" ? "official" : "affiliate";
+export function normalizeCopyStyle(input: unknown): AdCopyStyle {
+if (input === "official") return "official";
+if (input === "expert") return "expert";
+return "affiliate";
 }
 
 export function buildAdPlanPrompt(input: AdPlanPromptInput): {
@@ -178,6 +193,18 @@ input.copyStyle === "official"
 "- Descriptions: category benefit + one consistent brand tagline repeated across the ad + clear CTA (free shipping threshold, promo code, sale %).",
 "- Every headline/description stays specific to the page's category — one ad group, one category.",
 ]
+: input.copyStyle === "expert"
+? [
+// 专家营销口吻：以联盟营销专家身份，学成功广告的打法写营销广告；
+// 但仍是联盟身份，绝不自称官方/品牌所有权。
+"Copy style: EXPERT affiliate-marketing voice. You are a 20-year affiliate marketing expert. Study the successful ads in the reference material below and write RSA copy using the same winning playbook: strong hooks, concrete benefits, social proof, urgency/scarcity where the landing page supports it, and a clear CTA.",
+"- NEVER claim to be the official site/store or the brand owner, and NEVER use 'Official Site' phrasing. You are an affiliate marketer, not the brand.",
+"- You may append the ® / ™ symbol directly after the brand name ONLY when the landing page text itself already uses ® / ™ for that brand. Otherwise use the plain brand name.",
+"- Headline 1 pattern: '<Category> | <strong benefit or offer>' (e.g. 'Running Shoes | Save 40% Today'). Lead with the strongest hook from the reference ads.",
+"- Display paths (path1/path2, <= 15 chars each) mirror the landing page category.",
+"- Descriptions: benefit + proof/trust line + urgency + CTA. Every claim must be supported by the landing page or the reference ads; imply no brand ownership, invent no prices/discounts the page does not state.",
+"- Do NOT copy any reference ad verbatim — learn the pattern, write original copy for this offer.",
+]
 : [
 "Copy style: AFFILIATE-safe voice. NEVER claim to be the official site/store and NEVER use 'Official Site' phrasing or the ® / ™ symbol after the brand name.",
 "- Use reviewer/deal angles instead: Top Rated, Best Deals, Expert Tested, Compare Prices, <Category> Buying Guide.",
@@ -185,6 +212,32 @@ input.copyStyle === "official"
 "- Display paths (path1/path2, <= 15 chars each) mirror the landing page category.",
 "- Descriptions: category benefit + trust line (tested, compared, updated regularly) + CTA. Keep every claim supported by the landing page; imply no brand ownership.",
 ];
+// 专家模式参考材料：结构化成功广告列表，和/或插件抓取的 SERP 原文。
+// 两者都没有时不渲染参考段落（专家规则仍生效）。
+const referenceSection: string[] = [];
+const referenceAds = (input.referenceAds ?? []).filter(
+(a) => a && a.title.trim() && a.description.trim()
+);
+if (referenceAds.length > 0) {
+referenceSection.push(
+"Reference — successful ads for the same niche (learn their playbook; do NOT copy verbatim):",
+...referenceAds.slice(0, 5).map(
+(a, i) =>
+`${i + 1}. Title: ${a.title.trim()}` +
+` | Description: ${a.description.trim()}` +
+(a.displayUrl ? ` | Display URL: ${a.displayUrl.trim()}` : "")
+),
+""
+);
+}
+const serpText = (input.serpPageText ?? "").trim();
+if (serpText) {
+referenceSection.push(
+"Reference — Google search results page captured by the user (raw text). First identify the PAID ads in it, then learn their playbook (hooks, benefits, proof, urgency, CTA) for the RSA below:",
+serpText,
+""
+);
+}
 const system = [
 "You are a Google Ads search campaign builder for an affiliate marketer. Given an offer landing page, produce a complete, policy-safe Search campaign draft.",
 `Write ALL JSON string values (campaign/ad group names, headlines, descriptions, keywords) in ${langName}.`,
@@ -204,6 +257,7 @@ DRAFT_JSON_SPEC,
 "- path1 / path2: short display-path segments (<= 15 chars each) or null.",
 "- finalUrl is the offer URL below — use it verbatim for the ad group and RSA; do not invent URLs.",
 ...styleRules,
+...referenceSection,
 ].join("\n");
 
 const user = [
@@ -459,7 +513,7 @@ tenantId: string;
 language: AnalysisLanguage;
 offerId: string | null;
 googleAccountId: string | null;
-copyStyle: "official" | "affiliate";
+copyStyle: AdCopyStyle;
 /** Final (post-redirect) URL per draft, in input order. */
 finalUrls: string[];
 }
@@ -526,7 +580,7 @@ const adGroups: AdPlanAdGroupBlock[] = drafts.map((draft, i) => {
 const finalUrl = assertHttpUrl(ctx.finalUrls[i]!, `finalUrls[${i}]`);
 const keywordTexts = draft.keywords.map((k) => k.text);
 // 复用 brand-check 否词逻辑：品牌词 → exact/phrase 否词。
-// 联盟安全口吻：与品牌词冲突的关键词不能出价，从正向移除，转否词。
+// 联盟安全口吻 / 专家营销口吻：与品牌词冲突的关键词不能出价，从正向移除，转否词。
 // 官方口吻：用户已确认条款允许品牌词投放，保留品牌关键词，不转否词
 // （否则官方口吻 + 品牌词的计划会被清成 0 关键词，还反转为否词）。
 const brandResults = checkBrandConflicts(keywordTexts, draft.brandTerms);

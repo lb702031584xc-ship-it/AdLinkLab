@@ -18,7 +18,7 @@ import {
   listGoogleAccountsAction,
 } from "@/lib/api/entity-actions";
 import { calcProfit } from "@/lib/profit-calc";
-import { parseProductCaptureAiAction } from "@/lib/api/ai-actions";
+import { listOfferCapturesAction, parseProductCaptureAiAction } from "@/lib/api/ai-actions";
 import { CapturePicker } from "@/components/ai/capture-picker";
 import { AdPreview } from "@/components/ai/ad-preview";
 import {
@@ -121,13 +121,17 @@ function PlanPreview({
               className={`rounded-full px-2 py-0.5 text-xs font-medium ${
                 plan.copyStyle === "official"
                   ? "bg-amber-100 text-amber-800"
-                  : "bg-sky-100 text-sky-800"
+                  : plan.copyStyle === "expert"
+                    ? "bg-emerald-100 text-emerald-800"
+                    : "bg-sky-100 text-sky-800"
               }`}
               title={d.preview.copyStyleHint}
             >
               {plan.copyStyle === "official"
                 ? d.preview.copyStyleOfficial
-                : d.preview.copyStyleAffiliate}
+                : plan.copyStyle === "expert"
+                  ? d.preview.copyStyleExpert
+                  : d.preview.copyStyleAffiliate}
             </span>
           )}
         </div>
@@ -392,15 +396,21 @@ export function AdsAutoClient({
       if (!kwText) setKwText(normalizeKwText(k));
     }
     const cs = searchParams.get("copyStyle");
-    if (cs === "official" || cs === "affiliate") {
+    if (cs === "official" || cs === "affiliate" || cs === "expert") {
       urlCsRef.current = cs;
       setCopyStyle(cs);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
   const [language, setLanguage] = useState<"zh" | "en">("en");
-  // 文案口吻：official=官方口吻（Official Site 结构），affiliate=联盟安全口吻
-  const [copyStyle, setCopyStyle] = useState<"official" | "affiliate">("affiliate");
+  // 文案口吻：official=官方口吻（Official Site 结构），affiliate=联盟安全口吻，expert=专家营销口吻
+  const [copyStyle, setCopyStyle] = useState<"official" | "affiliate" | "expert">("affiliate");
+  // 专家营销：插件 SERP 抓取选用（选了则用抓取的 SERP 做参考，不选则 DataForSEO 自动搜）
+  const [serpCaptureId, setSerpCaptureId] = useState<string | null>(null);
+  const [serpCaptures, setSerpCaptures] = useState<OfferCaptureItem[]>([]);
+  const [serpCapturesLoading, setSerpCapturesLoading] = useState(false);
+  const [serpCapturesLoaded, setSerpCapturesLoaded] = useState(false);
+  const [serpCaptureError, setSerpCaptureError] = useState<string | null>(null);
   // 品牌符号生成器：Nike → Nike®（® 在 Google Ads 里显示为右上角小字）
   const [brandName, setBrandName] = useState("");
   const [brandSymbol, setBrandSymbol] = useState<"®" | "™">("®");
@@ -435,6 +445,48 @@ export function AdsAutoClient({
   // 插件抓取 + AI 识别商品信息
   const [captureFilling, setCaptureFilling] = useState(false);
   const [captureNote, setCaptureNote] = useState<string | null>(null);
+
+  /* 专家营销：加载插件抓取记录，客户端过滤出搜索结果页抓取（SERP）。
+     与服务端校验一致：url 含 /search 且含 google. */
+  const isSerpCapture = (c: OfferCaptureItem) =>
+    c.finalUrl.includes("/search") && c.finalUrl.includes("google.");
+  useEffect(() => {
+    if (copyStyle !== "expert" || serpCapturesLoaded || serpCapturesLoading) return;
+    setSerpCapturesLoading(true);
+    setSerpCaptureError(null);
+    listOfferCapturesAction()
+      .then((res) => {
+        if (!res.ok) {
+          setSerpCaptureError(res.error);
+          return;
+        }
+        setSerpCaptures((res.data ?? []).filter(isSerpCapture));
+      })
+      .catch(() => {
+        /* 加载失败：列表为空，UI 显示暂无记录；不编造错误文案。 */
+      })
+      .finally(() => {
+        setSerpCapturesLoading(false);
+        setSerpCapturesLoaded(true);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [copyStyle]);
+
+  function onPickSerpCapture(id: string) {
+    if (!id) {
+      setSerpCaptureId(null);
+      setSerpCaptureError(null);
+      return;
+    }
+    const picked = serpCaptures.find((c) => c.id === id);
+    if (!picked || !isSerpCapture(picked)) {
+      setSerpCaptureId(null);
+      setSerpCaptureError(d.form.serpSourceNotSerp);
+      return;
+    }
+    setSerpCaptureId(id);
+    setSerpCaptureError(null);
+  }
 
   /* 插件抓取 + AI 识别：从抓取页提取商品信息填入手动粘贴框（可检查后再生成） */
   const fillProductFromCapture = async (c: OfferCaptureItem) => {
@@ -488,7 +540,7 @@ export function AdsAutoClient({
       const str = (v: unknown) => (v == null ? "" : String(v));
       if (urlUrlsRef.current == null && str(snap.urlsText)) setUrlsText(str(snap.urlsText));
       if (urlKwRef.current == null && str(snap.kwText)) setKwText(normalizeKwText(str(snap.kwText)));
-      if (urlCsRef.current == null && (snap.copyStyle === "official" || snap.copyStyle === "affiliate"))
+      if (urlCsRef.current == null && (snap.copyStyle === "official" || snap.copyStyle === "affiliate" || snap.copyStyle === "expert"))
         setCopyStyle(snap.copyStyle);
       if (snap.language === "zh" || snap.language === "en") setLanguage(snap.language);
       if (str(snap.googleAccountId)) setGoogleAccountId(str(snap.googleAccountId));
@@ -617,6 +669,9 @@ export function AdsAutoClient({
         pageTexts,
         keywords: keywords && keywords.length ? keywords : undefined,
         copyStyle,
+        // 专家营销：选中 SERP 抓取时带上；其他口吻不传。
+        serpCaptureId:
+          copyStyle === "expert" && serpCaptureId ? serpCaptureId : undefined,
       });
       if (res.ok) {
         setPlan(res.data.plan);
@@ -1056,6 +1111,7 @@ export function AdsAutoClient({
               [
                 { value: "official", ...d.form.copyStyleOfficial },
                 { value: "affiliate", ...d.form.copyStyleAffiliate },
+                { value: "expert", ...d.form.copyStyleExpert },
               ] as const
             ).map((opt) => (
               <button
@@ -1075,6 +1131,52 @@ export function AdsAutoClient({
           </div>
           {copyStyle === "official" && (
             <p className="mt-1 text-xs text-amber-700">{d.form.copyStyleOfficialWarn}</p>
+          )}
+          {copyStyle === "expert" && (
+            <div className="mt-2 rounded-lg border border-ink/10 bg-ink/[0.02] p-3">
+              <p className={labelClass}>{d.form.serpSourceLabel}</p>
+              <p className="mt-1 text-xs text-ink/55">{d.form.serpSourceHint}</p>
+              <p className="mt-0.5 text-xs text-ink/55">{d.form.serpSourceAuto}</p>
+              {serpCapturesLoading ? (
+                <p className="mt-2 text-xs text-ink/55">{d.form.serpSourceLoading}</p>
+              ) : serpCaptures.length === 0 ? (
+                <p className="mt-2 text-xs text-ink/55">{d.form.serpSourceNone}</p>
+              ) : (
+                <select
+                  value={serpCaptureId ?? ""}
+                  onChange={(e) => onPickSerpCapture(e.target.value)}
+                  className={`${inputClass} mt-2`}
+                >
+                  <option value="">{d.form.serpSourcePick}</option>
+                  {serpCaptures.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {(c.title || c.finalUrl).slice(0, 80)}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {serpCaptureId && (
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-ink/70">
+                  <span>
+                    {d.form.serpSourceSelected}{" "}
+                    {(serpCaptures.find((c) => c.id === serpCaptureId)?.title ||
+                      serpCaptures.find((c) => c.id === serpCaptureId)?.finalUrl ||
+                      serpCaptureId
+                    ).slice(0, 100)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => onPickSerpCapture("")}
+                    className="rounded border border-ink/15 px-2 py-0.5 text-xs hover:bg-ink/5"
+                  >
+                    {d.form.serpSourceClear}
+                  </button>
+                </div>
+              )}
+              {serpCaptureError && (
+                <p className="mt-1 text-xs text-red-600">{serpCaptureError}</p>
+              )}
+            </div>
           )}
         </div>
 

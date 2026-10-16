@@ -62,6 +62,7 @@ function makeFakePrisma() {
   const integrations: Row[] = [];
   const targets: Row[] = [];
   const auditLogs: Row[] = [];
+  const offerCaptures: Row[] = [];
   return {
     tenant: mkStore(tenants),
     user: mkStore(users),
@@ -85,7 +86,8 @@ function makeFakePrisma() {
     googleAdsScriptIntegration: mkStore(integrations),
     scriptSyncTarget: mkStore(targets),
     auditLog: mkStore(auditLogs),
-    _rows: { tenants, users, sessions, aiSettings, integrations, targets, auditLogs },
+    offerCapture: mkStore(offerCaptures),
+    _rows: { tenants, users, sessions, aiSettings, integrations, targets, auditLogs, offerCaptures },
   };
 }
 
@@ -279,6 +281,80 @@ describe("POST /api/v1/ads/auto-create", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().plan.copyStyle).toBe("affiliate");
+  });
+
+  it("copyStyle=expert without serpCaptureId and without DataForSEO creds errors clearly", async () => {
+    const app = await buildApp(fake);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/ads/auto-create",
+      headers: cookie(token),
+      payload: { urls: ["https://merchant.example/offer1"], copyStyle: "expert" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.stringify(res.json())).toContain("DataForSEO");
+  });
+
+  it("copyStyle=expert with unknown serpCaptureId errors clearly", async () => {
+    const app = await buildApp(fake);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/ads/auto-create",
+      headers: cookie(token),
+      payload: {
+        urls: ["https://merchant.example/offer1"],
+        copyStyle: "expert",
+        serpCaptureId: randomUUID(),
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.stringify(res.json())).toContain("不存在");
+  });
+
+  it("copyStyle=expert with a non-SERP capture errors clearly", async () => {
+    const captureId = randomUUID();
+    fake._rows.offerCaptures.push({
+      id: captureId,
+      tenantId,
+      url: "https://merchant.example/offer1",
+      pageText: "Some product page text.",
+    });
+    const app = await buildApp(fake);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/ads/auto-create",
+      headers: cookie(token),
+      payload: {
+        urls: ["https://merchant.example/offer1"],
+        copyStyle: "expert",
+        serpCaptureId: captureId,
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.stringify(res.json())).toContain("搜索结果页");
+  });
+
+  it("copyStyle=expert with a SERP capture generates an expert plan", async () => {
+    const captureId = randomUUID();
+    fake._rows.offerCaptures.push({
+      id: captureId,
+      tenantId,
+      url: "https://www.google.com/search?q=running+shoes",
+      pageText: "Sponsored: Save 40% on Running Shoes. Top rated store.",
+    });
+    const app = await buildApp(fake);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/ads/auto-create",
+      headers: cookie(token),
+      payload: {
+        urls: ["https://merchant.example/offer1"],
+        copyStyle: "expert",
+        serpCaptureId: captureId,
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().plan.copyStyle).toBe("expert");
   });
 
   it("user keywords override AI-generated keywords", async () => {

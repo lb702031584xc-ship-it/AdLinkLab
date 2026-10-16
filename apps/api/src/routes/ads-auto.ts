@@ -47,8 +47,15 @@ import {
   type AdPlan,
   type AdPlanUrlDraft,
   type PlanStore,
+  type SerpReferenceAd,
 } from "../ai/ad-generator.js";
 import type { AnalysisLanguage } from "../ai/prompts.js";
+import { fetchSerpAds } from "../ai/serp-ads.js";
+import { readEncryptedTrafficSetting } from "../traffic/settings.js";
+import {
+  DATAFORSEO_LOGIN_SETTING,
+  DATAFORSEO_PASSWORD_SETTING,
+} from "../traffic/dataforseo.js";
 import { buildCreateCampaignScript, COUNTRY_LOCATION_IDS } from "../services/script-create-campaign.js";
 import {
   buildRotationScript,
@@ -174,8 +181,10 @@ export async function registerAdsAutoRoutes(
       pageTexts?: unknown;
       /** 可选：用户在投放选词里定好的关键词；提供则广告组用这套词，不再 AI 生成 */
       keywords?: unknown;
-      /** 可选：文案口吻 official=官方口吻 / affiliate=联盟安全口吻（默认） */
+      /** 可选：文案口吻 official=官方口吻 / affiliate=联盟安全口吻（默认）/ expert=专家营销口吻 */
       copyStyle?: unknown;
+      /** 可选：expert 口吻时，用户选用的插件 SERP 抓取记录 id（Google 搜索结果页） */
+      serpCaptureId?: unknown;
     };
   }>("/api/v1/ads/auto-create", async (request) => {
     const info = await requireSession(deps, request);
@@ -219,6 +228,63 @@ export async function registerAdsAutoRoutes(
     // apiKey lives only in this local; never logged.
     const apiKey = decryptSecret(settings.apiKeyEnc, pepper);
 
+    // 专家营销口吻：先取参考成功广告（插件 SERP 抓取优先，否则 DataForSEO 自动搜）。
+    // 非 expert 时 serpCaptureId 忽略，现有行为不变。
+    let referenceAds: SerpReferenceAd[] = [];
+    let serpPageText = "";
+    if (copyStyle === "expert") {
+      const serpCaptureId = asUuid(body.serpCaptureId, "serpCaptureId") ?? null;
+      if (serpCaptureId) {
+        const capture = await prisma.offerCapture.findFirst({
+          where: { id: serpCaptureId, tenantId: info.tenantId },
+          select: { url: true, pageText: true },
+        });
+        if (!capture) {
+          throw new ValidationError("所选 SERP 抓取记录不存在");
+        }
+        const captureUrl = capture.url ?? "";
+        if (!captureUrl.includes("/search") || !captureUrl.includes("google.")) {
+          throw new ValidationError(
+            "所选抓取不是搜索结果页，请抓取 Google 搜索结果页"
+          );
+        }
+        serpPageText = (capture.pageText ?? "").slice(0, 8000);
+        if (!serpPageText.trim()) {
+          throw new ValidationError("所选 SERP 抓取记录没有页面文字，请重新抓取");
+        }
+      } else {
+        const login = await readEncryptedTrafficSetting(
+          prisma,
+          DATAFORSEO_LOGIN_SETTING
+        );
+        const password = await readEncryptedTrafficSetting(
+          prisma,
+          DATAFORSEO_PASSWORD_SETTING
+        );
+        if (!login || !password) {
+          throw new ValidationError(
+            "专家模式需要 DataForSEO 凭证，请到 AI 设置 → 流量信号凭证填写，或用插件抓取一条搜索结果页"
+          );
+        }
+        // 查询词：用户在投放选词里定的第一个关键词，没有则用首个 URL 的域名兜底。
+        const serpQuery =
+          userKeywords[0]?.text?.trim() ||
+          (() => {
+            try {
+              return new URL(urls[0]!).hostname;
+            } catch {
+              return urls[0]!;
+            }
+          })();
+        referenceAds = await fetchSerpAds(serpQuery, { login, password });
+        if (referenceAds.length === 0) {
+          throw new ValidationError(
+            `DataForSEO 未搜到“${serpQuery}”的相关广告，请换个关键词重试，或用插件抓取一条搜索结果页`
+          );
+        }
+      }
+    }
+
     const drafts: AdPlanUrlDraft[] = [];
     const finalUrls: string[] = [];
     // Sequential per URL: keeps page-fetch + LLM load predictable.
@@ -248,7 +314,15 @@ export async function registerAdsAutoRoutes(
             baseUrl: settings.baseUrl as string,
             model: settings.model as string,
             apiKey,
-            ...buildAdPlanPrompt({ url: finalUrl, pageText, language, copyStyle }),
+            ...buildAdPlanPrompt({
+              url: finalUrl,
+              pageText,
+              language,
+              copyStyle,
+              // 专家模式参考材料（非 expert 时为空，prompt 不渲染参考段落）。
+              referenceAds: referenceAds.length > 0 ? referenceAds : undefined,
+              serpPageText: serpPageText || undefined,
+            }),
           },
           validateAdPlanUrlDraft,
           chatJsonImpl

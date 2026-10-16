@@ -54,8 +54,8 @@ export interface AdPlan {
   sourceUrls: string[];
   offerId: string | null;
   googleAccountId: string | null;
-  /** 文案口吻：official=官方口吻，affiliate=联盟安全口吻 */
-  copyStyle?: "official" | "affiliate";
+  /** 文案口吻：official=官方口吻，affiliate=联盟安全口吻，expert=专家营销口吻 */
+  copyStyle?: "official" | "affiliate" | "expert";
   campaign: {
     name: string;
     dailyBudget: AdPlanMoney;
@@ -151,7 +151,7 @@ async function apiFetchText(path: string): Promise<string> {
 
 export async function requestAdPlan(
   urls: string[],
-  opts: { language?: "zh" | "en"; googleAccountId?: string; pageTexts?: Array<string | null>; keywords?: Array<{ text: string; matchType?: string }>; copyStyle?: "official" | "affiliate" } = {}
+  opts: { language?: "zh" | "en"; googleAccountId?: string; pageTexts?: Array<string | null>; keywords?: Array<{ text: string; matchType?: string }>; copyStyle?: "official" | "affiliate" | "expert"; serpCaptureId?: string } = {}
 ): Promise<AutoCreateResult> {
   return apiFetch<AutoCreateResult>("/api/v1/ads/auto-create", {
     method: "POST",
@@ -162,6 +162,7 @@ export async function requestAdPlan(
       pageTexts: opts.pageTexts,
       keywords: opts.keywords,
       copyStyle: opts.copyStyle,
+      serpCaptureId: opts.serpCaptureId,
     }),
   });
 }
