@@ -515,6 +515,16 @@ export function AdsAutoClient({
   };
   // 投放选词里定好的关键词（可选）：填了就用这套，不再 AI 生成
   const [kwText, setKwText] = useState("");
+  /** 关键词自动带入的来源（快照恢复 / 跨页联动）：显示给用户，不静默填。手改后清空。 */
+  const [kwSource, setKwSource] = useState<{
+    from: "ads-auto" | "keyword-launch" | "traffic-planner";
+    count: number;
+  } | null>(null);
+  const kwSourceLabels = {
+    "ads-auto": d.form.kwSourceAdsAuto,
+    "keyword-launch": d.form.kwSourceLaunch,
+    "traffic-planner": d.form.kwSourcePlanner,
+  } as const;
   const [offerId, setOfferId] = useState<string | null>(initialOfferId ?? null);
   const urlKwRef = useRef<string | null>(null);
   const urlUrlsRef = useRef<string | null>(null);
@@ -524,7 +534,12 @@ export function AdsAutoClient({
   const applyAdsAutoSnapshot = (snap: Record<string, unknown>) => {
     const str = (v: unknown) => (v == null ? "" : String(v));
     if (urlUrlsRef.current == null && str(snap.urlsText)) setUrlsText(str(snap.urlsText));
-    if (urlKwRef.current == null && str(snap.kwText)) setKwText(normalizeKwText(str(snap.kwText)));
+    if (urlKwRef.current == null && str(snap.kwText)) {
+      const filled = normalizeKwText(str(snap.kwText));
+      setKwText(filled);
+      const count = filled.split("\n").map((l) => l.trim()).filter(Boolean).length;
+      if (count > 0) setKwSource({ from: "ads-auto", count });
+    }
     if (urlCsRef.current == null && (snap.copyStyle === "official" || snap.copyStyle === "affiliate" || snap.copyStyle === "expert"))
       setCopyStyle(snap.copyStyle);
     if (snap.language === "zh" || snap.language === "en") setLanguage(snap.language);
@@ -574,8 +589,10 @@ export function AdsAutoClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* 取某 offer 的投放选词（优先）/ 投流关键词（回落），转成 kwText 行 */
-  const loadLaunchKeywordLines = async (oid: string): Promise<string[]> => {
+  /* 取某 offer 的投放选词（优先）/ 投流关键词（回落），转成 kwText 行，并带回来源页 */
+  const loadLaunchKeywordLines = async (
+    oid: string
+  ): Promise<{ lines: string[]; from: "keyword-launch" | "traffic-planner" | null }> => {
     for (const page of ["keyword-launch", "traffic-planner"] as const) {
       const res = await loadWorkStateAction(page, oid);
       if (!res.ok || !res.data.state) continue;
@@ -596,9 +613,9 @@ export function AdsAutoClient({
         // phrase 是默认，不写后缀；只给 exact / broad 写后缀
         lines.push(mt && mt !== "phrase" ? `${kw}, ${mt}` : kw);
       }
-      if (lines.length > 0) return lines;
+      if (lines.length > 0) return { lines, from: page };
     }
-    return [];
+    return { lines: [], from: null };
   };
 
   /* 生效 offer：?offerId= 显式传入，或上次选的 offer 回落（选一次，到处带）。
@@ -616,9 +633,10 @@ export function AdsAutoClient({
       try {
         const oid = await resolveOfferId();
         if (!oid || cancelled) return;
-        const lines = await loadLaunchKeywordLines(oid);
-        if (lines.length > 0 && !cancelled) {
+        const { lines, from } = await loadLaunchKeywordLines(oid);
+        if (lines.length > 0 && from && !cancelled) {
           setKwText((prev) => (prev.trim() ? prev : lines.join("\n")));
+          setKwSource({ from, count: lines.length });
         }
       } catch {
         /* 取不到就不填 */
@@ -782,7 +800,7 @@ export function AdsAutoClient({
       }
     }
     if (remaining.length === 0) return;
-    // 同步 kwText，使后续重新生成也用这套干净词。
+    // 同步 kwText，使后续重新生成也用这套干净词。词数变了，来源标注失效，清掉。
     setKwText(
       remaining
         .map((k) =>
@@ -792,6 +810,7 @@ export function AdsAutoClient({
         )
         .join("\n")
     );
+    setKwSource(null);
     await requestPlan(remaining);
   }
 
@@ -1096,7 +1115,7 @@ export function AdsAutoClient({
                 try {
                   const oid = await resolveOfferId();
                   if (!oid) return;
-                  const lines = await loadLaunchKeywordLines(oid);
+                  const { lines, from } = await loadLaunchKeywordLines(oid);
                   if (lines.length === 0) return;
                   const existing = new Set(
                     kwText.split("\n").map((l) => l.split(",")[0]?.trim().toLowerCase()).filter(Boolean)
@@ -1108,6 +1127,7 @@ export function AdsAutoClient({
                     setKwText((prev) =>
                       prev.trim() ? `${prev.trim()}\n${fresh.join("\n")}` : fresh.join("\n")
                     );
+                    if (from) setKwSource({ from, count: fresh.length });
                   }
                 } catch {
                   /* 取不到就不填 */
@@ -1118,11 +1138,31 @@ export function AdsAutoClient({
               {d.form.importLaunchKeywords}
             </button>
           </div>
+          {kwSource && (
+            <p className="mb-1 text-xs text-ink/60">
+              {d.form.kwAutoNote
+                .replace("{source}", kwSourceLabels[kwSource.from])
+                .replace("{count}", String(kwSource.count))}{" "}
+              <button
+                type="button"
+                onClick={() => {
+                  setKwText("");
+                  setKwSource(null);
+                }}
+                className="text-ink/70 underline hover:text-ink"
+              >
+                {d.form.kwAutoClear}
+              </button>
+            </p>
+          )}
           <textarea
             id="ads-auto-keywords"
             rows={3}
             value={kwText}
-            onChange={(e) => setKwText(e.target.value)}
+            onChange={(e) => {
+              setKwText(e.target.value);
+              setKwSource(null);
+            }}
             placeholder={d.form.keywordsPlaceholder}
             className={`${inputClass} font-mono`}
           />

@@ -224,6 +224,8 @@ export function TrafficPlannerClient({
     initialOffer?.id ?? null
   );
   const appliedOfferRef = useRef<string | null>(initialOffer?.id ?? null);
+  /** 上次应用的 offer id（只看 id）：切 offer 判定用。手动 offer 改名（id 仍为空）不触发清空。 */
+  const appliedOfferIdRef = useRef<string | null>(initialOffer?.id ?? null);
 
   // Offer 基础（优先用带入的 offer 参数初始化）
   const [offerName, setOfferName] = useState(initialOffer?.name ?? "");
@@ -491,26 +493,10 @@ export function TrafficPlannerClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [restored, initialInputs]);
 
-  /** 工作表嵌入时：上层 offer 变化 → 同步填充（每个 offer 只自动填一次，不覆盖手改） */
-  useEffect(() => {
-    const key = initialOffer ? `${initialOffer.id}::${initialOffer.name}` : null;
-    if (key && appliedOfferRef.current !== key) {
-      appliedOfferRef.current = key;
-      fillFromOffer(initialOffer!);
-      // 显式 offer（?offerId= / 工作表）→ 更新全局当前 offer 记忆（手动 offer id 为空时不记）
-      if (initialOffer!.id) setLastOfferId(initialOffer!.id);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialOffer]);
-
-  /** 下拉切换 offer：先清空工作字段，再填库参数，最后恢复该 offer 的 planner 快照（有则覆盖） */
-  const onSelectOffer = async (id: string) => {
-    const o = (offers ?? []).find((x) => x.id === id) ?? null;
-    if (!o) {
-      setSelectedOfferId(null);
-      return;
-    }
-    // 先清空：新 offer 没快照时不留上一个 offer 的数据。
+  /** 清空工作字段（切 offer 时用）：新 offer 没快照时不留上一个 offer 的数据。
+      offerName / network / profitMode 不在这里清，由 fillFromOffer 按新 offer 重填；
+      offer 被清除时另行清空 offerName / network。 */
+  const resetWorkingFields = () => {
     setMode("landing");
     setBrandPolicy("allowed");
     setAvgPrice("");
@@ -537,6 +523,55 @@ export function TrafficPlannerClient({
     setNegImportText("");
     setResult(null);
     setMsg(null);
+  };
+
+  /** 工作表嵌入时：上层 offer 变化 → 同步填充（每个 offer 只自动填一次，不覆盖手改）。
+      切 offer 时清空上一个 offer 的工作字段，重载新 offer 的快照（替换不合并），不留旧词；
+      offer 被清除时也清空。 */
+  useEffect(() => {
+    const key = initialOffer ? `${initialOffer.id}::${initialOffer.name}` : null;
+    if (key && appliedOfferRef.current !== key) {
+      const prevId = appliedOfferIdRef.current;
+      const newId = initialOffer!.id ?? null;
+      appliedOfferRef.current = key;
+      appliedOfferIdRef.current = newId;
+      const isSwitch = prevId !== null && prevId !== newId;
+      if (isSwitch) resetWorkingFields();
+      fillFromOffer(initialOffer!);
+      // 显式 offer（?offerId= / 工作表）→ 更新全局当前 offer 记忆（手动 offer id 为空时不记）
+      if (newId) setLastOfferId(newId);
+      if (isSwitch && newId) {
+        void (async () => {
+          try {
+            const res = await loadWorkStateAction("traffic-planner", newId);
+            if (res.ok && res.data.state && snapshotMeaningful(res.data.state)) {
+              applySnapshot(res.data.state);
+            }
+          } catch {
+            /* 恢复失败不打断 */
+          }
+        })();
+      }
+    } else if (!key && appliedOfferRef.current) {
+      appliedOfferRef.current = null;
+      appliedOfferIdRef.current = null;
+      resetWorkingFields();
+      setOfferName("");
+      setNetwork("");
+      setSelectedOfferId(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialOffer]);
+
+  /** 下拉切换 offer：先清空工作字段，再填库参数，最后恢复该 offer 的 planner 快照（有则覆盖） */
+  const onSelectOffer = async (id: string) => {
+    const o = (offers ?? []).find((x) => x.id === id) ?? null;
+    if (!o) {
+      setSelectedOfferId(null);
+      return;
+    }
+    // 先清空：新 offer 没快照时不留上一个 offer 的数据。
+    resetWorkingFields();
     fillFromOffer(o);
     setLastOfferId(o.id);
     try {
