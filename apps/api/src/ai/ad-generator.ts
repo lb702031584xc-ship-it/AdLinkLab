@@ -168,6 +168,8 @@ copyStyle: AdCopyStyle;
 referenceAds?: SerpReferenceAd[];
 /** 专家模式：插件抓取的 Google SERP 原文（路由侧已截断到 8000 字符内）。 */
 serpPageText?: string;
+/** 用户提供的当前优惠（如 "Up to 30% Off"）——真实来源，写进 RSA；没有就不编造。 */
+promotion?: string;
 }
 
 /** 规范化 copyStyle 输入，非法值回退到 affiliate（安全口吻）。 */
@@ -189,11 +191,12 @@ const styleRules =
 input.copyStyle === "official"
 ? [
 "Copy style: OFFICIAL brand voice (authorized to present as the brand). Follow the proven big-brand RSA structure:",
-"- Headline 1 pattern: '<Brand> Official Site | <category or offer>' (e.g. 'Nike Official Site | Shop Running Shoes').",
+"- Headline 1 pattern: '<Brand> Official Site | <promotion or category>' — when a promotion is provided or found on the page, lead with it (e.g. 'Max & Lily Official Site | Up to 30% Off'); otherwise use the category (e.g. 'Nike Official Site | Shop Running Shoes'). Big-brand ads put the sale in the headline, not just the category.",
 "- You may append the ® / ™ symbol directly after the brand name (single Unicode character — it renders as a small superscript automatically), but ONLY when the landing page text itself already uses ® / ™ for that brand. Otherwise use the plain brand name.",
 "- Display paths (path1/path2, <= 15 chars each) mirror the landing page category, e.g. shop / running-shoes.",
 "- Descriptions: category benefit + one consistent brand tagline repeated across the ad + clear CTA (free shipping threshold, promo code, sale %).",
 "- Every headline/description stays specific to the page's category — one ad group, one category.",
+"- Official-brand RSA must carry at least one promotional hook (discount / coupon / free shipping / warranty / rating) in the headlines when the page or the user provides one; a plain category-only ad is not acceptable when a real offer exists.",
 ]
 : input.copyStyle === "expert"
 ? [
@@ -214,6 +217,18 @@ input.copyStyle === "official"
 "- Display paths (path1/path2, <= 15 chars each) mirror the landing page category.",
 "- Descriptions: category benefit + trust line (tested, compared, updated regularly) + CTA. Keep every claim supported by the landing page; imply no brand ownership.",
 ];
+// 用户提供的当前优惠：最可靠的促销来源。提供时必须写进 RSA（≥2 标题 + ≥1 描述），
+// 数字/条款原样照抄不改；没提供时不渲染本段。
+const promotionSection: string[] = [];
+const promotion = (input.promotion ?? "").trim();
+if (promotion) {
+promotionSection.push(
+"Current promotion (provided by the user — it is real, use it):",
+`"${promotion}"`,
+"- Use this promotion in at least 2 headlines and 1 description (within the char limits). Do NOT change its numbers or terms; use it as given. If it does not fit a headline, shorten its wording but keep the numbers/terms identical.",
+""
+);
+}
 // 专家模式参考材料：结构化成功广告列表，和/或插件抓取的 SERP 原文。
 // 两者都没有时不渲染参考段落（专家规则仍生效）。
 const referenceSection: string[] = [];
@@ -258,7 +273,9 @@ DRAFT_JSON_SPEC,
 "- campaignName / adGroupName: descriptive, professional, 80 characters or fewer.",
 "- path1 / path2: short display-path segments (<= 15 chars each) or null.",
 "- finalUrl is the offer URL below — use it verbatim for the ad group and RSA; do not invent URLs.",
+"- Promotional hooks: scan the page text for REAL promotional signals (discount %, sale price vs list price, coupon code, free-shipping threshold, warranty, star rating / review count) and use the strongest 1-2 in headlines/descriptions. NEVER invent a discount, price, or percentage the page does not state and the user did not provide. If the page states both a sale price and a list price, you may compute the discount % from those two real numbers.",
 ...styleRules,
+...promotionSection,
 ...referenceSection,
 ].join("\n");
 

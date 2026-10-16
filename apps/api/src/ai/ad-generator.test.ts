@@ -140,6 +140,47 @@ describe("buildAdPlanPrompt", () => {
     expect(system).toContain("20-year affiliate marketing expert");
     expect(system).not.toContain("Reference —");
   });
+
+  it("official + promotion renders the promotion verbatim with the 2-headline/1-description instruction", () => {
+    const { system } = buildAdPlanPrompt({
+      url: "https://x.example",
+      pageText: "t",
+      language: "en",
+      copyStyle: "official",
+      promotion: "Up to 30% Off",
+    });
+    expect(system).toContain("Current promotion (provided by the user");
+    expect(system).toContain('"Up to 30% Off"');
+    expect(system).toContain("at least 2 headlines and 1 description");
+    expect(system).toContain("Do NOT change its numbers or terms");
+    // 官方口吻标题 1 要优先放促销，不是只放品类。
+    expect(system).toContain("Up to 30% Off");
+    expect(system).toContain("Big-brand ads put the sale in the headline");
+  });
+
+  it("official without promotion has no promotion section but still has the promo-mining rule", () => {
+    const { system } = buildAdPlanPrompt({
+      url: "https://x.example",
+      pageText: "t",
+      language: "en",
+      copyStyle: "official",
+    });
+    expect(system).not.toContain("Current promotion (provided by the user");
+    expect(system).toContain("Promotional hooks: scan the page text for REAL promotional signals");
+    expect(system).toContain("at least one promotional hook");
+  });
+
+  it("all three styles forbid inventing discounts", () => {
+    for (const copyStyle of ["official", "affiliate", "expert"] as const) {
+      const { system } = buildAdPlanPrompt({
+        url: "https://x.example",
+        pageText: "t",
+        language: "en",
+        copyStyle,
+      });
+      expect(system).toContain("NEVER invent a discount, price, or percentage");
+    }
+  });
 });
 
 describe("validateAdPlanUrlDraft", () => {

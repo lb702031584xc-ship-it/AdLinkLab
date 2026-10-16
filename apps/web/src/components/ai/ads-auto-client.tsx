@@ -537,6 +537,8 @@ export function AdsAutoClient({
   // 若声明在后会触发 TDZ（ReferenceError）。汇率 helpers 仍在出价区 state 块里（闭包，运行时才用）。
   const [bidCurrency, setBidCurrency] = useState("USD");
   const [fxRate, setFxRate] = useState("7.10");
+  // 当前优惠（用户填店铺真实优惠，如 Up to 30% Off，绝不编造）：同上，watch 在 render 时读取，需提前声明。
+  const [promotion, setPromotion] = useState("");
 
   /** 快照恢复（URL 参数优先于快照）。挂载恢复和上次 offer 回落共用。 */
   const applyAdsAutoSnapshot = (snap: Record<string, unknown>) => {
@@ -552,6 +554,7 @@ export function AdsAutoClient({
       setCopyStyle(snap.copyStyle);
     if (snap.language === "zh" || snap.language === "en") setLanguage(snap.language);
     if (str(snap.googleAccountId)) setGoogleAccountId(str(snap.googleAccountId));
+    if (str(snap.promotion)) setPromotion(str(snap.promotion));
     if (typeof snap.bidCurrency === "string" && snap.bidCurrency.trim()) {
       const bc = snap.bidCurrency.trim().toUpperCase();
       setBidCurrency(bc);
@@ -577,13 +580,14 @@ export function AdsAutoClient({
       googleAccountId,
       bidCurrency,
       fxRate,
+      promotion,
     }),
     isMeaningful: (snap) =>
       Boolean(
         (snap.urlsText as string)?.trim() || (snap.kwText as string)?.trim()
       ),
     applySnapshot: applyAdsAutoSnapshot,
-    watch: [offerId, urlsText, kwText, language, copyStyle, googleAccountId, bidCurrency, fxRate],
+    watch: [offerId, urlsText, kwText, language, copyStyle, googleAccountId, bidCurrency, fxRate, promotion],
   });
 
   /* 全局当前 offer：?offerId= 显式传入时以 URL 为准并更新记忆；
@@ -736,6 +740,8 @@ export function AdsAutoClient({
         // 专家营销：选中 SERP 抓取时带上；其他口吻不传。
         serpCaptureId:
           copyStyle === "expert" && serpCaptureId ? serpCaptureId : undefined,
+        // 当前优惠（用户填店铺真实优惠，留空=没有）：传给生成提示词，AI 用它写促销钩子，绝不编造。
+        promotion: promotion.trim() || undefined,
         // 汇率（1 USD = X 目标货币）：只要合法就传，服务端只在需要换算时用；
         // 不能只在 bidCurrency ≠ USD 时传——用户选了 CNY 账户直接点生成时，
         // bidCurrency 还是 USD，但服务端按账户货币换算需要汇率，缺了会拒绝。
@@ -1214,6 +1220,21 @@ export function AdsAutoClient({
           >
             {generating ? d.form.generating : d.form.generate}
           </button>
+        </div>
+
+        {/* 当前优惠：用户填店铺真实优惠（生成前输入，生成后改了下次生成生效），AI 用它写促销钩子，留空=没有，绝不编造折扣。 */}
+        <div className="mt-3">
+          <label className={labelClass} htmlFor="ads-auto-promotion">
+            {d.form.promotionLabel}
+          </label>
+          <input
+            id="ads-auto-promotion"
+            inputMode="text"
+            value={promotion}
+            onChange={(e) => setPromotion(e.target.value)}
+            placeholder={d.form.promotionPlaceholder}
+            className={inputClass}
+          />
         </div>
 
         {/* 抓取失败兜底：Amazon 等反爬站点手动粘贴页面文字 */}

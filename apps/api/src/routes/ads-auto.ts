@@ -191,6 +191,8 @@ export async function registerAdsAutoRoutes(
       serpCaptureId?: unknown;
       /** 可选：汇率（1 USD = X 目标货币）。计划货币与广告账户货币不一致时必填，用于换算。 */
       fxRate?: unknown;
+      /** 可选：用户提供的当前优惠（如 "Up to 30% Off"），写进 RSA；非 string 忽略。 */
+      promotion?: unknown;
     };
   }>("/api/v1/ads/auto-create", async (request) => {
     const info = await requireSession(deps, request);
@@ -231,6 +233,11 @@ export async function registerAdsAutoRoutes(
     // 用户在投放选词里定好的关键词：有则各广告组统一用这套，不再 AI 生成
     const userKeywords = normalizeUserKeywords(body.keywords);
     const copyStyle = normalizeCopyStyle(body.copyStyle);
+    // 用户提供的当前优惠：真实来源，写进 RSA；截断到 200 字符；非 string 忽略。
+    const promotion =
+      typeof body.promotion === "string" && body.promotion.trim()
+        ? body.promotion.trim().slice(0, 200)
+        : undefined;
 
     const settings = await readLlmSettings(prisma);
     if (!(settings.baseUrl && settings.model && settings.apiKeyEnc)) {
@@ -337,6 +344,8 @@ export async function registerAdsAutoRoutes(
               // 专家模式参考材料（非 expert 时为空，prompt 不渲染参考段落）。
               referenceAds: referenceAds.length > 0 ? referenceAds : undefined,
               serpPageText: serpPageText || undefined,
+              // 用户提供的当前优惠（没提供时不渲染 promotion 段落）。
+              promotion,
             }),
           },
           validateAdPlanUrlDraft,
