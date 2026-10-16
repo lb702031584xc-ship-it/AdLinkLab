@@ -20,6 +20,11 @@ import {
 import { calcProfit } from "@/lib/profit-calc";
 import { parseProductCaptureAiAction } from "@/lib/api/ai-actions";
 import { CapturePicker } from "@/components/ai/capture-picker";
+import { AdPreview } from "@/components/ai/ad-preview";
+import {
+  checkKeywordsAction,
+  type KeywordCheckResult,
+} from "@/lib/api/keyword-check-actions";
 import type { OfferCaptureItem } from "@/lib/api/ai";
 import {
   confirmAdPlanAction,
@@ -56,6 +61,23 @@ function normalizeKwText(text: string): string {
     .join("\n");
 }
 
+/** 关键词 AI 检查状态（由父组件持有，检查结果驱动移除流程）。 */
+export type KeywordCheckState = {
+  status: "idle" | "checking" | "done" | "error";
+  results: KeywordCheckResult[];
+  error: string | null;
+};
+
+/** finalUrl → Google 搜索样式展示链接：域名 + 路径（根路径只留域名）。 */
+function displayUrlOf(finalUrl: string): string {
+  try {
+    const u = new URL(finalUrl);
+    return u.pathname && u.pathname !== "/" ? `${u.hostname}${u.pathname}` : u.hostname;
+  } catch {
+    return finalUrl;
+  }
+}
+
 function PlanPreview({
   plan,
   d,
@@ -65,6 +87,9 @@ function PlanPreview({
   onBudgetCurrencyChange,
   geo,
   onGeoChange,
+  keywordCheck,
+  onCheckKeywords,
+  onRemoveFlagged,
 }: {
   plan: AdPlan;
   d: AdsAutoDict;
@@ -74,8 +99,15 @@ function PlanPreview({
   onBudgetCurrencyChange: (v: string) => void;
   geo: string[];
   onGeoChange: (v: string[]) => void;
+  keywordCheck: KeywordCheckState;
+  onCheckKeywords: () => void;
+  onRemoveFlagged: () => void;
 }) {
   const c = plan.campaign;
+  const firstBlock = plan.adGroups[0];
+  const flagged = keywordCheck.results.filter((r) => r.verdict !== "relevant");
+  const totalKeywords = plan.adGroups.reduce((n, b) => n + b.group.keywords.length, 0);
+  const canRemoveFlagged = flagged.length > 0 && flagged.length < totalKeywords;
   return (
     <div className="mt-6 space-y-4">
       <div className={cardClass}>
@@ -174,6 +206,18 @@ function PlanPreview({
         </p>
       </div>
 
+      {/* 可视化广告预览：取第一个广告组的 RSA（Google 搜索样式） */}
+      {firstBlock && (
+        <AdPreview
+          headlines={firstBlock.rsa.headlines}
+          descriptions={firstBlock.rsa.descriptions}
+          displayUrl={displayUrlOf(firstBlock.rsa.finalUrl)}
+          finalUrl={firstBlock.rsa.finalUrl}
+          title={d.preview.adPreviewTitle}
+          sponsoredLabel={d.preview.adPreviewSponsored}
+        />
+      )}
+
       <h3 className="text-sm font-semibold text-ink">
         {d.preview.adGroups}（{plan.adGroups.length}）
       </h3>
@@ -244,6 +288,80 @@ function PlanPreview({
           </div>
         </div>
       ))}
+      {/* 关键词 AI 检查：投流前必查，无关/风险词标红，移除后重新生成计划 */}
+      <div className={cardClass}>
+        <h3 className="text-sm font-semibold text-ink">{d.preview.keywordCheckTitle}</h3>
+        <p className="mt-1 text-xs text-ink/55">{d.preview.keywordCheckHint}</p>
+        <button
+          type="button"
+          onClick={onCheckKeywords}
+          disabled={keywordCheck.status === "checking" || totalKeywords === 0}
+          className="mt-3 rounded-lg bg-ink px-3 py-1.5 text-sm font-medium text-paper disabled:opacity-50"
+        >
+          {keywordCheck.status === "checking"
+            ? d.preview.keywordCheckChecking
+            : d.preview.keywordCheckButton}
+        </button>
+        {keywordCheck.status === "error" && keywordCheck.error && (
+          <p className="mt-2 text-sm text-red-700">{keywordCheck.error}</p>
+        )}
+        {keywordCheck.status === "done" && (
+          <>
+            {keywordCheck.results.length === 0 ? (
+              <p className="mt-2 text-sm text-ink/60">{d.preview.keywordCheckEmpty}</p>
+            ) : (
+              <ul className="mt-2 space-y-1">
+                {keywordCheck.results.map((r, i) => (
+                  <li
+                    key={`${r.keyword}-${i}`}
+                    className={`flex flex-wrap items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${
+                      r.verdict === "relevant"
+                        ? "bg-emerald-50"
+                        : "bg-red-50"
+                    }`}
+                  >
+                    <span className="font-mono font-medium text-ink">{r.keyword}</span>
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                        r.verdict === "relevant"
+                          ? "bg-emerald-100 text-emerald-800"
+                          : "bg-red-100 text-red-800"
+                      }`}
+                    >
+                      {r.verdict === "relevant"
+                        ? d.preview.keywordCheckRelevant
+                        : r.verdict === "irrelevant"
+                          ? d.preview.keywordCheckIrrelevant
+                          : d.preview.keywordCheckRisky}
+                    </span>
+                    <span className="text-xs text-ink/60">{r.reason}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {flagged.length === 0 && keywordCheck.results.length > 0 && (
+              <p className="mt-2 text-sm text-emerald-700">{d.preview.keywordCheckNoFlagged}</p>
+            )}
+            {flagged.length > 0 && (
+              <div className="mt-3">
+                <button
+                  type="button"
+                  onClick={onRemoveFlagged}
+                  disabled={!canRemoveFlagged}
+                  className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-sm font-medium text-red-800 hover:bg-red-100 disabled:opacity-50"
+                >
+                  {d.preview.keywordCheckRemoveFlagged}（{flagged.length}）
+                </button>
+                <p className="mt-1 text-xs text-ink/55">
+                  {canRemoveFlagged
+                    ? d.preview.keywordCheckRemoveHint
+                    : d.preview.keywordCheckAllFlagged}
+                </p>
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -292,6 +410,13 @@ export function AdsAutoClient({
     { id: string; name: string; customerId: string }[]
   >([]);
   const [plan, setPlan] = useState<AdPlan | null>(null);
+  // 关键词 AI 检查：结果驱动移除流程（移除 = 带过滤后关键词重新生成计划；
+  // 确认建广告只传 planId、用服务端存储的计划，本地只改展示则被移除词仍会建出来）。
+  const [keywordCheck, setKeywordCheck] = useState<KeywordCheckState>({
+    status: "idle",
+    results: [],
+    error: null,
+  });
   // 预览里可改：预算 + 预算货币 + 地域（初始为 AI 建议值，确认时作为覆盖值传给服务端）。
   const [editedBudget, setEditedBudget] = useState("");
   const [editedBudgetCurrency, setEditedBudgetCurrency] = useState("USD");
@@ -468,7 +593,9 @@ export function AdsAutoClient({
     if (r.ok) setCoachFindings(r.data.findings);
   }
 
-  async function onGenerate() {
+  async function requestPlan(
+    keywords: Array<{ text: string; matchType?: string }> | undefined
+  ) {
     const urls = parseUrls();
     if (urls.length === 0) {
       setError(d.form.needUrls);
@@ -479,26 +606,16 @@ export function AdsAutoClient({
     setPlan(null);
     setConfirm(null);
     setScriptSource(null);
+    setKeywordCheck({ status: "idle", results: [], error: null });
     try {
       // 只有一个 URL 且用户粘贴了页面文字时，用手动文字跳过抓取（Amazon 等反爬站点）
       const manual = manualText.trim();
-      const pageTexts =
-        manual && urls.length === 1 ? [manual] : undefined;
-      // 用户在投放选词里定好的关键词：每行一个，可带匹配方式 "词, exact/phrase/broad"
-      const keywords = kwText
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .map((line) => {
-          const [text, mt] = line.split(",").map((s) => s.trim());
-          return { text, matchType: (mt || "phrase").toUpperCase() };
-        })
-        .filter((k) => k.text);
+      const pageTexts = manual && urls.length === 1 ? [manual] : undefined;
       const res = await requestAdPlanAction(urls, {
         language,
         googleAccountId: googleAccountId.trim() || undefined,
         pageTexts,
-        keywords: keywords.length ? keywords : undefined,
+        keywords: keywords && keywords.length ? keywords : undefined,
         copyStyle,
       });
       if (res.ok) {
@@ -518,6 +635,83 @@ export function AdsAutoClient({
     } finally {
       setGenerating(false);
     }
+  }
+
+  async function onGenerate() {
+    // 用户在投放选词里定好的关键词：每行一个，可带匹配方式 "词, exact/phrase/broad"
+    const keywords = kwText
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const [text, mt] = line.split(",").map((s) => s.trim());
+        return { text, matchType: (mt || "phrase").toUpperCase() };
+      })
+      .filter((k) => k.text);
+    await requestPlan(keywords.length ? keywords : undefined);
+  }
+
+  /* 关键词 AI 检查：逐词判相关性与政策风险，结果不静默失败。 */
+  async function runKeywordCheck() {
+    if (!plan) return;
+    const seen = new Set<string>();
+    const keywords: string[] = [];
+    for (const b of plan.adGroups) {
+      for (const k of b.group.keywords) {
+        const t = k.text.trim();
+        if (t && !seen.has(t.toLowerCase())) {
+          seen.add(t.toLowerCase());
+          keywords.push(t);
+        }
+      }
+    }
+    if (keywords.length === 0) {
+      setKeywordCheck({ status: "done", results: [], error: null });
+      return;
+    }
+    setKeywordCheck({ status: "checking", results: [], error: null });
+    const res = await checkKeywordsAction({
+      productDescription: manualText.trim() || urlsText.trim(),
+      offerName: commissionFromOffer ?? "",
+      offerUrl: parseUrls()[0],
+      keywords,
+    });
+    if (res.ok) {
+      setKeywordCheck({ status: "done", results: res.data.results, error: null });
+    } else {
+      setKeywordCheck({ status: "error", results: [], error: res.error });
+    }
+  }
+
+  /* 移除已标记关键词：带剩余词重新生成计划，使服务端存储的计划也不再含它们
+     （确认 / Script / 文案包都只认服务端计划，本地只改展示无效）。 */
+  async function removeFlaggedKeywords() {
+    if (!plan || keywordCheck.status !== "done") return;
+    const flagged = new Set(
+      keywordCheck.results
+        .filter((r) => r.verdict !== "relevant")
+        .map((r) => r.keyword.trim().toLowerCase())
+    );
+    const remaining: Array<{ text: string; matchType?: string }> = [];
+    for (const b of plan.adGroups) {
+      for (const k of b.group.keywords) {
+        if (!flagged.has(k.text.trim().toLowerCase())) {
+          remaining.push({ text: k.text, matchType: k.matchType });
+        }
+      }
+    }
+    if (remaining.length === 0) return;
+    // 同步 kwText，使后续重新生成也用这套干净词。
+    setKwText(
+      remaining
+        .map((k) =>
+          k.matchType && k.matchType.toLowerCase() !== "phrase"
+            ? `${k.text}, ${k.matchType.toLowerCase()}`
+            : k.text
+        )
+        .join("\n")
+    );
+    await requestPlan(remaining);
   }
 
   async function onConfirm() {
@@ -608,6 +802,45 @@ export function AdsAutoClient({
           aggressive: bidProfit.breakEvenCpc * 0.9,
         }
       : null;
+
+  // 推荐出价：取该 offer 的投流页快照 payout + CVR，用 calcProfit 算 EPC。
+  const [plannerPayout, setPlannerPayout] = useState<string | null>(null);
+  const [plannerCvrPct, setPlannerCvrPct] = useState<string | null>(null);
+  const [targetRoiPct, setTargetRoiPct] = useState("100");
+  useEffect(() => {
+    if (!offerId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await loadWorkStateAction("traffic-planner", offerId);
+        if (cancelled || !res.ok || !res.data.state) return;
+        const snap = res.data.state as Record<string, unknown>;
+        const str = (v: unknown) =>
+          typeof v === "string" ? v.trim() : typeof v === "number" ? String(v) : "";
+        const p = str(snap.payout);
+        const cvr = str(snap.networkCvr);
+        if (p) setPlannerPayout(p);
+        if (cvr) setPlannerCvrPct(cvr);
+      } catch {
+        /* 取不到就显示空状态 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [offerId]);
+
+  const plannerProfit = (() => {
+    const payout = plannerPayout !== null ? parseFloat(plannerPayout) : NaN;
+    const cvrPct = plannerCvrPct !== null ? parseFloat(plannerCvrPct) : NaN;
+    const roiPct = parseFloat(targetRoiPct);
+    if (!Number.isFinite(payout) || payout <= 0) return null;
+    if (!Number.isFinite(cvrPct) || cvrPct <= 0) return null;
+    if (!Number.isFinite(roiPct) || roiPct < 0) return null;
+    return calcProfit({ payout, cpc: 0, cvrF: cvrPct / 100, targetRoiF: roiPct / 100 });
+  })();
+  const recommendedBid = plannerProfit?.maxCpcAtTargetRoi ?? null;
+  const plannerBreakEven = plannerProfit?.breakEvenCpc ?? null;
 
   // 选中档位的单次点击利润 = EPC − 该档 CPC。
   const selectedTierCpc =
@@ -912,6 +1145,9 @@ export function AdsAutoClient({
             onBudgetCurrencyChange={setEditedBudgetCurrency}
             geo={editedGeo}
             onGeoChange={setEditedGeo}
+            keywordCheck={keywordCheck}
+            onCheckKeywords={() => void runKeywordCheck()}
+            onRemoveFlagged={() => void removeFlaggedKeywords()}
           />
 
           {/* Bid strategy selection */}
@@ -1024,6 +1260,59 @@ export function AdsAutoClient({
                 placeholder={d.bidStrategy.customPlaceholder}
                 className={`${inputClass} max-w-xs`}
               />
+            </div>
+            {/* 推荐出价：保本 CPC + EPC ÷ (1 + 目标 ROI)，取自投流页测算 */}
+            <div className="mt-4 rounded-lg border border-ink/10 bg-ink/[0.02] p-3">
+              <p className="text-sm font-semibold text-ink">{d.bidStrategy.recommendedTitle}</p>
+              {plannerProfit ? (
+                <>
+                  <dl className="mt-2 grid grid-cols-2 gap-2 text-sm">
+                    <div>
+                      <dt className="text-ink/55">{d.bidStrategy.recommendedBreakEven}</dt>
+                      <dd className="mt-0.5 font-medium text-ink">
+                        {plannerBreakEven !== null
+                          ? `${plannerBreakEven.toFixed(4)} ${bidCurrency}`
+                          : "—"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-ink/55">{d.bidStrategy.recommendedValue}</dt>
+                      <dd className="mt-0.5 font-medium text-ink">
+                        {recommendedBid !== null
+                          ? `${recommendedBid.toFixed(4)} ${bidCurrency}`
+                          : "—"}
+                      </dd>
+                    </div>
+                  </dl>
+                  <div className="mt-2 flex flex-wrap items-end gap-2">
+                    <div>
+                      <label className={labelClass}>{d.bidStrategy.targetRoiLabel}</label>
+                      <input
+                        inputMode="decimal"
+                        value={targetRoiPct}
+                        onChange={(e) => setTargetRoiPct(e.target.value)}
+                        placeholder="100"
+                        className={`${inputClass} w-24`}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (recommendedBid === null) return;
+                        setBidCpc(recommendedBid.toFixed(4));
+                        setBidStrategy("custom");
+                      }}
+                      disabled={recommendedBid === null}
+                      className="rounded-lg bg-ink px-3 py-2 text-sm font-medium text-paper disabled:opacity-50"
+                    >
+                      {d.bidStrategy.adoptRecommended}
+                    </button>
+                  </div>
+                  <p className="mt-1 text-xs text-ink/55">{d.bidStrategy.recommendedHint}</p>
+                </>
+              ) : (
+                <p className="mt-1 text-sm text-ink/60">{d.bidStrategy.noPlannerData}</p>
+              )}
             </div>
             <p className="mt-2 text-xs text-ink/55">{d.bidStrategy.currencyHint}</p>
           </div>

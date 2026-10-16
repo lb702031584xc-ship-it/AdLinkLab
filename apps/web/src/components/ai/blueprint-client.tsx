@@ -672,10 +672,12 @@ export function BlueprintClient({
           <label className={labelCls}>{d.form.productDescription} *</label>
           <textarea className={inputCls} rows={2} value={productDescription} onChange={(e) => setProductDescription(e.target.value)} placeholder={d.form.productDescriptionPh} />
         </div>
-        <div>
-          <label className={labelCls}>{d.form.avgPrice}</label>
-          <input className={inputCls} type="number" min="0" step="0.01" value={avgPrice} onChange={(e) => setAvgPrice(e.target.value)} placeholder="65.88" />
-        </div>
+        {commissionType === "percentage" ? (
+          <div>
+            <label className={labelCls}>{d.form.avgPrice} *</label>
+            <input className={inputCls} type="number" min="0" step="0.01" value={avgPrice} onChange={(e) => setAvgPrice(e.target.value)} placeholder="65.88" />
+          </div>
+        ) : null}
         <div>
           <label className={labelCls}>{d.form.currency}</label>
           <input className={inputCls} value={currency} onChange={(e) => setCurrency(e.target.value)} placeholder="USD" />
@@ -692,8 +694,8 @@ export function BlueprintClient({
           </div>
         </div>
         <div>
-          <label className={labelCls}>{d.form.commissionValue} *</label>
-          <input className={inputCls} type="number" min="0" step="0.01" value={commissionValue} onChange={(e) => setCommissionValue(e.target.value)} placeholder={d.form.commissionValuePh} />
+          <label className={labelCls}>{commissionType === "percentage" ? d.form.commissionRate : d.form.fixedCommission} *</label>
+          <input className={inputCls} type="number" min="0" step="0.01" value={commissionValue} onChange={(e) => setCommissionValue(e.target.value)} placeholder={commissionType === "percentage" ? d.form.commissionRatePh : d.form.fixedCommissionPh} />
         </div>
         <div>
           <label className={labelCls}>{d.form.targetMarket}</label>

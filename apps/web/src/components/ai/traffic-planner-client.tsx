@@ -20,6 +20,8 @@ import {
   type AiActionResult,
 } from "@/lib/api/ai-actions";
 import { loadWorkStateAction } from "@/lib/api/work-state-actions";
+import { checkKeywordsAction, type KeywordCheckResult } from "@/lib/api/keyword-check-actions";
+import { calcProfit } from "@/lib/profit-calc";
 import { useWorkState } from "@/lib/use-work-state";
 import type {
   TrafficPlanKeywordInput,
@@ -32,6 +34,8 @@ import type { OfferCaptureItem } from "@/lib/api/ai";
 type Dict = TrafficPlannerDict;
 type Mode = "landing" | "direct";
 type BrandPolicy = "allowed" | "forbidden";
+/** 盈利模式：电商（按比例佣金，payout 派生）/ 联盟（固定 payout，扣量）。与工作表 ③ 判定一致。 */
+type ProfitMode = "ecommerce" | "affiliate";
 
 /* ---------- 轻量 markdown 渲染（标题/加粗/列表/段落） ---------- */
 function renderMarkdown(md: string): React.ReactNode[] {
@@ -196,6 +200,24 @@ export function TrafficPlannerClient({
   const [mode, setMode] = useState<Mode>("landing");
   const [brandPolicy, setBrandPolicy] = useState<BrandPolicy>("allowed");
 
+  /* 盈利模式：老快照没有 profitMode 时，固定佣金 → 联盟，否则电商（与工作表 ③ 一致）。 */
+  const [profitMode, setProfitMode] = useState<ProfitMode>(
+    initialOffer?.commissionType === "fixed" ? "affiliate" : "ecommerce"
+  );
+  /** 电商：均价 / 佣金率（派生 payout 用）。 */
+  const [avgPrice, setAvgPrice] = useState(
+    initialOffer?.avgPrice != null ? String(initialOffer.avgPrice) : ""
+  );
+  const [commissionRate, setCommissionRate] = useState(
+    initialOffer?.commissionType === "percentage" && initialOffer?.commissionValue != null
+      ? String(initialOffer.commissionValue)
+      : ""
+  );
+  /** 联盟：扣量假设（%），默认 0。 */
+  const [shavePct, setShavePct] = useState("0");
+  /** 出价参考：目标 ROI（%），默认 100。 */
+  const [targetRoiPct, setTargetRoiPct] = useState("100");
+
   // Offer 上下文：?offerId= / 工作表嵌入带入
   const [selectedOfferId, setSelectedOfferId] = useState<string | null>(
     initialOffer?.id ?? null
@@ -265,6 +287,37 @@ export function TrafficPlannerClient({
     return { text: "", cls: "" };
   }, [comboKey, d]);
 
+  /* 电商派生 payout = 均价 × 佣金率% × (1 - 退货率%)，只读展示；缺参时为 null（诚实空状态）。 */
+  const derivedPayout = useMemo(() => {
+    if (profitMode !== "ecommerce") return null;
+    const price = Number(avgPrice);
+    const rate = Number(commissionRate);
+    const refund = Number(refundRate);
+    if (!Number.isFinite(price) || price <= 0) return null;
+    if (!Number.isFinite(rate) || rate < 0) return null;
+    const refundF = Number.isFinite(refund) ? Math.min(Math.max(refund, 0), 100) / 100 : 0;
+    return price * (rate / 100) * (1 - refundF);
+  }, [profitMode, avgPrice, commissionRate, refundRate]);
+
+  /* 出价参考：EPC / 保本 CPC（= EPC）/ 推荐出价（= EPC ÷ (1 + 目标 ROI)），全部来自 profit-calc。
+     电商用派生 payout（已扣退货，不再重复扣）；联盟用固定 payout 并扣 shave。payout/CVR 缺失时为 null。 */
+  const bidCalc = useMemo(() => {
+    const cvrF = Number(networkCvr) / 100;
+    const roiF = Number(targetRoiPct) / 100;
+    const base = profitMode === "ecommerce"
+      ? derivedPayout
+      : Number(payout) > 0 ? Number(payout) : null;
+    if (base == null || base <= 0 || !Number.isFinite(cvrF) || cvrF <= 0) return null;
+    return calcProfit({
+      payout: base,
+      cpc: 0,
+      cvrF,
+      refundF: 0,
+      shaveF: profitMode === "affiliate" ? Math.min(Math.max(Number(shavePct) || 0, 0), 100) / 100 : 0,
+      targetRoiF: Number.isFinite(roiF) && roiF >= 0 ? roiF : 1,
+    });
+  }, [profitMode, derivedPayout, payout, networkCvr, shavePct, targetRoiPct]);
+
   const numOrUndef = (s: string): number | undefined => {
     const n = Number(s);
     return s.trim() !== "" && Number.isFinite(n) ? n : undefined;
@@ -284,20 +337,36 @@ export function TrafficPlannerClient({
   const removeKw = (id: string) =>
     setKeywords((ks) => (ks.length > 1 ? ks.filter((k) => k.id !== id) : ks));
 
-  /** 用 offer 库参数填充 offer 区块（名称/佣金/渠道） */
+  /** 用 offer 库参数填充 offer 区块（名称/佣金/渠道），并按佣金类型判盈利模式：
+      按比例 → 电商（均价/佣金率）；固定 → 联盟（固定 payout）。快照恢复在后，会覆盖这里。 */
   const fillFromOffer = (o: PlannerOffer) => {
     setSelectedOfferId(o.id || null);
     setOfferName(o.name);
     setNetwork(o.network);
     const p = payoutFromOffer(o);
+    if (o.commissionType === "percentage") {
+      setProfitMode("ecommerce");
+      if (o.avgPrice != null) setAvgPrice(String(o.avgPrice));
+      if (o.commissionValue != null) setCommissionRate(String(o.commissionValue));
+    } else if (o.commissionType === "fixed") {
+      setProfitMode("affiliate");
+    } else {
+      setProfitMode("ecommerce");
+    }
     if (p) setPayout(p);
   };
 
-  /** 快照：全部输入（按 offer 隔离保存，刷新/隔夜不丢） */
+  /** 快照：全部输入（按 offer 隔离保存，刷新/隔夜不丢）。
+      各模式字段分开存（电商的均价/佣金率/退货率、联盟的固定 payout/扣量），切换不污染。 */
   const buildSnapshot = () => ({
     version: 1,
     mode,
     brandPolicy,
+    profitMode,
+    avgPrice,
+    commissionRate,
+    shavePct,
+    targetRoiPct,
     offerName,
     payout,
     network,
@@ -321,6 +390,8 @@ export function TrafficPlannerClient({
     Boolean(
       (s.offerName as string)?.trim() ||
         (s.payout as string)?.toString().trim() ||
+        (s.avgPrice as string)?.toString().trim() ||
+        (s.commissionRate as string)?.toString().trim() ||
         ((s.keywords as Array<{ keyword?: string }>) ?? []).some((k) =>
           k.keyword?.trim()
         ) ||
@@ -334,6 +405,14 @@ export function TrafficPlannerClient({
     if (s.mode === "landing" || s.mode === "direct") setMode(s.mode);
     if (s.brandPolicy === "allowed" || s.brandPolicy === "forbidden")
       setBrandPolicy(s.brandPolicy);
+    /* 盈利模式：老快照没有时不覆盖（已按 offer 佣金类型判过默认值）。 */
+    if (s.profitMode === "ecommerce" || s.profitMode === "affiliate")
+      setProfitMode(s.profitMode);
+    /* 模式字段：快照为空时不覆盖（offer 库参数为准；空快照是"没填过"不是"清空"）。 */
+    if (str(s.avgPrice)) setAvgPrice(str(s.avgPrice));
+    if (str(s.commissionRate)) setCommissionRate(str(s.commissionRate));
+    if (str(s.shavePct)) setShavePct(str(s.shavePct));
+    if (str(s.targetRoiPct)) setTargetRoiPct(str(s.targetRoiPct));
     /* offer 字段：快照为空时不覆盖（库参数为准；空快照是"没填过"不是"清空"） */
     if (str(s.offerName)) setOfferName(str(s.offerName));
     if (str(s.payout)) setPayout(str(s.payout));
@@ -372,6 +451,11 @@ export function TrafficPlannerClient({
       selectedOfferId,
       mode,
       brandPolicy,
+      profitMode,
+      avgPrice,
+      commissionRate,
+      shavePct,
+      targetRoiPct,
       offerName,
       payout,
       network,
@@ -426,6 +510,9 @@ export function TrafficPlannerClient({
     // 先清空：新 offer 没快照时不留上一个 offer 的数据。
     setMode("landing");
     setBrandPolicy("allowed");
+    setAvgPrice("");
+    setCommissionRate("");
+    setShavePct("0");
     setPayout("");
     setCookieDays("");
     setEpc("");
@@ -765,6 +852,70 @@ export function TrafficPlannerClient({
     setKwImportOpen(false);
   };
 
+  /* ----- 关键词 AI 检查：相关性 + 政策风险，投流前必查 ----- */
+  const [kwChecking, setKwChecking] = useState(false);
+  const [kwCheckResults, setKwCheckResults] = useState<KeywordCheckResult[] | null>(null);
+  const [kwCheckError, setKwCheckError] = useState<string | null>(null);
+  const [kwCheckMsg, setKwCheckMsg] = useState<string | null>(null);
+
+  const kwCheckCounts = useMemo(() => {
+    const counts = { relevant: 0, irrelevant: 0, risky: 0 };
+    for (const r of kwCheckResults ?? []) {
+      if (r.verdict === "irrelevant") counts.irrelevant++;
+      else if (r.verdict === "risky") counts.risky++;
+      else counts.relevant++;
+    }
+    return counts;
+  }, [kwCheckResults]);
+
+  const onCheckKeywords = async () => {
+    const kws = keywords.map((k) => k.keyword.trim()).filter(Boolean);
+    if (kws.length === 0) {
+      setKwCheckError(d.kwCheckEmpty);
+      return;
+    }
+    setKwChecking(true);
+    setKwCheckError(null);
+    setKwCheckMsg(null);
+    setKwCheckResults(null);
+    try {
+      const res = await checkKeywordsAction({
+        productDescription: [offerName, ecommerceNotes, notes]
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .join("\n"),
+        offerName: offerName.trim(),
+        keywords: kws,
+      });
+      if (res.ok) {
+        setKwCheckResults(res.data.results);
+      } else {
+        setKwCheckError(`${d.kwCheckFailed}：${res.error}`);
+      }
+    } catch {
+      setKwCheckError(d.kwCheckFailed);
+    } finally {
+      setKwChecking(false);
+    }
+  };
+
+  /** 排除已标记关键词：把 irrelevant / risky 的词从本表（及快照）移除，不流向下游。 */
+  const excludeFlaggedKeywords = () => {
+    if (!kwCheckResults) return;
+    const flagged = new Set(
+      kwCheckResults
+        .filter((r) => r.verdict !== "relevant")
+        .map((r) => r.keyword.trim().toLowerCase())
+    );
+    if (flagged.size === 0) return;
+    setKeywords((ks) => {
+      const next = ks.filter((k) => !flagged.has(k.keyword.trim().toLowerCase()));
+      return next.length > 0 ? next : [newKwRow()];
+    });
+    setKwCheckResults(null);
+    setKwCheckMsg(d.kwCheckExcluded.replace("{n}", String(flagged.size)));
+  };
+
   /* ----- 否定词操作 ----- */
   const autoNegatives = () => {
     const all = new Set<string>(negatives);
@@ -812,7 +963,10 @@ export function TrafficPlannerClient({
         mode,
         brandPolicy,
         offerName: offerName.trim(),
-        payout: numOrUndef(payout),
+        /* 电商模式发派生 payout（已扣退货）；服务端保本计算不再重复扣退货。 */
+        payout: profitMode === "ecommerce"
+          ? (derivedPayout != null ? derivedPayout : undefined)
+          : numOrUndef(payout),
         network: network.trim() || undefined,
         cookieDays: numOrUndef(cookieDays),
         epc: numOrUndef(epc),
@@ -901,6 +1055,28 @@ export function TrafficPlannerClient({
       {/* Step 1 */}
       <section className={cardCls}>
         <h2 className="mb-3 text-base font-semibold text-ink">{d.step1}</h2>
+        <p className={labelCls}>{d.profitMode}</p>
+        <div className="mb-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {(
+            [
+              { v: "ecommerce" as ProfitMode, t: d.profitModeEcommerce, desc: d.profitModeEcommerceDesc },
+              { v: "affiliate" as ProfitMode, t: d.profitModeAffiliate, desc: d.profitModeAffiliateDesc },
+            ]
+          ).map((o) => (
+            <button
+              key={o.v}
+              onClick={() => setProfitMode(o.v)}
+              className={`rounded-xl border p-3 text-left transition ${
+                profitMode === o.v
+                  ? "border-signal bg-signal/5 ring-1 ring-signal"
+                  : "border-ink/15 hover:border-ink/30"
+              }`}
+            >
+              <div className="text-sm font-semibold text-ink">{o.t}</div>
+              <div className="mt-1 text-xs text-ink/60">{o.desc}</div>
+            </button>
+          ))}
+        </div>
         <p className={labelCls}>{d.mode}</p>
         <div className="mb-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
           {(
@@ -996,10 +1172,31 @@ export function TrafficPlannerClient({
               <span className={labelCls}>{d.offerName} <span className="text-red-500">*</span></span>
               <input className={inputCls} value={offerName} onChange={(e) => setOfferName(e.target.value)} placeholder={d.offerNameHint} />
             </label>
+            {profitMode === "ecommerce" ? (
+              <>
+                <label className="block">
+                  <span className={labelCls}>{d.avgPrice}</span>
+                  <span className={hintCls}>{d.avgPriceHint}</span>
+                  <input className={inputCls} type="number" min="0" step="0.01" value={avgPrice} onChange={(e) => setAvgPrice(e.target.value)} placeholder="65.88" />
+                </label>
+                <label className="block">
+                  <span className={labelCls}>{d.commissionRate}</span>
+                  <span className={hintCls}>{d.commissionRateHint}</span>
+                  <input className={inputCls} type="number" min="0" step="0.1" value={commissionRate} onChange={(e) => setCommissionRate(e.target.value)} placeholder="40" />
+                </label>
+              </>
+            ) : null}
             <label className="block">
-              <span className={labelCls}>{d.payout}</span>
-              <span className={hintCls}>{d.payoutHint}</span>
-              <input className={inputCls} type="number" min="0" step="0.01" value={payout} onChange={(e) => setPayout(e.target.value)} placeholder="20" />
+              <span className={labelCls}>{profitMode === "ecommerce" ? d.derivedPayout : d.payout}</span>
+              <span className={hintCls}>{profitMode === "ecommerce" ? d.derivedPayoutHint : d.payoutHint}</span>
+              <input
+                className={`${inputCls} ${profitMode === "ecommerce" ? "bg-ink/5 text-ink/60" : ""}`}
+                type="number" min="0" step="0.01"
+                value={profitMode === "ecommerce" ? (derivedPayout != null ? derivedPayout.toFixed(2) : "") : payout}
+                onChange={(e) => { if (profitMode === "affiliate") setPayout(e.target.value); }}
+                disabled={profitMode === "ecommerce"}
+                placeholder="20"
+              />
             </label>
             <label className="block">
               <span className={labelCls}>{d.network}</span>
@@ -1025,11 +1222,57 @@ export function TrafficPlannerClient({
               <span className={labelCls}>{d.networkCvr}</span>
               <input className={inputCls} type="number" min="0" step="0.1" value={networkCvr} onChange={(e) => setNetworkCvr(e.target.value)} placeholder="3.5" />
             </label>
-            <label className="block">
-              <span className={labelCls}>{d.refundRate}</span>
-              <span className={hintCls}>{d.refundRateHint}</span>
-              <input className={inputCls} type="number" min="0" step="0.1" value={refundRate} onChange={(e) => setRefundRate(e.target.value)} placeholder="5" />
-            </label>
+            {profitMode === "ecommerce" ? (
+              <label className="block">
+                <span className={labelCls}>{d.refundRate}</span>
+                <span className={hintCls}>{d.refundRateHint}</span>
+                <input className={inputCls} type="number" min="0" step="0.1" value={refundRate} onChange={(e) => setRefundRate(e.target.value)} placeholder="5" />
+              </label>
+            ) : (
+              <label className="block">
+                <span className={labelCls}>{d.shavePct}</span>
+                <span className={hintCls}>{d.shaveHint}</span>
+                <input className={inputCls} type="number" min="0" max="100" step="0.1" value={shavePct} onChange={(e) => setShavePct(e.target.value)} placeholder="0" />
+              </label>
+            )}
+          </div>
+          {/* 出价参考：EPC / 保本 CPC / 推荐出价（profit-calc 算出，指导值） */}
+          <div className="mt-3 rounded-lg border border-ink/10 bg-ink/[0.02] p-3">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-sm font-semibold text-ink">{d.bidGuide}</span>
+              <label className="flex items-center gap-1.5 text-xs text-ink/70">
+                {d.bidTargetRoi}
+                <input
+                  className="w-20 rounded-lg border border-ink/15 bg-white px-2 py-1 text-sm text-ink outline-none focus:border-signal"
+                  type="number" min="0" step="10" value={targetRoiPct}
+                  onChange={(e) => setTargetRoiPct(e.target.value)} placeholder="100"
+                />
+                %
+              </label>
+            </div>
+            {bidCalc ? (
+              <div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-3">
+                <div>
+                  <div className="text-xs text-ink/50">{d.bidEpc}</div>
+                  <div className="font-semibold text-ink">${bidCalc.epc.toFixed(2)}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-ink/50">{d.bidBreakEven}</div>
+                  <div className="font-semibold text-ink">
+                    ${bidCalc.breakEvenCpc != null ? bidCalc.breakEvenCpc.toFixed(2) : "—"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-ink/50">{d.bidRecommended}</div>
+                  <div className="font-semibold text-signal">
+                    ${bidCalc.maxCpcAtTargetRoi != null ? bidCalc.maxCpcAtTargetRoi.toFixed(2) : "—"}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-ink/50">{d.bidNoData}</p>
+            )}
+            <p className="mt-2 text-xs text-ink/50">{d.bidFormulaHint}</p>
           </div>
           {/* 电商查询：电商 offer 在 Offervault 没有数据，直接查产品本身 */}
           <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-ink/10 pt-3">
@@ -1155,6 +1398,65 @@ export function TrafficPlannerClient({
           {kwParsing && (
             <p className="mt-1 text-xs text-ink/55">{d.kwAiParsing}</p>
           )}
+          {/* 关键词 AI 检查：相关性 + 政策风险，投流前必查 */}
+          <div className="mt-3 border-t border-ink/10 pt-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <button className={btnPrimary} disabled={kwChecking} onClick={onCheckKeywords}>
+                {kwChecking ? d.kwChecking : d.kwCheck}
+              </button>
+              {kwCheckResults && (kwCheckCounts.irrelevant + kwCheckCounts.risky > 0) && (
+                <button className={btnGhost} onClick={excludeFlaggedKeywords}>
+                  {d.kwCheckExclude}
+                </button>
+              )}
+            </div>
+            {kwCheckError && (
+              <p className="mt-2 text-xs text-red-600">{kwCheckError}</p>
+            )}
+            {kwCheckMsg && (
+              <p className="mt-2 text-xs text-emerald-700">{kwCheckMsg}</p>
+            )}
+            {kwCheckResults && (
+              <div className="mt-2">
+                <p className="text-xs text-ink/60">
+                  {d.kwCheckSummary
+                    .replace("{relevant}", String(kwCheckCounts.relevant))
+                    .replace("{irrelevant}", String(kwCheckCounts.irrelevant))
+                    .replace("{risky}", String(kwCheckCounts.risky))}
+                </p>
+                <ul className="mt-1.5 space-y-1">
+                  {kwCheckResults.map((r) => (
+                    <li
+                      key={r.keyword}
+                      className={`flex flex-wrap items-start gap-2 rounded-lg px-2 py-1.5 text-xs ${
+                        r.verdict === "relevant"
+                          ? "bg-ink/[0.03]"
+                          : "bg-red-50"
+                      }`}
+                    >
+                      <span
+                        className={`shrink-0 rounded px-1.5 py-0.5 font-medium ${
+                          r.verdict === "relevant"
+                            ? "bg-emerald-100 text-emerald-800"
+                            : r.verdict === "irrelevant"
+                              ? "bg-red-100 text-red-800"
+                              : "bg-amber-100 text-amber-800"
+                        }`}
+                      >
+                        {r.verdict === "relevant"
+                          ? d.kwCheckRelevant
+                          : r.verdict === "irrelevant"
+                            ? d.kwCheckIrrelevant
+                            : d.kwCheckRisky}
+                      </span>
+                      <span className="font-medium text-ink">{r.keyword}</span>
+                      <span className="text-ink/60">{r.reason}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
           {kwImportOpen && (
             <div className="mt-2">
               <textarea
