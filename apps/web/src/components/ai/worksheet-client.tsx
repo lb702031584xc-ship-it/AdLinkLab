@@ -49,27 +49,43 @@ function fmt(n: number | null, digits = 2): string {
 /* ---------------- Step ③: compact profitability calculator ---------------- */
 /* Uses the shared @/lib/profit-calc — no duplicated formulas. */
 
+export type ProfitMode = "ecommerce" | "other";
+
 export interface ProfitStepState {
   status: StepStatus;
   summary: string;
   /** ③ 的输入（用于快照恢复 + 往 ④ 投流模块同步 payout/CVR/退款率）。 */
   inputs?: {
+    /** 电商：payout = 均价 × 佣金率（算出后存这里，供 ④ 同步）；其他：手填固定 payout。 */
     payout: string;
     cpc: string;
     cvrPct: string;
+    /** 电商 = 退货率；其他 = 不用（扣量代替）。 */
     refundPct: string;
+    /** 其他 = 扣量假设；电商 = 不用（退货代替）。 */
     shavePct: string;
+    mode: ProfitMode;
+    avgPrice: string;
+    commissionRate: string;
+    targetRoiPct: string;
   };
 }
 
 function ProfitStep({
   onChange,
   initialPayout,
+  initialMode,
+  initialAvgPrice,
+  initialCommissionRate,
   initialValues,
   offerId,
 }: {
   onChange: (s: ProfitStepState | null) => void;
   initialPayout?: string;
+  /** 按 offer 自动判的模式（Amazon/按比例佣金 → 电商；固定佣金 → 其他）。 */
+  initialMode?: ProfitMode;
+  initialAvgPrice?: string;
+  initialCommissionRate?: string;
   /** 快照恢复的输入（刷新后不丢手改值）。 */
   initialValues?: ProfitStepState["inputs"];
   /** 当前 offer：用于从投放选词快照取参考 CPC。 */
@@ -79,21 +95,37 @@ function ProfitStep({
   const d = t.ai.profit;
   const w = t.ai.worksheet.profitStep;
 
+  const [mode, setMode] = useState<ProfitMode>(initialValues?.mode ?? initialMode ?? "ecommerce");
+  const [avgPrice, setAvgPrice] = useState(initialValues?.avgPrice ?? initialAvgPrice ?? "");
+  const [commissionRate, setCommissionRate] = useState(
+    initialValues?.commissionRate ?? initialCommissionRate ?? ""
+  );
+  const [targetRoiPct, setTargetRoiPct] = useState(initialValues?.targetRoiPct ?? "100");
   const [payout, setPayout] = useState(initialValues?.payout ?? initialPayout ?? "");
   const [cpc, setCpc] = useState(initialValues?.cpc ?? "");
   const [cvrPct, setCvrPct] = useState(initialValues?.cvrPct ?? "");
   const [refundPct, setRefundPct] = useState(initialValues?.refundPct ?? "");
   const [shavePct, setShavePct] = useState(initialValues?.shavePct ?? "");
   const [cpcFromKeywords, setCpcFromKeywords] = useState(false);
+  /** 模式/期望 ROI 是否已由快照恢复过（晚到快照只应用一次，不覆盖手改）。 */
+  const snapshotAppliedRef = useRef(false);
 
-  /* 快照晚到时：只填空字段，不覆盖手改 */
+  /* 快照晚到时：只填空字段，不覆盖手改；模式/期望 ROI 只应用一次 */
   useEffect(() => {
     if (!initialValues) return;
+    if (!snapshotAppliedRef.current) {
+      snapshotAppliedRef.current = true;
+      if (initialValues.mode) setMode(initialValues.mode);
+      if (initialValues.targetRoiPct) setTargetRoiPct(initialValues.targetRoiPct);
+    }
     if (!payout && initialValues.payout) setPayout(initialValues.payout);
     if (!cpc && initialValues.cpc) setCpc(initialValues.cpc);
     if (!cvrPct && initialValues.cvrPct) setCvrPct(initialValues.cvrPct);
     if (!refundPct && initialValues.refundPct) setRefundPct(initialValues.refundPct);
     if (!shavePct && initialValues.shavePct) setShavePct(initialValues.shavePct);
+    if (!avgPrice && initialValues.avgPrice) setAvgPrice(initialValues.avgPrice);
+    if (!commissionRate && initialValues.commissionRate)
+      setCommissionRate(initialValues.commissionRate);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialValues]);
 
@@ -157,8 +189,19 @@ function ProfitStep({
     "w-full rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm text-ink placeholder:text-ink/35 focus:border-signal focus:outline-none";
   const labelClass = "mb-1 block text-sm font-medium text-ink/80";
 
+  /* 电商：payout = 均价 × 佣金率（算不出时沿用上次/④填过的 payout，不丢旧数据）。 */
+  const derivedPayout = useMemo(() => {
+    if (mode !== "ecommerce") return payout;
+    const ap = parseFloat(avgPrice);
+    const rate = parseFloat(commissionRate);
+    if (ap > 0 && rate > 0) {
+      return String(Math.round(((ap * rate) / 100) * 100) / 100);
+    }
+    return payout;
+  }, [mode, avgPrice, commissionRate, payout]);
+
   const result = useMemo(() => {
-    const p = parseFloat(payout);
+    const p = parseFloat(derivedPayout);
     const c = parseFloat(cpc);
     const cvr = parseFloat(cvrPct);
     if (!(p > 0) || !(c > 0) || !(cvr > 0) || cvr >= 100) return null;
@@ -166,14 +209,17 @@ function ProfitStep({
       const n = parseFloat(s);
       return Number.isFinite(n) ? Math.min(Math.max(n, 0), 100) / 100 : 0;
     };
+    const roi = parseFloat(targetRoiPct);
     return calcProfit({
       payout: p,
       cpc: c,
       cvrF: cvr / 100,
-      refundF: pct(refundPct),
-      shaveF: pct(shavePct),
+      // 电商扣退货、不扣量；其他扣量、不算退货
+      refundF: mode === "ecommerce" ? pct(refundPct) : 0,
+      shaveF: mode === "other" ? pct(shavePct) : 0,
+      targetRoiF: Number.isFinite(roi) && roi >= 0 ? roi / 100 : 1,
     });
-  }, [payout, cpc, cvrPct, refundPct, shavePct]);
+  }, [derivedPayout, cpc, cvrPct, refundPct, shavePct, mode, targetRoiPct]);
 
   useEffect(() => {
     if (!result) {
@@ -186,22 +232,97 @@ function ProfitStep({
     onChange({
       status,
       summary: `EPC ${fmt(result.epc)} · ${d.results.breakEvenCvr} ${result.breakEvenCvrPct !== null ? `${fmt(result.breakEvenCvrPct)}%` : "—"} · ${w.perClickProfit} ${p > 0 ? "+" : ""}${fmt(p)}`,
-      inputs: { payout, cpc, cvrPct, refundPct, shavePct },
+      inputs: {
+        payout: derivedPayout,
+        cpc,
+        cvrPct,
+        refundPct,
+        shavePct,
+        mode,
+        avgPrice,
+        commissionRate,
+        targetRoiPct,
+      },
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result]);
 
+  const derivedFromPrice =
+    parseFloat(avgPrice) > 0 && parseFloat(commissionRate) > 0;
+
   return (
     <div>
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <div>
-          <label className={labelClass} htmlFor="ws-payout">{d.payoutLabel}</label>
-          <input id="ws-payout" inputMode="decimal" value={payout}
-            onChange={(e) => setPayout(e.target.value)} placeholder="12.50" className={inputClass} />
-          {initialPayout && payout === initialPayout && (
-            <p className="mt-1 text-xs text-ink/45">✨ {w.payoutFromOffer}</p>
-          )}
+      {/* 电商 / 其他：两套表单。电商按订单佣金 %、扣退货；其他固定 payout、扣量。 */}
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <span className="text-sm font-medium text-ink/80">{w.modeLabel}</span>
+        <div className="flex overflow-hidden rounded-lg border border-ink/15">
+          {(
+            [
+              ["ecommerce", w.modeEcommerce],
+              ["other", w.modeOther],
+            ] as const
+          ).map(([m, label]) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => {
+                // 切到其他时把电商算出的 payout 带过去，别让框变空
+                if (m === "other" && mode === "ecommerce" && derivedPayout) {
+                  setPayout(derivedPayout);
+                }
+                setMode(m);
+              }}
+              className={`px-3 py-1.5 text-sm ${mode === m ? "bg-ink text-white" : "bg-white text-ink/70 hover:bg-ink/5"}`}
+            >
+              {label}
+            </button>
+          ))}
         </div>
+        <span className="text-xs text-ink/45">
+          {mode === "ecommerce" ? w.modeEcommerceHint : w.modeOtherHint}
+        </span>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {mode === "ecommerce" ? (
+          <>
+            <div>
+              <label className={labelClass} htmlFor="ws-avg-price">{w.avgPriceLabel}</label>
+              <input id="ws-avg-price" inputMode="decimal" value={avgPrice}
+                onChange={(e) => setAvgPrice(e.target.value)} placeholder="49.99" className={inputClass} />
+              {initialAvgPrice && avgPrice === initialAvgPrice && (
+                <p className="mt-1 text-xs text-ink/45">✨ {w.avgPriceFromOffer}</p>
+              )}
+            </div>
+            <div>
+              <label className={labelClass} htmlFor="ws-commission-rate">{w.commissionRateLabel}</label>
+              <input id="ws-commission-rate" inputMode="decimal" value={commissionRate}
+                onChange={(e) => setCommissionRate(e.target.value)} placeholder="10" className={inputClass} />
+              {initialCommissionRate && commissionRate === initialCommissionRate && (
+                <p className="mt-1 text-xs text-ink/45">✨ {w.commissionRateFromOffer}</p>
+              )}
+            </div>
+            <div>
+              <p className={labelClass}>{w.derivedPayoutLabel}</p>
+              <p className="rounded-lg border border-ink/15 bg-ink/[0.03] px-3 py-2 text-sm text-ink">
+                {derivedFromPrice
+                  ? `${fmt(parseFloat(avgPrice))} × ${fmt(parseFloat(commissionRate))}% = ${fmt(parseFloat(derivedPayout))}`
+                  : derivedPayout
+                    ? `${w.derivedPayoutFallback} ${fmt(parseFloat(derivedPayout))}`
+                    : "—"}
+              </p>
+            </div>
+          </>
+        ) : (
+          <div>
+            <label className={labelClass} htmlFor="ws-payout">{d.payoutLabel}</label>
+            <input id="ws-payout" inputMode="decimal" value={payout}
+              onChange={(e) => setPayout(e.target.value)} placeholder="12.50" className={inputClass} />
+            {initialPayout && payout === initialPayout && (
+              <p className="mt-1 text-xs text-ink/45">✨ {w.payoutFromOffer}</p>
+            )}
+          </div>
+        )}
         <div>
           <label className={labelClass} htmlFor="ws-cpc">{d.cpcLabel}</label>
           <input id="ws-cpc" inputMode="decimal" value={cpc}
@@ -215,26 +336,36 @@ function ProfitStep({
           <input id="ws-cvr" inputMode="decimal" value={cvrPct}
             onChange={(e) => setCvrPct(e.target.value)} placeholder="2" className={inputClass} />
         </div>
+        {mode === "ecommerce" ? (
+          <div>
+            <label className={labelClass} htmlFor="ws-refund">{w.returnRateLabel}</label>
+            <input id="ws-refund" inputMode="decimal" value={refundPct}
+              onChange={(e) => setRefundPct(e.target.value)} placeholder="5" className={inputClass} />
+          </div>
+        ) : (
+          <div>
+            <label className={labelClass} htmlFor="ws-shave">{d.shaveLabel}</label>
+            <input id="ws-shave" inputMode="decimal" value={shavePct}
+              onChange={(e) => setShavePct(e.target.value)} placeholder="10" className={inputClass} />
+          </div>
+        )}
         <div>
-          <label className={labelClass} htmlFor="ws-refund">{d.refundRateLabel}</label>
-          <input id="ws-refund" inputMode="decimal" value={refundPct}
-            onChange={(e) => setRefundPct(e.target.value)} placeholder="5" className={inputClass} />
-        </div>
-        <div>
-          <label className={labelClass} htmlFor="ws-shave">{d.shaveLabel}</label>
-          <input id="ws-shave" inputMode="decimal" value={shavePct}
-            onChange={(e) => setShavePct(e.target.value)} placeholder="10" className={inputClass} />
+          <label className={labelClass} htmlFor="ws-target-roi">{w.targetRoiLabel}</label>
+          <input id="ws-target-roi" inputMode="decimal" value={targetRoiPct}
+            onChange={(e) => setTargetRoiPct(e.target.value)} placeholder="100" className={inputClass} />
         </div>
       </div>
 
       {result ? (
-        <div className="mt-4 grid gap-3 md:grid-cols-2">
+        <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-3">
           {(
             [
               ["EPC", `EPC = payout × CVR`, fmt(result.epc)],
-              [d.results.breakEvenCvr, d.formulas.breakEvenCvr, result.breakEvenCvrPct !== null ? `${fmt(result.breakEvenCvrPct)}%` : "—"],
-              [d.results.maxCpc30, d.formulas.maxCpc30, result.maxCpc30 !== null ? fmt(result.maxCpc30, 4) : "—"],
+              [w.breakEvenCpc, w.breakEvenCpcFormula, result.breakEvenCpc !== null ? fmt(result.breakEvenCpc, 4) : "—"],
+              [w.maxCpcAtTargetRoi, w.maxCpcAtTargetRoiFormula, result.maxCpcAtTargetRoi !== null ? fmt(result.maxCpcAtTargetRoi, 4) : "—"],
               [w.perClickProfit, w.perClickProfitFormula, `${result.perClickProfit > 0 ? "+" : ""}${fmt(result.perClickProfit)}`],
+              [d.results.breakEvenCvr, d.formulas.breakEvenCvr, result.breakEvenCvrPct !== null ? `${fmt(result.breakEvenCvrPct)}%` : "—"],
+              [w.currentRoi, w.currentRoiFormula, result.roiAtCpc !== null ? `${result.roiAtCpc >= 0 ? "+" : ""}${fmt(result.roiAtCpc * 100)}%` : "—"],
             ] as const
           ).map(([label, formula, value]) => (
             <div key={label} className="rounded-xl border border-ink/10 bg-white px-5 py-4">
@@ -245,7 +376,9 @@ function ProfitStep({
           ))}
         </div>
       ) : (
-        <p className="mt-4 text-sm text-ink/55">{w.needInput}</p>
+        <p className="mt-4 text-sm text-ink/55">
+          {mode === "ecommerce" ? w.needInputEcommerce : w.needInput}
+        </p>
       )}
     </div>
   );
@@ -372,6 +505,19 @@ export function WorksheetClient({
     }
     return undefined;
   })();
+  /* ③ 模式自动判：按比例佣金 → 电商（均价 × 佣金率）；固定佣金 → 其他（固定 payout）。 */
+  const initialProfitMode: ProfitMode =
+    offer?.commissionType === "fixed" ? "other" : "ecommerce";
+  const initialAvgPrice =
+    offer?.avgPrice != null && Number(offer.avgPrice) > 0
+      ? String(offer.avgPrice)
+      : undefined;
+  const initialCommissionRate =
+    offer?.commissionType === "percentage" &&
+    offer.commissionValue != null &&
+    Number(offer.commissionValue) > 0
+      ? String(offer.commissionValue)
+      : undefined;
   const [trafficResult, setTrafficResult] = useState<TrafficPlanResult | null>(null);
 
   /* ----- 工作台自动保存：刷新/隔夜后可恢复（租户隔离，存 work_states 表） ----- */
@@ -909,6 +1055,9 @@ export function WorksheetClient({
         <ProfitStep
           onChange={setProfitState}
           initialPayout={initialPayout}
+          initialMode={initialProfitMode}
+          initialAvgPrice={initialAvgPrice}
+          initialCommissionRate={initialCommissionRate}
           initialValues={profitState?.inputs}
           offerId={offer?.id ?? null}
           key={offer?.id ?? "manual"}

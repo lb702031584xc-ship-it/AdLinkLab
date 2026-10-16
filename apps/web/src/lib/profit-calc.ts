@@ -20,6 +20,8 @@ export interface ProfitInputs {
   refundF?: number;
   /** Shave/deduction rate as a fraction (0-1). */
   shaveF?: number;
+  /** Target ROI as a fraction (e.g. 1 for 100%). Default 1. */
+  targetRoiF?: number;
 }
 
 export interface ProfitResult {
@@ -35,6 +37,10 @@ export interface ProfitResult {
   breakEvenCpc: number | null;
   /** Recommended max CPC with 30% safety margin. */
   maxCpc30: number | null;
+  /** Max CPC that still hits the target ROI (null when EPC invalid). */
+  maxCpcAtTargetRoi: number | null;
+  /** Actual ROI at the current CPC, as a fraction (null when CPC <= 0). */
+  roiAtCpc: number | null;
   /** Suggested test budget in clicks (null when CVR unknown/invalid). */
   testBudgetClicks: number | null;
   /** Suggested test budget cost. */
@@ -91,6 +97,23 @@ export function recommendedMaxCpc(breakEven: number | null): number | null {
   return breakEven !== null ? breakEven * 0.7 : null;
 }
 
+/**
+ * Max CPC that still hits the target ROI.
+ * ROI = (EPC − CPC) / CPC  →  CPC = EPC / (1 + ROI).
+ * Target ROI 0 = breakeven; 100% → half of EPC; 200% → a third.
+ */
+export function maxCpcForRoi(epc: number, roiF: number): number | null {
+  if (!Number.isFinite(epc) || epc <= 0) return null;
+  if (!Number.isFinite(roiF) || roiF < 0) return null;
+  return epc / (1 + roiF);
+}
+
+/** Actual ROI at the current CPC, as a fraction (null when CPC <= 0). */
+export function roiAtCpc(epc: number, cpc: number): number | null {
+  if (!Number.isFinite(epc) || !Number.isFinite(cpc) || cpc <= 0) return null;
+  return (epc - cpc) / cpc;
+}
+
 /** Suggested test clicks for statistical confidence. */
 export function testBudgetClicks(cvrF: number): number | null {
   if (!Number.isFinite(cvrF) || cvrF <= 0 || cvrF >= 1) return null;
@@ -103,6 +126,7 @@ export function calcProfit(inputs: ProfitInputs): ProfitResult {
   const epc = epcFor(eff, cvrF);
   const beCpc = breakEvenCpc(cvrF, eff);
   const clicks = testBudgetClicks(cvrF);
+  const roiF = inputs.targetRoiF ?? 1;
   return {
     effectivePayout: eff,
     epc,
@@ -111,6 +135,8 @@ export function calcProfit(inputs: ProfitInputs): ProfitResult {
     breakEvenCvrPct: breakEvenCvrPct(cpc, eff),
     breakEvenCpc: beCpc,
     maxCpc30: recommendedMaxCpc(beCpc),
+    maxCpcAtTargetRoi: maxCpcForRoi(epc, roiF),
+    roiAtCpc: roiAtCpc(epc, cpc),
     testBudgetClicks: clicks,
     testBudgetCost:
       clicks !== null && Number.isFinite(cpc) && cpc > 0 ? clicks * cpc : null,
