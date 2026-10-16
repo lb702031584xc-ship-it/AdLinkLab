@@ -221,6 +221,27 @@ function ProfitStep({
     });
   }, [derivedPayout, cpc, cvrPct, refundPct, shavePct, mode, targetRoiPct]);
 
+  /* 按期望 ROI 反推 CPC：不依赖已填 CPC，只用 payout/CVR/退货/扣量/目标 ROI。 */
+  const reverseCpc = useMemo(() => {
+    const p = parseFloat(derivedPayout);
+    const cvr = parseFloat(cvrPct);
+    if (!(p > 0) || !(cvr > 0) || cvr >= 100) return null;
+    const pct = (s: string) => {
+      const n = parseFloat(s);
+      return Number.isFinite(n) ? Math.min(Math.max(n, 0), 100) / 100 : 0;
+    };
+    const roi = parseFloat(targetRoiPct);
+    const r = calcProfit({
+      payout: p,
+      cpc: 0,
+      cvrF: cvr / 100,
+      refundF: mode === "ecommerce" ? pct(refundPct) : 0,
+      shaveF: mode === "other" ? pct(shavePct) : 0,
+      targetRoiF: Number.isFinite(roi) && roi >= 0 ? roi / 100 : 1,
+    });
+    return r.maxCpcAtTargetRoi;
+  }, [derivedPayout, cvrPct, refundPct, shavePct, mode, targetRoiPct]);
+
   useEffect(() => {
     if (!result) {
       onChange(null);
@@ -329,6 +350,12 @@ function ProfitStep({
             onChange={(e) => { setCpc(e.target.value); setCpcFromKeywords(false); }} placeholder="0.80" className={inputClass} />
           {cpcFromKeywords && (
             <p className="mt-1 text-xs text-ink/45">✨ {w.cpcFromKeywords}</p>
+          )}
+          {reverseCpc != null && (
+            <button type="button" className="mt-1 text-xs text-sky-700 underline underline-offset-2"
+              onClick={() => { setCpc(reverseCpc.toFixed(4)); setCpcFromKeywords(false); }}>
+              {w.deriveCpcFromRoi}：{fmt(reverseCpc, 4)}
+            </button>
           )}
         </div>
         <div>
