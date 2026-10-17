@@ -137,7 +137,17 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
             { href: "/cashback/quickstart", label: ni.cashbackQuickstart },
             { href: "/cashback/offers", label: ni.cashbackOffers, phase: ph.selection },
             { href: "/cashback/monitor", label: ni.cashbackMonitor, phase: ph.selection },
+            {
+              href: "/keywords/starter?tab=research",
+              label: ni.keywords,
+              phase: ph.selection,
+            },
             { href: "/ai/analyze", label: t.ai.nav.analyze, phase: ph.analysis },
+            {
+              href: "/ai/blueprint",
+              label: t.ai.nav.blueprint,
+              phase: ph.analysis,
+            },
             {
               href: "/landing-pages",
               label: t.common.nav.landingPages,
@@ -149,6 +159,16 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
             { href: "/ads/click-monitor", label: ni.clickMonitor, phase: ph.traffic },
             { href: "/campaigns", label: t.common.nav.campaigns, phase: ph.traffic },
             { href: "/monitoring", label: ni.trafficMonitoring, phase: ph.monitor },
+            {
+              href: "/reports/weekly",
+              label: t.weeklyReport.nav.title,
+              phase: ph.monitor,
+            },
+            {
+              href: "/experiments",
+              label: experimentDict.nav.experiments,
+              phase: ph.monitor,
+            },
             {
               href: "/cashback/rate-watch",
               label: rateWatchDict.page.title,
