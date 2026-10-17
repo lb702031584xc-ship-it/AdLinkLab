@@ -199,6 +199,46 @@ function makeFakePrisma() {
       return { ...row };
     },
   };
+  // P0-8 — error_reports fake.
+  const errorReports: Row[] = [];
+  const errorReport = {
+    findMany: async ({ where, orderBy, take }: any) => {
+      let rows = errorReports.filter((r) => flatMatches(r, where));
+      if (orderBy?.lastSeenAt === "desc")
+        rows = [...rows].sort((a, b) => b.lastSeenAt - a.lastSeenAt);
+      if (typeof take === "number") rows = rows.slice(0, take);
+      return rows.map((r) => ({ ...r }));
+    },
+  };
+  // P0-6 — ai_usage_daily fake (aggregate only)。
+  // 注意：date 是 Date 对象，flatMatches 的 === 比较对 Date 恒为 false，
+  // 这里用 getTime() 比较日期相等，范围用 >= / <=。
+  const aiUsageDailyRows: Row[] = [];
+  const aiUsageDaily = {
+    aggregate: async ({ where }: any) => {
+      const rows = aiUsageDailyRows.filter((r) => {
+        if (where?.tenantId && r.tenantId !== where.tenantId) return false;
+        const d = where?.date;
+        if (d instanceof Date) {
+          return r.date instanceof Date && r.date.getTime() === d.getTime();
+        }
+        if (d && typeof d === "object") {
+          if (d.gte && !(r.date >= d.gte)) return false;
+          if (d.lte && !(r.date <= d.lte)) return false;
+        }
+        return true;
+      });
+      const sum = (k: string) => rows.reduce((a, r) => a + (r[k] ?? 0), 0);
+      return {
+        _sum: {
+          tokensIn: sum("tokensIn"),
+          tokensOut: sum("tokensOut"),
+          costCents: sum("costCents"),
+          calls: sum("calls"),
+        },
+      };
+    },
+  };
 
   return {
     user,
@@ -211,7 +251,9 @@ function makeFakePrisma() {
     alertRule,
     alert,
     trackingLink,
-    _stores: { tenants, users, sessions, offers, clicks, conversions, orders, alertRules, alerts, trackingLinks },
+    errorReport,
+    aiUsageDaily,
+    _stores: { tenants, users, sessions, offers, clicks, conversions, orders, alertRules, alerts, trackingLinks, errorReports, aiUsageDailyRows },
   };
 }
 
@@ -658,5 +700,160 @@ describe("P1 monitoring routes", () => {
       headers: cookie(token),
     });
     expect(run2.json()).toEqual({ checked: 0, alertsCreated: 0 });
+  });
+});
+
+describe("P0-8 monitoring errors + P0-6 admin ai-usage summary", () => {
+  let fake: FakePrisma;
+  let token: string;
+  let tenantId: string;
+  let monitoring: any;
+  let ai: any;
+
+  beforeEach(async () => {
+    fake = makeFakePrisma();
+    ({ token, tenantId } = await seedAuth(fake));
+    ({ monitoring, ai } = await buildApps(fake));
+  });
+
+  function pushError(overrides: Record<string, unknown> = {}) {
+    const now = Date.now();
+    const row = {
+      id: randomUUID(),
+      tenantId,
+      level: "error",
+      message: "boom",
+      requestId: "r1",
+      path: "/api/v1/ai/analyze",
+      method: "POST",
+      statusCode: 500,
+      count: 1,
+      firstSeenAt: new Date(now - 1000),
+      lastSeenAt: new Date(now - 1000),
+      ...overrides,
+    };
+    fake._stores.errorReports.push(row);
+    return row;
+  }
+
+  it("errors: tenant-scoped, lastSeenAt desc, 24h window, limit validation", async () => {
+    const old = pushError({
+      id: randomUUID(),
+      message: "stale",
+      lastSeenAt: new Date(Date.now() - 25 * 3600 * 1000),
+      firstSeenAt: new Date(Date.now() - 25 * 3600 * 1000),
+    });
+    void old;
+    const otherTenant = pushError({
+      id: randomUUID(),
+      tenantId: randomUUID(),
+      message: "other tenant",
+    });
+    void otherTenant;
+    const recent = pushError({ message: "recent" });
+    const newer = pushError({
+      message: "newer",
+      lastSeenAt: new Date(),
+      firstSeenAt: new Date(),
+    });
+
+    const res = await monitoring.inject({
+      method: "GET",
+      url: "/api/v1/monitoring/errors",
+      headers: cookie(token),
+    });
+    expect(res.statusCode).toBe(200);
+    const errors = res.json().errors as Array<{ message: string; count: number }>;
+    // 24h 外的 stale 与他租户的 other tenant 被排除；按 lastSeenAt 倒序。
+    expect(errors.map((e) => e.message)).toEqual(["newer", "recent"]);
+    expect(errors[0].count).toBe(1);
+
+    const limited = await monitoring.inject({
+      method: "GET",
+      url: "/api/v1/monitoring/errors?limit=1",
+      headers: cookie(token),
+    });
+    expect(limited.json().errors).toHaveLength(1);
+    expect(limited.json().errors[0].message).toBe("newer");
+
+    const bad = await monitoring.inject({
+      method: "GET",
+      url: "/api/v1/monitoring/errors?limit=0",
+      headers: cookie(token),
+    });
+    expect(bad.statusCode).toBe(400);
+
+    const unauthed = await monitoring.inject({
+      method: "GET",
+      url: "/api/v1/monitoring/errors",
+    });
+    expect(unauthed.statusCode).toBe(401);
+    void recent;
+  });
+
+  it("admin ai-usage summary: admin 可见，member 403；今日/本月聚合", async () => {
+    const { token: adminToken, tenantId: adminTenant } =
+      await seedAuth(fake, "admin");
+    const today = new Date();
+    const todayStart = new Date(
+      Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())
+    );
+    const monthStart = new Date(
+      Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1)
+    );
+    fake._stores.aiUsageDailyRows.push(
+      {
+        tenantId: adminTenant,
+        date: todayStart,
+        tokensIn: 100,
+        tokensOut: 50,
+        costCents: 7,
+        calls: 2,
+      },
+      {
+        tenantId: adminTenant,
+        date: monthStart,
+        tokensIn: 1000,
+        tokensOut: 500,
+        costCents: 70,
+        calls: 20,
+      },
+      {
+        tenantId: randomUUID(), // 他租户不计入
+        date: todayStart,
+        tokensIn: 9999,
+        tokensOut: 9999,
+        costCents: 9999,
+        calls: 999,
+      }
+    );
+
+    const res = await ai.inject({
+      method: "GET",
+      url: "/api/v1/admin/ai-usage/summary",
+      headers: cookie(adminToken),
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.tenantId).toBe(adminTenant);
+    expect(body.today).toEqual({
+      tokensIn: 100,
+      tokensOut: 50,
+      costCents: 7,
+      calls: 2,
+    });
+    expect(body.month).toEqual({
+      tokensIn: 1100,
+      tokensOut: 550,
+      costCents: 77,
+      calls: 22,
+    });
+
+    const memberRes = await ai.inject({
+      method: "GET",
+      url: "/api/v1/admin/ai-usage/summary",
+      headers: cookie(token),
+    });
+    expect(memberRes.statusCode).toBe(403);
   });
 });

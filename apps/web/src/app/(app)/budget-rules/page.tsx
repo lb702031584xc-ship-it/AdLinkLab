@@ -60,6 +60,23 @@ export default async function BudgetRulesPage() {
       ),
     },
     {
+      header: t.columns.spendCap,
+      render: (r) => (
+        <div className="space-y-1 text-[13px]">
+          <div className="font-mono">
+            {r.maxSpendCap != null ? r.maxSpendCap : t.spendCapOff}
+          </div>
+          <div className="text-xs text-ink/60">
+            {r.maxSpendCap != null
+              ? r.autoPauseOnBreach
+                ? t.spendCapAutoPauseOn
+                : t.spendCapAutoPauseOff
+              : ""}
+          </div>
+        </div>
+      ),
+    },
+    {
       header: t.columns.lastAction,
       render: (r) =>
         r.lastAction ? (

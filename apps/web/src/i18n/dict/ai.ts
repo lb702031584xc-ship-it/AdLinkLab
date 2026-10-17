@@ -189,6 +189,14 @@ export const zh = {
       pending: "待分析",
     },
     complianceToggle: "将合规结果计入最终决策",
+    vetoBanner: {
+      titleRed: "一票否决：不建议投放",
+      titleYellow: "存在未确认项，仅供参考",
+      termsStop: "条款解析：结论为“别碰”（DO_NOT_RUN）",
+      profitEpc: "盈利测算：EPC {epc} ≤ CPC {cpc}，每次点击都在亏钱",
+      termsUnknown: "条款解析：尚未分析",
+      profitUnknown: "盈利测算：尚未测算",
+    },
     complianceToggleHint:
       "关闭后，合规检查只展示风险提示，不影响最终去留结论（适合已用独立合规流程的老手）。",
     complianceExcluded: "未计入最终决策",
@@ -399,6 +407,8 @@ export const zh = {
     refundRateLabel: "退款率 %",
     shaveLabel: "扣量假设 %",
     epcLabel: "EPC（可用实测值，可改）",
+    useMeasuredLabel: "使用实测数据",
+    estimatedBadge: "估算值，未实测",
     results: {
       effectivePayout: "有效 payout（扣退款/扣量后）",
       breakEvenCvr: "保本转化率",
@@ -490,6 +500,17 @@ export const zh = {
     ack: "确认",
     noAlerts: "暂无告警，流量正常。",
     allTab: "全部",
+    errorsTitle: "近 24h 错误",
+    errorsFailed: "加载错误列表失败。",
+    noErrors: "近 24h 无服务端错误。",
+    errorColumns: {
+      time: "最近时间",
+      level: "级别",
+      status: "状态码",
+      message: "内容",
+      path: "路径",
+      count: "次数",
+    },
   },
   intel: {
     dataQuality: {
@@ -847,6 +868,15 @@ export const zh = {
         keyLabel: "Keepa API Key",
         keyPlaceholder: "留空则保持现有配置",
       },
+      usage: {
+        title: "AI 用量",
+        today: "今日",
+        month: "本月",
+        calls: "调用数",
+        tokens: "Tokens（输入 / 输出）",
+        cost: "花费",
+        loadFailed: "用量加载失败。",
+      },
     },
   },
   lander: {
@@ -1181,6 +1211,14 @@ export const en: typeof zh = {
       pending: "Pending",
     },
     complianceToggle: "Count compliance in the final decision",
+    vetoBanner: {
+      titleRed: "Veto: do not run",
+      titleYellow: "Unconfirmed items — for reference only",
+      termsStop: "Terms screening: verdict is stop (DO_NOT_RUN)",
+      profitEpc: "Profitability: EPC {epc} ≤ CPC {cpc} — losing money on every click",
+      termsUnknown: "Terms screening: not yet analyzed",
+      profitUnknown: "Profitability: not yet calculated",
+    },
     complianceToggleHint:
       "When off, the compliance check only shows risk notes and never blocks the final verdict (for veterans with their own compliance flow).",
     complianceExcluded: "Excluded from final decision",
@@ -1392,6 +1430,8 @@ export const en: typeof zh = {
     refundRateLabel: "Refund rate %",
     shaveLabel: "Assumed shave %",
     epcLabel: "EPC (prefilled from stats, editable)",
+    useMeasuredLabel: "Use measured data",
+    estimatedBadge: "Estimated, not measured",
     results: {
       effectivePayout: "Effective payout (after refund/shave)",
       breakEvenCvr: "Break-even CVR",
@@ -1483,6 +1523,17 @@ export const en: typeof zh = {
     ack: "Acknowledge",
     noAlerts: "No alerts — traffic looks healthy.",
     allTab: "All",
+    errorsTitle: "Errors (last 24h)",
+    errorsFailed: "Failed to load errors.",
+    noErrors: "No server errors in the last 24h.",
+    errorColumns: {
+      time: "Last seen",
+      level: "Level",
+      status: "Status",
+      message: "Message",
+      path: "Path",
+      count: "Count",
+    },
   },
   intel: {
     dataQuality: {
@@ -1842,6 +1893,15 @@ export const en: typeof zh = {
         hint: "Used by the manual SOP's Keepa auto-screening (Day 5). Get a paid API key at keepa.com; each validation consumes Keepa tokens per ASIN.",
         keyLabel: "Keepa API key",
         keyPlaceholder: "Leave empty to keep the current configuration",
+      },
+      usage: {
+        title: "AI usage",
+        today: "Today",
+        month: "This month",
+        calls: "Calls",
+        tokens: "Tokens (in / out)",
+        cost: "Cost",
+        loadFailed: "Failed to load usage.",
       },
     },
   },

@@ -32,6 +32,59 @@ export interface ChatJsonVisionArgs extends ChatJsonArgs {
 const REQUEST_TIMEOUT_MS = 60_000;
 
 /**
+ * P0-6 — LLM 调用记账元数据。usage 来自服务商响应 envelope 的 usage 字段；
+ * 服务商没返回时按 0 处理（见 parseUsage），绝不编造 tokens。
+ */
+export interface LlmUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
+export const ZERO_USAGE: LlmUsage = {
+  promptTokens: 0,
+  completionTokens: 0,
+  totalTokens: 0,
+};
+
+export interface LlmCallMeta {
+  usage: LlmUsage;
+  latencyMs: number;
+  model: string;
+}
+
+export interface LlmCallResult {
+  /** Parsed model JSON (same payload chatJson returns). */
+  data: unknown;
+  usage: LlmUsage;
+  latencyMs: number;
+  model: string;
+}
+
+function asNonNegativeInt(v: unknown): number {
+  return typeof v === "number" && Number.isFinite(v) && v > 0
+    ? Math.floor(v)
+    : 0;
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/** Extract token usage from an OpenAI-compatible envelope; missing → zeros. */
+export function parseUsage(envelope: unknown): LlmUsage {
+  if (isRecord(envelope) && isRecord(envelope["usage"])) {
+    const u = envelope["usage"];
+    const promptTokens = asNonNegativeInt(u["prompt_tokens"]);
+    const completionTokens = asNonNegativeInt(u["completion_tokens"]);
+    const totalTokens =
+      asNonNegativeInt(u["total_tokens"]) || promptTokens + completionTokens;
+    return { promptTokens, completionTokens, totalTokens };
+  }
+  return { ...ZERO_USAGE };
+}
+
+/**
  * Call chatJson and validate the result, retrying ONCE with targeted feedback
  * when validation fails. Smaller models often need the nudge; the retry tells
  * them exactly which field was wrong.
@@ -70,13 +123,15 @@ async function errorSnippet(res: Response): Promise<string> {
 
 /**
  * Shared POST {baseUrl}/chat/completions with response_format json_object.
- * Returns the parsed JSON body. Throws AiError (safe messages only) on
- * network failure, non-2xx status, or invalid JSON.
+ * Returns the parsed JSON body plus usage/latency bookkeeping (P0-6).
+ * Throws AiError (safe messages only) on network failure, non-2xx status,
+ * or invalid JSON.
  */
-async function postChatCompletions(
+async function postChatCompletionsWithMeta(
   args: ChatJsonArgs,
   userContent: unknown,
-): Promise<unknown> {
+): Promise<LlmCallResult> {
+  const started = Date.now();
   const url = `${args.baseUrl.replace(/\/+$/, "")}/chat/completions`;
   let res: Response;
   try {
@@ -111,16 +166,30 @@ async function postChatCompletions(
   } catch {
     throw new AiError("LLM returned invalid JSON");
   }
+  const usage = parseUsage(envelope);
+  const latencyMs = Math.max(0, Date.now() - started);
   const content = extractContent(envelope);
   const jsonText = extractJson(content);
   try {
-    return JSON.parse(jsonText) as unknown;
+    return {
+      data: JSON.parse(jsonText) as unknown,
+      usage,
+      latencyMs,
+      model: args.model,
+    };
   } catch {
     // 模型返回了非 JSON 内容（空串/截断/纯文本拒绝）：原生 SyntaxError 不是
     // AiError，会被调用方吞成裸 "LLM request failed"，这里转成带内容片段的 AiError
     const snippet = jsonText.slice(0, 200).replace(/\s+/g, " ");
     throw new AiError(`LLM returned invalid JSON${snippet ? `: ${snippet}` : ""}`);
   }
+}
+
+async function postChatCompletions(
+  args: ChatJsonArgs,
+  userContent: unknown,
+): Promise<unknown> {
+  return (await postChatCompletionsWithMeta(args, userContent)).data;
 }
 
 /**
@@ -130,6 +199,108 @@ async function postChatCompletions(
  */
 export async function chatJson(args: ChatJsonArgs): Promise<unknown> {
   return postChatCompletions(args, args.user);
+}
+
+/**
+ * P0-6 — chatJson + 记账元数据（usage/latency/model）。
+ * 记账调用方用它；不记账的调用方继续用 chatJson（行为不变）。
+ */
+export async function chatJsonWithMeta(
+  args: ChatJsonArgs,
+): Promise<LlmCallResult> {
+  return postChatCompletionsWithMeta(args, args.user);
+}
+
+/**
+ * P0-6 — chatJsonVision + 记账元数据。
+ */
+export async function chatJsonVisionWithMeta(
+  args: ChatJsonVisionArgs,
+): Promise<LlmCallResult> {
+  return postChatCompletionsWithMeta(args, [
+    { type: "text", text: args.user },
+    ...args.images.map((u) => ({ type: "image_url", image_url: { url: u } })),
+  ]);
+}
+
+/**
+ * P0-6 — 带校验的 chatJson + 记账元数据。重试时 usage/latency 累加
+ *（两次调用都花了 tokens，都要记）。
+ */
+export async function chatJsonValidatedWithMeta<
+  T,
+  A extends ChatJsonArgs = ChatJsonArgs,
+>(
+  args: A,
+  validate: (obj: unknown) => T,
+  impl: (args: A) => Promise<LlmCallResult> = chatJsonWithMeta as (
+    args: A,
+  ) => Promise<LlmCallResult>,
+): Promise<{ data: T; usage: LlmUsage; latencyMs: number; model: string }> {
+  const first = await impl(args);
+  try {
+    return {
+      data: validate(first.data),
+      usage: first.usage,
+      latencyMs: first.latencyMs,
+      model: first.model,
+    };
+  } catch (e) {
+    const reason = e instanceof AiError ? e.message : "invalid shape";
+    const retry = await impl({
+      ...args,
+      system:
+        `${args.system}\n\nIMPORTANT: your previous response was rejected (${reason}). ` +
+        `Return ONLY the corrected STRICT JSON object matching the spec — no markdown fences, no commentary, no extra text.`,
+    });
+    return {
+      data: validate(retry.data),
+      usage: {
+        promptTokens: first.usage.promptTokens + retry.usage.promptTokens,
+        completionTokens:
+          first.usage.completionTokens + retry.usage.completionTokens,
+        totalTokens: first.usage.totalTokens + retry.usage.totalTokens,
+      },
+      latencyMs: first.latencyMs + retry.latencyMs,
+      model: retry.model,
+    };
+  }
+}
+
+/**
+ * P0-6 — 统一记账入口：有注入 impl（测试替身）时走原 chatJsonValidated，
+ * usage 未知记 0；无注入时走真实 chatJsonWithMeta，透传真实 usage。
+ * 调用方无需分支，拿到 { data, usage, latencyMs, model } 直接记账即可。
+ */
+export async function chatJsonValidatedAccounting<
+  T,
+  A extends ChatJsonArgs = ChatJsonArgs,
+>(
+  args: A,
+  validate: (obj: unknown) => T,
+  impl?: (args: A) => Promise<unknown>,
+): Promise<{ data: T; usage: LlmUsage; latencyMs: number; model: string }> {
+  if (impl) {
+    const data = await chatJsonValidated(args, validate, impl);
+    return { data, usage: { ...ZERO_USAGE }, latencyMs: 0, model: args.model };
+  }
+  return chatJsonValidatedWithMeta(args, validate);
+}
+
+/**
+ * P0-6 — chatJson 的记账版（无校验场景，如 recommend-keywords / traffic-plan）。
+ * 有注入 impl 时 usage 记 0；否则透传真实 usage。
+ */
+export async function chatJsonAccounting<A extends ChatJsonArgs = ChatJsonArgs>(
+  args: A,
+  impl?: (args: A) => Promise<unknown>,
+): Promise<{ data: unknown; usage: LlmUsage; latencyMs: number; model: string }> {
+  if (impl) {
+    const data = await impl(args);
+    return { data, usage: { ...ZERO_USAGE }, latencyMs: 0, model: args.model };
+  }
+  const r = await chatJsonWithMeta(args);
+  return { data: r.data, usage: r.usage, latencyMs: r.latencyMs, model: r.model };
 }
 
 /**
@@ -143,10 +314,6 @@ export async function chatJsonVision(args: ChatJsonVisionArgs): Promise<unknown>
     { type: "text", text: args.user },
     ...args.images.map((u) => ({ type: "image_url", image_url: { url: u } })),
   ]);
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 /**

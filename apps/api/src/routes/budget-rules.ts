@@ -112,6 +112,18 @@ export async function registerBudgetRuleRoutes(
         enabled: asBoolean(body.enabled),
         initialBudget: asNumber(body.initialBudget),
         reason: asTrimmedString(body.reason),
+        // P0-9: null = breaker disabled; number >= 0 = cap. A present-but-
+        // unparseable value is rejected (not silently treated as disabled).
+        maxSpendCap: (() => {
+          if (body.maxSpendCap === null || body.maxSpendCap === undefined)
+            return null;
+          const cap = asNumber(body.maxSpendCap);
+          if (cap === undefined || cap < 0) {
+            throw new ValidationError("maxSpendCap must be >= 0 or null");
+          }
+          return cap;
+        })(),
+        autoPauseOnBreach: asBoolean(body.autoPauseOnBreach),
       };
       // enabled defaults to false — the user turns the rule on deliberately
       // after reviewing it.
@@ -155,6 +167,22 @@ export async function registerBudgetRuleRoutes(
         patch.checkIntervalDays = checkIntervalDays;
       const enabled = asBoolean(body.enabled);
       if (enabled !== undefined) patch.enabled = enabled;
+      // P0-9: explicit null clears the cap; omitted key leaves it unchanged;
+      // a present-but-unparseable value is rejected (not silently ignored).
+      if (body.maxSpendCap !== undefined) {
+        if (body.maxSpendCap === null) {
+          patch.maxSpendCap = null;
+        } else {
+          const cap = asNumber(body.maxSpendCap);
+          if (cap === undefined || cap < 0) {
+            throw new ValidationError("maxSpendCap must be >= 0 or null");
+          }
+          patch.maxSpendCap = cap;
+        }
+      }
+      const autoPauseOnBreach = asBoolean(body.autoPauseOnBreach);
+      if (autoPauseOnBreach !== undefined)
+        patch.autoPauseOnBreach = autoPauseOnBreach;
       const updated = await updateRule(
         services.prisma,
         tenantId,

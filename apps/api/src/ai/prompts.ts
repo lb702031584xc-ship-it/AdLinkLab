@@ -4,6 +4,12 @@
  */
 import { AiError } from "./llm.js";
 
+/**
+ * P0-6 — Prompt 模板版本。Prompt 文案改动时同步 bump，
+ * AiAnalysis.promptVersion 记录每次调用实际使用的版本，便于回溯成本/效果。
+ */
+export const PROMPT_VERSION = "v1";
+
 export type AnalysisLanguage = "zh" | "en";
 
 export interface AnalysisFinding {

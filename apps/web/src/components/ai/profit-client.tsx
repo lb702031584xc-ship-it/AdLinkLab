@@ -59,6 +59,9 @@ export function ProfitClient({ offers }: { offers: ProfitOfferOption[] }) {
   const [refundPct, setRefundPct] = useState("");
   const [shavePct, setShavePct] = useState("");
   const [epc, setEpc] = useState("");
+  /** P0-2：默认不勾选 = 估算；勾选 = 本次测算用实测数据。 */
+  const [useMeasured, setUseMeasured] = useState(false);
+  const isEstimated = !useMeasured;
 
   // (d) bid suggestions with commission ranges
   const [bidMode, setBidMode] = useState<"fixed" | "range">("fixed");
@@ -339,6 +342,24 @@ export function ProfitClient({ offers }: { offers: ProfitOfferOption[] }) {
           />
         </div>
       </div>
+
+      <label className="mt-3 flex cursor-pointer items-center gap-2 text-sm text-ink/80">
+        <input
+          type="checkbox"
+          checked={useMeasured}
+          onChange={(e) => setUseMeasured(e.target.checked)}
+          className="h-4 w-4 accent-ink"
+        />
+        {d.useMeasuredLabel}
+      </label>
+
+      {isEstimated ? (
+        <p className="mt-3">
+          <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-semibold text-amber-800">
+            {d.estimatedBadge}
+          </span>
+        </p>
+      ) : null}
 
       <div className="mt-4 grid gap-3 md:grid-cols-2">
         {(

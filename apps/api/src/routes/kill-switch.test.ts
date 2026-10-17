@@ -334,4 +334,29 @@ describe("kill-switch routes", () => {
     });
     expect(res.statusCode).toBe(400);
   });
+
+  it("P0-10: PUT accepts pauseGoogleAdsToo (default false) and persists it", async () => {
+    const getBefore = await app.inject({
+      method: "GET",
+      url: `/api/v1/offers/${offerId}/kill-switch`,
+      headers: cookie(auth.token),
+    });
+    expect(getBefore.json().pauseGoogleAdsToo).toBe(false);
+
+    const res = await app.inject({
+      method: "PUT",
+      url: `/api/v1/offers/${offerId}/kill-switch`,
+      headers: cookie(auth.token),
+      payload: { enabled: true, pauseGoogleAdsToo: true },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().pauseGoogleAdsToo).toBe(true);
+
+    const getAfter = await app.inject({
+      method: "GET",
+      url: `/api/v1/offers/${offerId}/kill-switch`,
+      headers: cookie(auth.token),
+    });
+    expect(getAfter.json().pauseGoogleAdsToo).toBe(true);
+  });
 });

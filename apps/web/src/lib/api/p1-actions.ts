@@ -15,12 +15,14 @@ import {
   deleteMonitoringRule,
   getOfferPerformance,
   listMonitoringAlerts,
+  listMonitoringErrors,
   listMonitoringRules,
   runMonitoringCheck,
   updateMonitoringRule,
   type BrandCheckResponse,
   type CreateRuleInput,
   type MonitoringAlert,
+  type MonitoringError,
   type MonitoringRule,
   type OfferPerformance,
   type UpdateRuleInput,
@@ -142,6 +144,17 @@ export async function listMonitoringAlertsAction(
     return { ok: true, data: await listMonitoringAlerts(status) };
   } catch (e) {
     return mapError(e, d.alertsFailed);
+  }
+}
+
+export async function listMonitoringErrorsAction(): Promise<
+  P1ActionResult<MonitoringError[]>
+> {
+  const d = (await t()).ai.monitoring;
+  try {
+    return { ok: true, data: await listMonitoringErrors() };
+  } catch (e) {
+    return mapError(e, d.errorsFailed);
   }
 }
 

@@ -163,6 +163,11 @@ export const zh = {
       noSpendData: "暂无花费数据（需要点击 + 盈利测算模型）",
       triggered: "已触发止损",
       loadError: "加载失败",
+      pauseGoogleAdsToo: "同时暂停 Google Ads 广告（pauseGoogleAdsToo）",
+      pauseGoogleAdsHint:
+        "勾选后，触发熔断自动暂停时，除暂停站内追踪链接外，还会同时下发 Google Ads 广告系列暂停任务",
+      pauseGoogleAdsConfirm:
+        "确认同时暂停 Google Ads 侧广告？保存后触发熔断时，将暂停该 Offer 关联广告系列的 Google Ads 广告，需在 Google Ads 中手动恢复。",
       listColumn: "测试止损",
     },
     clickProfit: {
@@ -593,6 +598,11 @@ export const en: typeof zh = {
       noSpendData: "No spend data yet (needs clicks + profit model)",
       triggered: "Stop-loss triggered",
       loadError: "Load failed",
+      pauseGoogleAdsToo: "Also pause Google Ads campaigns (pauseGoogleAdsToo)",
+      pauseGoogleAdsHint:
+        "When checked, a firing kill-switch also queues a Google Ads campaign pause task in addition to pausing on-site tracking links",
+      pauseGoogleAdsConfirm:
+        "Confirm also pausing Google Ads campaigns? When the kill-switch fires, the Google Ads campaigns linked to this offer will be paused and must be resumed manually in Google Ads.",
       listColumn: "Test stop-loss",
     },
     clickProfit: {

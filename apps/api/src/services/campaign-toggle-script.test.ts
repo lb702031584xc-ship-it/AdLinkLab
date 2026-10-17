@@ -7,11 +7,13 @@ import {
   buildCampaignToggleTaskPayload,
   campaignToggleIdempotencyKey,
   isCampaignToggleAction,
+  queueCampaignToggleTask,
   CAMPAIGN_TOGGLE_IDEMPOTENCY_SCOPE,
   CAMPAIGN_TOGGLE_PROVIDER,
   CAMPAIGN_TOGGLE_TASK_TYPE,
 } from "./campaign-toggle-script.js";
 import { randomUUID } from "node:crypto";
+import type { PrismaClient } from "@adlinklab/database";
 
 describe("buildCampaignToggleTaskPayload", () => {
   it("builds the canonical task payload", () => {
@@ -118,5 +120,81 @@ describe("buildCampaignToggleScriptSource", () => {
 
   it("never logs tokens", () => {
     expect(source).not.toMatch(/Logger\.log\([^)]*token/i);
+  });
+});
+
+describe("queueCampaignToggleTask (P0-9/P0-10 shared producer)", () => {
+  function fakePrisma() {
+    const syncJobs: any[] = [];
+    const auditLogs: any[] = [];
+    return {
+      syncJobs,
+      auditLogs,
+      prisma: {
+        syncJob: {
+          findUnique: async (args: any) =>
+            syncJobs.find(
+              (j) =>
+                j.tenantId ===
+                  args.where.tenantId_idempotencyScope_idempotencyKey
+                    .tenantId &&
+                j.idempotencyScope ===
+                  args.where.tenantId_idempotencyScope_idempotencyKey
+                    .idempotencyScope &&
+                j.idempotencyKey ===
+                  args.where.tenantId_idempotencyScope_idempotencyKey
+                    .idempotencyKey
+            ) ?? null,
+          create: async (args: any) => {
+            const row = { ...args.data };
+            syncJobs.push(row);
+            return row;
+          },
+        },
+        auditLog: {
+          create: async (args: any) => {
+            const row = { ...args.data };
+            auditLogs.push(row);
+            return row;
+          },
+        },
+      } as unknown as PrismaClient,
+    };
+  }
+
+  const input = () => ({
+    tenantId: randomUUID(),
+    campaignId: randomUUID(),
+    googleCampaignId: "123456789",
+    googleAccountId: randomUUID(),
+    action: "PAUSE" as const,
+  });
+
+  it("creates a PENDING campaign-toggle SyncJob + audit snapshot", async () => {
+    const { prisma, syncJobs, auditLogs } = fakePrisma();
+    const args = input();
+    const { taskId, deduped } = await queueCampaignToggleTask(prisma, args);
+    expect(deduped).toBe(false);
+    expect(syncJobs).toHaveLength(1);
+    expect(syncJobs[0]).toMatchObject({
+      id: taskId,
+      type: CAMPAIGN_TOGGLE_TASK_TYPE,
+      status: "PENDING",
+      provider: CAMPAIGN_TOGGLE_PROVIDER,
+    });
+    expect(auditLogs).toHaveLength(1);
+    expect(auditLogs[0].action).toBe("CAMPAIGN_TOGGLE_QUEUED");
+    expect(auditLogs[0].after.action).toBe("PAUSE");
+    expect(auditLogs[0].after.campaignId).toBe(args.campaignId);
+  });
+
+  it("dedupes a second PAUSE for the same campaign while PENDING", async () => {
+    const { prisma, syncJobs } = fakePrisma();
+    const args = input();
+    const first = await queueCampaignToggleTask(prisma, args);
+    const second = await queueCampaignToggleTask(prisma, args);
+    expect(second.deduped).toBe(true);
+    expect(second.taskId).toBe(first.taskId);
+    expect(syncJobs).toHaveLength(1);
   });
 });

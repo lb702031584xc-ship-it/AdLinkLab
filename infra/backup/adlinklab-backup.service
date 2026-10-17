@@ -1,0 +1,19 @@
+# AdLinkLab 自动备份 — systemd service（P0-7）。
+# 安装（见 docs/backup-automation.md）：把本文件与同目录的 timer
+# 复制到 /etc/systemd/system/，并把 ExecStart 里的检出路径改成
+# 服务器上的实际仓库路径，然后 systemctl daemon-reload。
+#
+# 环境变量（BACKUP_RSYNC_DEST、ADLINKLAB_BACKUP_DIR 等）从
+# /etc/adlinklab/backup.env 读取（文件不存在时忽略，见 EnvironmentFile=-）。
+# 切勿把密钥、主机地址写进本文件——只写变量名。
+[Unit]
+Description=AdLinkLab automatic backup + offsite copy (P0-7)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/adlinklab/backup.env
+ExecStart=/usr/bin/bash /opt/adlinklab/infra/backup/backup-auto.sh
+# 备份需要读库：DATABASE_URL 由 backup.env 提供（与仓库现有 backup CLI 一致）。
+# 默认认为备份失败应可见：非零退出即为 failed 单元，可配 OnFailure 告警。

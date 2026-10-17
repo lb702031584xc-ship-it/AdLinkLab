@@ -59,11 +59,15 @@ import type {
 import {
   assertAuthConfigured,
   createAuthContext,
+  registerDbApiKeyAuthHook,
   registerSessionAuthHook,
   requireTenant,
   type AuthContext,
 } from "../auth/tenant.js";
+import { registerIpBanHooks } from "../auth/ip-ban.js";
 import { registerAuthRoutes } from "./auth.js";
+import { registerApiKeyRoutes } from "./api-keys.js";
+import { registerIpBanRoutes } from "./ip-bans.js";
 import { registerAiRoutes } from "./ai.js";
 import { registerMonitoringRoutes } from "./monitoring.js";
 import { registerOfferIntelRoutes } from "./offer-intel.js";
@@ -196,12 +200,20 @@ export async function registerRoutes(
   });
 
   /** Phase 10 — login sessions ride alongside API-key auth (no-op without prisma). */
+  // P0-4 — IP-ban enforcement runs first (reject before any session/DB work).
+  // P0-3 — DB API keys resolve after sessions (sessions take precedence).
+  if (services.prisma) {
+    registerIpBanHooks(app, services.prisma);
+  }
   registerSessionAuthHook(app, services.prisma);
+  registerDbApiKeyAuthHook(app, services.prisma);
   if (services.prisma) {
     // Phase 4 iron rule: researcher isolation hook must be registered BEFORE
     // all other routes (onRequest only applies to subsequently registered routes).
     registerResearcherIsolation(app, { prisma: services.prisma });
     await registerAuthRoutes(app, { prisma: services.prisma });
+    await registerApiKeyRoutes(app, { prisma: services.prisma });
+    await registerIpBanRoutes(app, { prisma: services.prisma });
     await registerAiRoutes(app, { prisma: services.prisma });
     await registerMonitoringRoutes(app, { prisma: services.prisma });
     await registerOfferIntelRoutes(app, { prisma: services.prisma });

@@ -17,7 +17,20 @@ import {
   decryptSecret,
   encryptSecret,
 } from "../ai/crypto.js";
-import { AiError, chatJson, chatJsonValidated } from "../ai/llm.js";
+import {
+  AiError,
+  chatJson,
+  chatJsonAccounting,
+  chatJsonValidatedAccounting,
+  ZERO_USAGE,
+  type LlmUsage,
+} from "../ai/llm.js";
+import { estimateCostCents } from "../ai/pricing.js";
+import {
+  enforceAiQuota,
+  getAiUsageSummary,
+  recordAiUsage,
+} from "../ai/usage.js";
 import {
   buildTrafficPlanPrompt,
   computeKeywordMath,
@@ -49,6 +62,7 @@ import {
 import {
   buildAnalysisPrompt,
   buildTermsPrompt,
+  PROMPT_VERSION,
   validateAnalysisShape,
   validateTermsShape,
   type AnalysisLanguage,
@@ -177,8 +191,59 @@ export async function registerAiRoutes(
   deps: AiRouteDeps
 ): Promise<void> {
   const { prisma } = deps;
-  const chatJsonImpl = deps.chatJsonImpl ?? chatJson;
   const fetchPageImpl = deps.fetchPageImpl ?? fetchPage;
+
+  /**
+   * P0-6 — AiAnalysis 记账字段。usage 缺失时记 0（LLM 没返回 usage 时
+   * 不编造）；status 仅在成功落库时为 success。
+   */
+  function accountingFields(
+    model: string,
+    meta: { usage: LlmUsage; latencyMs: number }
+  ) {
+    return {
+      model,
+      promptVersion: PROMPT_VERSION,
+      tokensIn: meta.usage.promptTokens,
+      tokensOut: meta.usage.completionTokens,
+      costCents: estimateCostCents(
+        model,
+        meta.usage.promptTokens,
+        meta.usage.completionTokens
+      ),
+      latencyMs: meta.latencyMs,
+      status: "success",
+    };
+  }
+
+  /** P0-6 — 记一次 LLM 调用的用量到 AiUsageDaily（best-effort）。 */
+  async function trackLlmUsage(
+    tenantId: string,
+    model: string,
+    meta: { usage: LlmUsage; latencyMs: number },
+    calls = 1
+  ): Promise<void> {
+    await recordAiUsage(prisma, {
+      tenantId,
+      model,
+      tokensIn: meta.usage.promptTokens,
+      tokensOut: meta.usage.completionTokens,
+      costCents: estimateCostCents(
+        model,
+        meta.usage.promptTokens,
+        meta.usage.completionTokens
+      ),
+      calls,
+    });
+  }
+
+  /** P0-6 — helper 内部调用（usage 未透传）：只记 calls=1，tokens 记 0。 */
+  async function trackHelperLlmCall(
+    tenantId: string,
+    model: string
+  ): Promise<void> {
+    await trackLlmUsage(tenantId, model, { usage: ZERO_USAGE, latencyMs: 0 }, 1);
+  }
 
   /** Admin-only: inspect current LLM configuration (never returns the key). */
   app.get("/api/v1/ai/settings", async (request) => {
@@ -356,6 +421,15 @@ export async function registerAiRoutes(
   });
 
   /**
+   * P0-6 — Admin-only: 今日/本月 AI 用量汇总（UTC），供 /admin/ai-settings
+   * 用量卡片展示。租户隔离：只返回当前管理员所在租户的汇总。
+   */
+  app.get("/api/v1/admin/ai-usage/summary", async (request) => {
+    const info = await requireAdmin(deps, request);
+    return getAiUsageSummary(prisma, info.tenantId);
+  });
+
+  /**
    * Admin-only: 测试 LLM 连接，一步步定位故障层级。
    * 可传 { baseUrl?, model?, apiKey? } 测试"保存前"的值；不传则用已保存的配置。
    * 返回 { ok, stage, message, latencyMs?, httpStatus? }，stage 之一：
@@ -505,6 +579,8 @@ export async function registerAiRoutes(
   /** Analyze an offer (URL or pasted text) with the configured LLM. */
   app.post("/api/v1/ai/analyze", async (request) => {
     const info = await requireSession(deps, request);
+    // P0-6 — 配额守门（超限 429）。
+    await enforceAiQuota(prisma, info.tenantId);
     const body = (request.body ?? {}) as {
       url?: unknown;
       text?: unknown;
@@ -565,8 +641,9 @@ export async function registerAiRoutes(
     });
 
     let analysis;
+    let llmMeta: { usage: LlmUsage; latencyMs: number };
     try {
-      analysis = await chatJsonValidated(
+      const called = await chatJsonValidatedAccounting(
         {
           baseUrl: settings.baseUrl as string,
           model: settings.model as string,
@@ -575,12 +652,20 @@ export async function registerAiRoutes(
           user,
         },
         validateAnalysisShape,
-        chatJsonImpl,
+        deps.chatJsonImpl,
       );
+      analysis = called.data;
+      llmMeta = called;
     } catch (e) {
       if (e instanceof AiError) throw e;
       throw new AiError("LLM request failed");
     }
+    // P0-6 — 记账（usage 缺失时记 0）。
+    await trackLlmUsage(
+      info.tenantId,
+      settings.model as string,
+      llmMeta,
+    );
     const profitability = computeProfitability(payout, payoutCurrency, estimatedCpc);
 
     const id = randomUUID();
@@ -599,6 +684,7 @@ export async function registerAiRoutes(
         payoutCurrency: payoutCurrency ?? null,
         estimatedCpc: estimatedCpc ?? null,
         result: resultJson as never,
+        ...accountingFields(settings.model as string, llmMeta),
       },
     });
 
@@ -619,7 +705,9 @@ export async function registerAiRoutes(
    * AI 不得凭空编造分数。
    */
   app.post("/api/v1/ai/recommend-keywords", async (request) => {
-    await requireSession(deps, request);
+    const info = await requireSession(deps, request);
+    // P0-6 — 配额守门（超限 429）。
+    await enforceAiQuota(prisma, info.tenantId);
     const body = (request.body ?? {}) as {
       product?: unknown;
       language?: unknown;
@@ -653,13 +741,19 @@ export async function registerAiRoutes(
 
     let result: { keywords?: Array<{ keyword?: unknown; reason?: unknown }> };
     try {
-      result = (await chatJsonImpl({
-        baseUrl: settings.baseUrl as string,
-        model: settings.model as string,
-        apiKey,
-        system: system + '\nReturn JSON: {"keywords":[{"keyword":"...","reason":"..."}]}',
-        user,
-      })) as typeof result;
+      const called = await chatJsonAccounting(
+        {
+          baseUrl: settings.baseUrl as string,
+          model: settings.model as string,
+          apiKey,
+          system: system + '\nReturn JSON: {"keywords":[{"keyword":"...","reason":"..."}]}',
+          user,
+        },
+        deps.chatJsonImpl,
+      );
+      result = called.data as typeof result;
+      // P0-6 — 记账（usage 缺失时记 0）。
+      await trackLlmUsage(info.tenantId, settings.model as string, called);
     } catch (e) {
       if (e instanceof AiError) throw e;
       throw new AiError("LLM request failed");
@@ -682,6 +776,8 @@ export async function registerAiRoutes(
    */
   app.post("/api/v1/ai/analyze-terms", async (request) => {
     const info = await requireSession(deps, request);
+    // P0-6 — 配额守门（超限 429）。
+    await enforceAiQuota(prisma, info.tenantId);
     const body = (request.body ?? {}) as {
       text?: unknown;
       language?: unknown;
@@ -704,8 +800,9 @@ export async function registerAiRoutes(
     const apiKey = decryptSecret(settings.apiKeyEnc as string, pepper);
     const { system, user } = buildTermsPrompt(text.slice(0, 12_000), language);
     let terms;
+    let llmMeta: { usage: LlmUsage; latencyMs: number };
     try {
-      terms = await chatJsonValidated(
+      const called = await chatJsonValidatedAccounting(
         {
           baseUrl: settings.baseUrl as string,
           model: settings.model as string,
@@ -714,12 +811,16 @@ export async function registerAiRoutes(
           user,
         },
         validateTermsShape,
-        chatJsonImpl,
+        deps.chatJsonImpl,
       );
+      terms = called.data;
+      llmMeta = called;
     } catch (e) {
       if (e instanceof AiError) throw e;
       throw new AiError("LLM request failed");
     }
+    // P0-6 — 记账（usage 缺失时记 0）。
+    await trackLlmUsage(info.tenantId, settings.model as string, llmMeta);
     const id = randomUUID();
     const resultJson = JSON.parse(JSON.stringify(terms)) as unknown;
     await prisma.aiAnalysis.create({
@@ -735,6 +836,7 @@ export async function registerAiRoutes(
         payoutCurrency: null,
         estimatedCpc: null,
         result: resultJson as never,
+        ...accountingFields(settings.model as string, llmMeta),
       },
     });
     return { id, language, terms, analyzedAt: new Date().toISOString() };
@@ -746,6 +848,8 @@ export async function registerAiRoutes(
    */
   app.post("/api/v1/ai/traffic-plan", async (request) => {
     const info = await requireSession(deps, request);
+    // P0-6 — 配额守门（超限 429）。
+    await enforceAiQuota(prisma, info.tenantId);
     const body = (request.body ?? {}) as Record<string, unknown>;
 
     const mode = body.mode === "direct" ? "direct" : "landing";
@@ -816,19 +920,27 @@ export async function registerAiRoutes(
     const { system, user } = buildTrafficPlanPrompt(input);
 
     let report: string;
+    let llmMeta: { usage: LlmUsage; latencyMs: number };
     try {
-      const raw = (await chatJsonImpl({
-        baseUrl: settings.baseUrl as string,
-        model: settings.model as string,
-        apiKey,
-        system: system + "\nReturn JSON: {\"report\": \"<markdown report>\"}",
-        user,
-      })) as { report?: unknown };
+      const called = await chatJsonAccounting(
+        {
+          baseUrl: settings.baseUrl as string,
+          model: settings.model as string,
+          apiKey,
+          system: system + "\nReturn JSON: {\"report\": \"<markdown report>\"}",
+          user,
+        },
+        deps.chatJsonImpl,
+      );
+      const raw = called.data as { report?: unknown };
       report = typeof raw?.report === "string" ? raw.report : JSON.stringify(raw);
+      llmMeta = called;
     } catch (e) {
       if (e instanceof AiError) throw e;
       throw new AiError("LLM request failed");
     }
+    // P0-6 — 记账（usage 缺失时记 0）。
+    await trackLlmUsage(info.tenantId, settings.model as string, llmMeta);
 
     const id = randomUUID();
     await prisma.aiAnalysis.create({
@@ -844,6 +956,7 @@ export async function registerAiRoutes(
         payoutCurrency: "USD",
         estimatedCpc: null,
         result: { report, combo: profile.key, math } as never,
+        ...accountingFields(settings.model as string, llmMeta),
       },
     });
     return {
@@ -862,6 +975,8 @@ export async function registerAiRoutes(
    */
   app.post("/api/v1/ai/screen-offers", async (request) => {
     const info = await requireSession(deps, request);
+    // P0-6 — 配额守门（超限 429；批量调用只在入口检查一次）。
+    await enforceAiQuota(prisma, info.tenantId);
     const body = (request.body ?? {}) as {
       items?: unknown;
       language?: unknown;
@@ -899,11 +1014,16 @@ export async function registerAiRoutes(
     const apiKey = decryptSecret(settings.apiKeyEnc as string, pepper);
 
     const analyzed: Array<{ name: string | null; terms: TermsShape }> = [];
+    // P0-6 — 批量调用累计 usage，一次性记账（calls=items.length）。
+    const batchMeta: { usage: LlmUsage; latencyMs: number } = {
+      usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      latencyMs: 0,
+    };
     for (const item of items) {
       const { system, user } = buildTermsPrompt(item.text.slice(0, 12_000), language);
       let terms;
       try {
-        terms = await chatJsonValidated(
+        const called = await chatJsonValidatedAccounting(
           {
             baseUrl: settings.baseUrl as string,
             model: settings.model as string,
@@ -912,14 +1032,25 @@ export async function registerAiRoutes(
             user,
           },
           validateTermsShape,
-          chatJsonImpl,
+          deps.chatJsonImpl,
         );
+        terms = called.data;
+        batchMeta.usage.promptTokens += called.usage.promptTokens;
+        batchMeta.usage.completionTokens += called.usage.completionTokens;
+        batchMeta.usage.totalTokens += called.usage.totalTokens;
+        batchMeta.latencyMs += called.latencyMs;
       } catch (e) {
         if (e instanceof AiError) throw e;
         throw new AiError("LLM request failed");
       }
       analyzed.push({ name: item.name, terms });
     }
+    await trackLlmUsage(
+      info.tenantId,
+      settings.model as string,
+      batchMeta,
+      items.length
+    );
 
     const severityRank = { high: 0, medium: 1, low: 2 } as const;
     const verdictRank = { go: 0, caution: 1, stop: 2 } as const;
@@ -962,6 +1093,7 @@ export async function registerAiRoutes(
         payoutCurrency: null,
         estimatedCpc: null,
         result: resultJson as never,
+        ...accountingFields(settings.model as string, batchMeta),
       },
     });
     return { id, results, analyzedAt: new Date().toISOString() };
@@ -1411,7 +1543,8 @@ export async function registerAiRoutes(
    */
   app.post("/api/v1/ai/parse-intel-capture", async (request) => {
     const info = await requireSession(deps, request);
-    void info;
+    // P0-6 — 配额守门（超限 429）。
+    await enforceAiQuota(prisma, info.tenantId);
     const body = (request.body ?? {}) as {
       captureId?: unknown;
       kind?: unknown;
@@ -1434,7 +1567,7 @@ export async function registerAiRoutes(
     }
     const pepper = assertAiSettingsPepperConfigured();
     const apiKey = decryptSecret(settings.apiKeyEnc as string, pepper);
-    return extractIntelWithAi(
+    const extracted = await extractIntelWithAi(
       {
         baseUrl: settings.baseUrl as string,
         model: settings.model as string,
@@ -1444,6 +1577,9 @@ export async function registerAiRoutes(
       row.pageText ?? "",
       body.kind
     );
+    // P0-6 — helper 内部调用未透传 usage，只记 calls=1。
+    await trackHelperLlmCall(info.tenantId, settings.model as string);
+    return extracted;
   });
 
   /**
@@ -1453,7 +1589,8 @@ export async function registerAiRoutes(
    */
   app.post("/api/v1/ai/parse-keyword-capture-ai", async (request) => {
     const info = await requireSession(deps, request);
-    void info;
+    // P0-6 — 配额守门（超限 429）。
+    await enforceAiQuota(prisma, info.tenantId);
     const body = (request.body ?? {}) as { captureId?: unknown; language?: unknown };
     const captureId = typeof body.captureId === "string" ? body.captureId : "";
     if (!captureId) throw new ValidationError("captureId is required");
@@ -1480,6 +1617,8 @@ export async function registerAiRoutes(
       },
       row.pageText ?? ""
     );
+    // P0-6 — helper 内部调用未透传 usage，只记 calls=1。
+    await trackHelperLlmCall(info.tenantId, settings.model as string);
     return { rows };
   });
 
@@ -1489,7 +1628,8 @@ export async function registerAiRoutes(
    */
   app.post("/api/v1/ai/parse-product-capture", async (request) => {
     const info = await requireSession(deps, request);
-    void info;
+    // P0-6 — 配额守门（超限 429）。
+    await enforceAiQuota(prisma, info.tenantId);
     const body = (request.body ?? {}) as { captureId?: unknown; language?: unknown };
     const captureId = typeof body.captureId === "string" ? body.captureId : "";
     if (!captureId) throw new ValidationError("captureId is required");
@@ -1507,7 +1647,7 @@ export async function registerAiRoutes(
     }
     const pepper = assertAiSettingsPepperConfigured();
     const apiKey = decryptSecret(settings.apiKeyEnc as string, pepper);
-    return extractProductWithAi(
+    const product = await extractProductWithAi(
       {
         baseUrl: settings.baseUrl as string,
         model: settings.model as string,
@@ -1516,6 +1656,9 @@ export async function registerAiRoutes(
       },
       row.pageText ?? ""
     );
+    // P0-6 — helper 内部调用未透传 usage，只记 calls=1。
+    await trackHelperLlmCall(info.tenantId, settings.model as string);
+    return product;
   });
 
   /**
@@ -1649,6 +1792,9 @@ export async function registerAiRoutes(
     };
   }>("/api/v1/ai/offer-blueprint", async (request) => {
     const info = await requireSession(deps, request);
+    // P0-6 — 配额守门（超限 429）。blueprint 内部多次 LLM 调用，
+    // usage 未透传，本期只做入口配额，不记用量（见 generateBlueprint 跟进项）。
+    await enforceAiQuota(prisma, info.tenantId);
     const body = request.body ?? {};
     const str = (v: unknown): string =>
       typeof v === "string" ? v.trim() : "";

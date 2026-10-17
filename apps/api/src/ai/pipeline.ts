@@ -17,12 +17,16 @@ import { AppError } from "@adlinklab/shared";
 import {
   AiError,
   chatJson,
-  chatJsonValidated,
+  chatJsonValidatedAccounting,
   type ChatJsonArgs,
+  type LlmUsage,
 } from "./llm.js";
+import { estimateCostCents } from "./pricing.js";
+import { recordAiUsage } from "./usage.js";
 import {
   buildAnalysisPrompt,
   buildTermsPrompt,
+  PROMPT_VERSION,
   validateAnalysisShape,
   validateTermsShape,
   type AnalysisLanguage,
@@ -112,13 +116,21 @@ function chatArgs(config: LlmConfig, system: string, user: string): ChatJsonArgs
   };
 }
 
+/** P0-6 — LLM agent 的记账元数据（usage 缺失时记 0）。 */
+export interface AgentAccounting {
+  model: string;
+  usage: LlmUsage;
+  latencyMs: number;
+}
+
 async function writeAgentAnalysis(
   deps: PipelineDeps,
   tenantId: string,
   userId: string | undefined,
   agentName: string,
   inputRef: string,
-  result: unknown
+  result: unknown,
+  accounting?: AgentAccounting
 ): Promise<string> {
   const id = randomUUID();
   const resultJson = JSON.parse(JSON.stringify(result)) as unknown;
@@ -135,9 +147,45 @@ async function writeAgentAnalysis(
       payoutCurrency: null,
       estimatedCpc: null,
       result: resultJson as never,
+      // P0-6 — 确定性 agent（无 LLM 调用）不传 accounting，字段保持 null。
+      ...(accounting
+        ? {
+            model: accounting.model,
+            promptVersion: PROMPT_VERSION,
+            tokensIn: accounting.usage.promptTokens,
+            tokensOut: accounting.usage.completionTokens,
+            costCents: estimateCostCents(
+              accounting.model,
+              accounting.usage.promptTokens,
+              accounting.usage.completionTokens
+            ),
+            latencyMs: accounting.latencyMs,
+            status: "success",
+          }
+        : {}),
     },
   });
   return id;
+}
+
+/** P0-6 — 记一次 agent LLM 调用的用量（best-effort）。 */
+async function trackAgentUsage(
+  deps: PipelineDeps,
+  tenantId: string,
+  accounting: AgentAccounting
+): Promise<void> {
+  await recordAiUsage(deps.prisma, {
+    tenantId,
+    model: accounting.model,
+    tokensIn: accounting.usage.promptTokens,
+    tokensOut: accounting.usage.completionTokens,
+    costCents: estimateCostCents(
+      accounting.model,
+      accounting.usage.promptTokens,
+      accounting.usage.completionTokens
+    ),
+    calls: 1,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -166,16 +214,25 @@ export async function offerAnalyst(
   const config = await requireLlmConfig(deps.prisma);
   const { system, user } = buildTermsPrompt(text.slice(0, 12_000), input.language);
   let terms: TermsShape;
+  let accounting: AgentAccounting;
   try {
-    terms = await chatJsonValidated(
+    const called = await chatJsonValidatedAccounting(
       chatArgs(config, system, user),
       validateTermsShape,
       deps.chatJsonImpl
     );
+    terms = called.data;
+    accounting = {
+      model: config.model,
+      usage: called.usage,
+      latencyMs: called.latencyMs,
+    };
   } catch (e) {
     if (e instanceof AiError) throw e;
     throw new AiError("LLM request failed");
   }
+  // P0-6 — 记账（usage 缺失时记 0）。
+  await trackAgentUsage(deps, tenantId, accounting);
   const inputRef = createHash("sha256").update(text, "utf8").digest("hex").slice(0, 16);
   const analysisId = await writeAgentAnalysis(
     deps,
@@ -183,7 +240,8 @@ export async function offerAnalyst(
     userId,
     "offer-analyst",
     inputRef,
-    { language: input.language, terms }
+    { language: input.language, terms },
+    accounting
   );
   return { terms, analysisId };
 }
@@ -318,16 +376,25 @@ export async function riskAnalyst(
     language: input.language,
   });
   let analysis;
+  let accounting: AgentAccounting;
   try {
-    analysis = await chatJsonValidated(
+    const called = await chatJsonValidatedAccounting(
       chatArgs(config, system, user),
       validateAnalysisShape,
       deps.chatJsonImpl
     );
+    analysis = called.data;
+    accounting = {
+      model: config.model,
+      usage: called.usage,
+      latencyMs: called.latencyMs,
+    };
   } catch (e) {
     if (e instanceof AiError) throw e;
     throw new AiError("LLM request failed");
   }
+  // P0-6 — 记账（usage 缺失时记 0）。
+  await trackAgentUsage(deps, tenantId, accounting);
   const analysisId = await writeAgentAnalysis(
     deps,
     tenantId,
@@ -338,7 +405,8 @@ export async function riskAnalyst(
       analysis,
       rules,
       disclaimer: MERCHANT_REPUTATION_DISCLAIMER,
-    }
+    },
+    accounting
   );
   return {
     criticalHits: [],

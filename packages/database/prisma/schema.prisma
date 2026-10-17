@@ -237,6 +237,9 @@ model Tenant {
   manualSpend           ManualSpend?
   /// 投放档案 back-reference (additive)
   launchArchives        LaunchArchive[]
+  /// P0：DB API Keys / AI 用量日报 back-references (additive)
+  apiKeys               ApiKey[]
+  aiUsageDaily          AiUsageDaily[]
 
   @@map("tenants")
 }
@@ -507,24 +510,24 @@ model LandingPage {
 }
 
 model TrackingLink {
-  id            String             @id @db.Uuid
-  tenantId      String             @map("tenant_id") @db.Uuid
-  publicId      String             @unique @map("public_id")
-  campaignId    String?            @map("campaign_id") @db.Uuid
-  adGroupId     String?            @map("ad_group_id") @db.Uuid
-  adId          String?            @map("ad_id") @db.Uuid
-  criterionId   String?            @map("criterion_id") @db.Uuid
-  offerId       String             @map("offer_id") @db.Uuid
-  landingPageId String?            @map("landing_page_id") @db.Uuid
-  status        TrackingLinkStatus @default(ACTIVE)
+  id                     String             @id @db.Uuid
+  tenantId               String             @map("tenant_id") @db.Uuid
+  publicId               String             @unique @map("public_id")
+  campaignId             String?            @map("campaign_id") @db.Uuid
+  adGroupId              String?            @map("ad_group_id") @db.Uuid
+  adId                   String?            @map("ad_id") @db.Uuid
+  criterionId            String?            @map("criterion_id") @db.Uuid
+  offerId                String             @map("offer_id") @db.Uuid
+  landingPageId          String?            @map("landing_page_id") @db.Uuid
+  status                 TrackingLinkStatus @default(ACTIVE)
   /// Health check: per-link interval in seconds (default 3600 = 1h), min 600 enforced in code
-  healthCheckIntervalSec Int    @default(3600) @map("health_check_interval_sec")
+  healthCheckIntervalSec Int                @default(3600) @map("health_check_interval_sec")
   /// How this link was added: MANUAL (pasted by user) or AUTO (synced from network/offer)
-  linkSource      String             @default("MANUAL") @map("link_source")
-  createdAt     DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt     DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
-  archivedAt    DateTime?          @map("archived_at") @db.Timestamptz(3)
-  deletedAt     DateTime?          @map("deleted_at") @db.Timestamptz(3)
+  linkSource             String             @default("MANUAL") @map("link_source")
+  createdAt              DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  archivedAt             DateTime?          @map("archived_at") @db.Timestamptz(3)
+  deletedAt              DateTime?          @map("deleted_at") @db.Timestamptz(3)
 
   campaign            Campaign?            @relation(fields: [campaignId], references: [id], onDelete: Restrict)
   adGroup             AdGroup?             @relation(fields: [adGroupId], references: [id], onDelete: Restrict)
@@ -935,6 +938,14 @@ model AiAnalysis {
   payoutCurrency String?  @map("payout_currency")
   estimatedCpc   Float?   @map("estimated_cpc")
   result         Json     @map("result") @db.JsonB
+  /// P0-6：AI 成本记账（additive，可空——历史记录无记账数据）
+  model          String?
+  promptVersion  String?  @map("prompt_version")
+  tokensIn       Int?     @map("tokens_in")
+  tokensOut      Int?     @map("tokens_out")
+  costCents      Int?     @map("cost_cents")
+  latencyMs      Int?     @map("latency_ms")
+  status         String?  @default("success")
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@index([tenantId])
@@ -1279,6 +1290,8 @@ model KillSwitchConfig {
   testSpendCap              Decimal? @map("test_spend_cap") @db.Decimal(12, 2)
   testZeroConvSpend         Decimal? @map("test_zero_conv_spend") @db.Decimal(12, 2)
   pauseOnMerchantTerminated Boolean  @default(true) @map("pause_on_merchant_terminated")
+  /// P0-10：触发时是否同时下发 Google Ads campaign-toggle PAUSE 任务（默认 false，需二次确认）
+  pauseGoogleAdsToo         Boolean  @default(false) @map("pause_google_ads_too")
   createdAt                 DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt                 DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -1301,6 +1314,9 @@ model KillSwitchEvent {
   /// ALERT_ONLY | PAUSED_ALL_LINKS
   actionTaken       String   @map("action_taken")
   linksPaused       Int      @default(0) @map("links_paused")
+  /// P0-10 审计：是否同时下发了 Google Ads 暂停任务 + 任务 ID
+  googleAdsPaused   Boolean  @default(false) @map("google_ads_paused")
+  googleAdsTaskId   String?  @map("google_ads_task_id")
   autoExecute       Boolean  @map("auto_execute")
   createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
@@ -1599,15 +1615,15 @@ model CashbackRateSnapshot {
 /// Automation — offer rotation group (additive).
 /// strategy: "round_robin" | "weighted" | ... (stored as plain string)
 model RotationGroup {
-  id        String   @id @db.Uuid
-  tenantId  String   @map("tenant_id") @db.Uuid
-  name      String
-  strategy  String   @default("round_robin")
-  isActive  Boolean  @default(true) @map("is_active")
+  id                 String   @id @db.Uuid
+  tenantId           String   @map("tenant_id") @db.Uuid
+  name               String
+  strategy           String   @default("round_robin")
+  isActive           Boolean  @default(true) @map("is_active")
   /// Auto-rotation interval in milliseconds (default 1 hour). Null/0 = manual only.
-  rotationIntervalMs Int @default(3600000) @map("rotation_interval_ms")
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  rotationIntervalMs Int      @default(3600000) @map("rotation_interval_ms")
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   tenant Tenant              @relation(fields: [tenantId], references: [id])
   items  RotationGroupItem[]
@@ -1712,6 +1728,9 @@ model BudgetRule {
   decreasePct       Float     @default(20) @map("decrease_pct")
   checkIntervalDays Int       @default(7) @map("check_interval_days")
   enabled           Boolean   @default(false)
+  /// P0-9：累计花费熔断上限（与 spend 同货币，null = 不启用）+ 触发时是否自动暂停
+  maxSpendCap       Float?    @map("max_spend_cap")
+  autoPauseOnBreach Boolean   @default(false) @map("auto_pause_on_breach")
   lastEvaluatedAt   DateTime? @map("last_evaluated_at") @db.Timestamptz(3)
   lastAction        Json?     @map("last_action")
   createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -1859,18 +1878,18 @@ model DenylistEntry {
 
 /// 组合测试（第九批）：一次测 5-10 个品的榜单页测试。
 model ComboTestRun {
-  id            String   @id @db.Uuid
-  tenantId      String   @map("tenant_id") @db.Uuid
-  name          String   @db.VarChar(200)
+  id           String   @id @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
+  name         String   @db.VarChar(200)
   /// 渲染好的榜单 HTML（复用 builtin-listicle 模板）
-  htmlContent   String?  @map("html_content")
+  htmlContent  String?  @map("html_content")
   /// [{asin,title,brand,price,rating,reviewCount,offerId,trackingLinkId,publicId,clickUrl}]
-  items         Json
-  testDays      Int      @default(3) @map("test_days")
-  targetClicks  Int      @default(200) @map("target_clicks")
-  status        String   @default("running") @db.VarChar(16)
-  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  items        Json
+  testDays     Int      @default(3) @map("test_days")
+  targetClicks Int      @default(200) @map("target_clicks")
+  status       String   @default("running") @db.VarChar(16)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
 
@@ -1976,7 +1995,9 @@ model OfferCapture {
   currency    String?
   pageText    String   @map("page_text")
   pageHtml    String?  @map("page_html")
-  /** 是否带有插件发来的真实 HTML（列表接口用此列判断，不拉整页 HTML）。 */
+  /**
+   * 是否带有插件发来的真实 HTML（列表接口用此列判断，不拉整页 HTML）。
+   */
   hasHtml     Boolean  @default(false) @map("has_html")
   source      String   @default("extension")
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -1990,42 +2011,42 @@ model OfferCapture {
 /// 投放档案：一次投放的完整档案——决策、条款、出价、文案、投后数据。
 /// 确认广告计划后自动建档（draft），投后回填 impressions/clicks/spend 等。
 model LaunchArchive {
-  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  tenantId          String    @map("tenant_id") @db.Uuid
+  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId           String    @map("tenant_id") @db.Uuid
   /// 库里 Offer id；手动 Offer 建档时为 null。
-  offerId           String?   @map("offer_id") @db.Uuid
-  offerName         String    @map("offer_name")
-  network           String
-  offerUrl          String?   @map("offer_url")
-  decision          String?
-  decisionReason    String?   @map("decision_reason")
-  termsBrandBidding String?   @map("terms_brand_bidding")
-  termsDirectLinking String?  @map("terms_direct_linking")
-  termsSummary      String?   @map("terms_summary")
-  payout            Float?
-  epc               Float?
-  breakevenCpc      Float?    @map("breakeven_cpc")
-  breakevenCvrPct   Float?    @map("breakeven_cvr_pct")
-  recommendedBid    Float?    @map("recommended_bid")
-  myBid             Float?    @map("my_bid")
-  officialBid       Float?    @map("official_bid")
-  dailyBudget       Float?    @map("daily_budget")
-  budgetCurrency    String    @default("USD") @map("budget_currency")
+  offerId            String?   @map("offer_id") @db.Uuid
+  offerName          String    @map("offer_name")
+  network            String
+  offerUrl           String?   @map("offer_url")
+  decision           String?
+  decisionReason     String?   @map("decision_reason")
+  termsBrandBidding  String?   @map("terms_brand_bidding")
+  termsDirectLinking String?   @map("terms_direct_linking")
+  termsSummary       String?   @map("terms_summary")
+  payout             Float?
+  epc                Float?
+  breakevenCpc       Float?    @map("breakeven_cpc")
+  breakevenCvrPct    Float?    @map("breakeven_cvr_pct")
+  recommendedBid     Float?    @map("recommended_bid")
+  myBid              Float?    @map("my_bid")
+  officialBid        Float?    @map("official_bid")
+  dailyBudget        Float?    @map("daily_budget")
+  budgetCurrency     String    @default("USD") @map("budget_currency")
   /// 关键词字符串数组。
-  keywords          Json      @default("[]")
+  keywords           Json      @default("[]")
   /// RSA 文案 { headlines: string[], descriptions: string[] }。
-  adCopy            Json      @default("{}")
-  impressions       Int?
-  clicks            Int?
-  spend             Float?
-  conversions       Int?
-  revenue           Float?
-  status            String    @default("draft")
-  notes             String?
-  launchedAt        DateTime? @map("launched_at") @db.Timestamptz(3)
-  endedAt           DateTime? @map("ended_at") @db.Timestamptz(3)
-  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  adCopy             Json      @default("{}")
+  impressions        Int?
+  clicks             Int?
+  spend              Float?
+  conversions        Int?
+  revenue            Float?
+  status             String    @default("draft")
+  notes              String?
+  launchedAt         DateTime? @map("launched_at") @db.Timestamptz(3)
+  endedAt            DateTime? @map("ended_at") @db.Timestamptz(3)
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
 
@@ -2033,4 +2054,108 @@ model LaunchArchive {
   @@index([tenantId, network], map: "launch_archives_tenant_network_idx")
   @@index([tenantId, status], map: "launch_archives_tenant_status_idx")
   @@map("launch_archives")
+}
+
+/// P0-3 — DB-backed API keys (additive). Raw key material is NEVER stored:
+/// only SHA-256 hash + display prefix. Env keys (ADLINKLAB_API_KEYS) keep
+/// working alongside DB keys. Rotation: old row gets revokedAt=now +
+/// graceExpiresAt=now+24h; validation accepts a revoked key only within grace.
+model ApiKey {
+  id             String    @id @db.Uuid
+  tenantId       String    @map("tenant_id") @db.Uuid
+  name           String
+  keyPrefix      String    @map("key_prefix")
+  keyHash        String    @unique @map("key_hash")
+  scopes         String[]  @default([])
+  ipWhitelist    String[]  @default([]) @map("ip_whitelist")
+  expiresAt      DateTime? @map("expires_at") @db.Timestamptz(3)
+  revokedAt      DateTime? @map("revoked_at") @db.Timestamptz(3)
+  graceExpiresAt DateTime? @map("grace_expires_at") @db.Timestamptz(3)
+  lastUsedAt     DateTime? @map("last_used_at") @db.Timestamptz(3)
+  rotatedFromId  String?   @map("rotated_from_id") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  rotatedFrom ApiKey?  @relation("ApiKeyRotation", fields: [rotatedFromId], references: [id])
+  rotatedTo   ApiKey[] @relation("ApiKeyRotation")
+
+  @@index([tenantId])
+  @@map("api_keys")
+}
+
+/// P0-4 — IP bans for the own API only (never ad clicks). level: 'manual' |
+/// 'auto'. revokedAt = manual unban. Auto bans are created by the error-rate
+/// watcher (5min window, 4xx/5xx >= 100 -> 1h), with whitelist exemption.
+model IpBan {
+  id           String    @id @db.Uuid
+  ip           String
+  reason       String
+  level        String    @default("auto")
+  expiresAt    DateTime? @map("expires_at") @db.Timestamptz(3)
+  requestCount Int       @default(0) @map("request_count")
+  revokedAt    DateTime? @map("revoked_at") @db.Timestamptz(3)
+  createdBy    String?   @map("created_by") @db.Uuid
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([ip])
+  @@index([expiresAt])
+  @@map("ip_bans")
+}
+
+/// P0-5 — Revoked session / JWT identifiers (Redis blacklist mirror).
+/// Logout / password change / user ban writes here; auth middleware checks
+/// jti (JWT) or token hash (opaque session) against this table + Redis.
+model TokenRevocation {
+  id        String   @id @db.Uuid
+  jti       String?  @unique
+  tokenHash String?  @unique @map("token_hash")
+  type      String
+  reason    String?
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([expiresAt])
+  @@map("token_revocations")
+}
+
+/// P0-6 — Daily AI usage rollup per tenant. date is a calendar DATE (UTC).
+model AiUsageDaily {
+  id        String   @id @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  date      DateTime @map("date") @db.Date
+  tokensIn  Int      @default(0) @map("tokens_in")
+  tokensOut Int      @default(0) @map("tokens_out")
+  costCents Int      @default(0) @map("cost_cents")
+  calls     Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, date])
+  @@index([tenantId, date])
+  @@map("ai_usage_daily")
+}
+
+/// P0-8 — Persistent error reports. 5xx writes immediately; messages must
+/// already be redacted by the logger (never secrets / tokens / bodies).
+model ErrorReport {
+  id          String   @id @db.Uuid
+  tenantId    String?  @map("tenant_id") @db.Uuid
+  level       String
+  message     String
+  requestId   String?  @map("request_id")
+  path        String?
+  method      String?
+  statusCode  Int?     @map("status_code")
+  count       Int      @default(1)
+  firstSeenAt DateTime @default(now()) @map("first_seen_at") @db.Timestamptz(3)
+  lastSeenAt  DateTime @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([lastSeenAt])
+  @@index([tenantId, lastSeenAt])
+  @@map("error_reports")
 }

@@ -22,8 +22,10 @@ export interface BudgetRule {
   checkIntervalDays: number;
   enabled: boolean;
   lastEvaluatedAt: string | null;
+  maxSpendCap: number | null;
+  autoPauseOnBreach: boolean;
   lastAction: {
-    action: "up" | "down" | "hold" | "init";
+    action: "up" | "down" | "hold" | "init" | "paused";
     reason: string;
     at: string;
     oldBudget?: number;
@@ -32,6 +34,9 @@ export interface BudgetRule {
     spend?: number;
     revenue?: number;
     taskId?: string;
+    spendCap?: number;
+    cumulativeSpend?: number;
+    taskIds?: string[];
   } | null;
 }
 
@@ -45,6 +50,8 @@ export interface CreateBudgetRulePayload {
   decreasePct?: number;
   checkIntervalDays?: number;
   initialBudget?: number;
+  maxSpendCap?: number | null;
+  autoPauseOnBreach?: boolean;
 }
 
 export interface UpdateBudgetRulePayload {
@@ -56,6 +63,8 @@ export interface UpdateBudgetRulePayload {
   decreasePct?: number;
   checkIntervalDays?: number;
   enabled?: boolean;
+  maxSpendCap?: number | null;
+  autoPauseOnBreach?: boolean;
 }
 
 export type BudgetRuleActionResult<T> =

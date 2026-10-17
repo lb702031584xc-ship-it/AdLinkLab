@@ -35,6 +35,8 @@ export default function BudgetRuleForm({
   const [decreasePct, setDecreasePct] = useState("20");
   const [checkInterval, setCheckInterval] = useState("7");
   const [initialBudget, setInitialBudget] = useState("");
+  const [maxSpendCap, setMaxSpendCap] = useState("");
+  const [autoPauseOnBreach, setAutoPauseOnBreach] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -63,6 +65,8 @@ export default function BudgetRuleForm({
       decreasePct: num(decreasePct),
       checkIntervalDays: num(checkInterval),
       initialBudget: num(initialBudget),
+      maxSpendCap: num(maxSpendCap) ?? null,
+      autoPauseOnBreach,
     };
     setSaving(true);
     try {
@@ -181,6 +185,29 @@ export default function BudgetRuleForm({
             inputMode="numeric"
           />
         </div>
+        <div>
+          <label className={labelClass}>{t.form.maxSpendCap}</label>
+          <input
+            className={inputClass}
+            value={maxSpendCap}
+            onChange={(e) => setMaxSpendCap(e.target.value)}
+            inputMode="decimal"
+            placeholder=""
+          />
+          <p className="mt-1 text-xs text-ink/50">{t.form.maxSpendCapHint}</p>
+        </div>
+        <label className="flex items-center gap-2 text-sm text-ink">
+          <input
+            type="checkbox"
+            checked={autoPauseOnBreach}
+            onChange={(e) => setAutoPauseOnBreach(e.target.checked)}
+            className="h-4 w-4"
+          />
+          {t.form.autoPauseOnBreach}
+        </label>
+        <p className="-mt-2 text-xs text-ink/50">
+          {t.form.autoPauseOnBreachHint}
+        </p>
       </div>
       <div className="mt-5">
         <button

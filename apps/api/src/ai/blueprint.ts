@@ -21,6 +21,7 @@ import type { PrismaClient } from "@adlinklab/database";
 import { AiError, chatJson } from "./llm.js";
 import {
   buildTermsPrompt,
+  PROMPT_VERSION,
   validateTermsShape,
   type AnalysisLanguage,
   type TermsShape,
@@ -464,6 +465,8 @@ export async function generateBlueprint(
   };
 
   // 持久化：复用 ai_analyses 历史（inputKind="blueprint"）
+  // P0-6 — model/promptVersion 已知；tokens/cost 未透传（blueprint 内部
+  // 多次 LLM 调用走本地 shim），保持 null 不编造，见跟进项。
   await deps.prisma.aiAnalysis.create({
     data: {
       id: randomUUID(),
@@ -477,6 +480,9 @@ export async function generateBlueprint(
       payoutCurrency: input.currency,
       estimatedCpc: null,
       result: JSON.parse(JSON.stringify(blueprint)) as never,
+      model: deps.model,
+      promptVersion: PROMPT_VERSION,
+      status: "success",
     },
   });
 

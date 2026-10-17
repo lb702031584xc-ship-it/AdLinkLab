@@ -289,7 +289,7 @@ export async function buildApp(
     },
   });
 
-  await registerObservability(app);
+  await registerObservability(app, { prisma: resolvedServices.prisma });
   app.setErrorHandler(createObservabilityErrorHandler());
 
   app.addHook("onClose", async () => {

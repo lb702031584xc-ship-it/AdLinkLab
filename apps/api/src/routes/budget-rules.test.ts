@@ -189,4 +189,48 @@ describe("budget-rules routes", () => {
     });
     expect(forbidden.statusCode).toBe(400);
   });
+
+  it("P0-9: POST accepts maxSpendCap + autoPauseOnBreach; PATCH clears the cap with null; negative cap rejected", async () => {
+    const ctx: Ctx = {
+      rules: [],
+      accounts: [{ id: ACCOUNT, tenantId: TENANT }],
+    };
+    const app = await buildApp(ctx);
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/budget-rules",
+      headers: headers(),
+      payload: {
+        googleAccountId: ACCOUNT,
+        campaignName: "Cashback US",
+        targetRoas: 3,
+        minDailyBudget: 10,
+        maxDailyBudget: 100,
+        maxSpendCap: 500,
+        autoPauseOnBreach: true,
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json().rule.maxSpendCap).toBe(500);
+    expect(created.json().rule.autoPauseOnBreach).toBe(true);
+    const id = created.json().rule.id;
+
+    const cleared = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/budget-rules/${id}`,
+      headers: headers(),
+      payload: { maxSpendCap: null },
+    });
+    expect(cleared.statusCode).toBe(200);
+    expect(cleared.json().rule.maxSpendCap).toBeNull();
+    expect(cleared.json().rule.autoPauseOnBreach).toBe(true);
+
+    const bad = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/budget-rules/${id}`,
+      headers: headers(),
+      payload: { maxSpendCap: -5 },
+    });
+    expect(bad.statusCode).toBe(400);
+  });
 });

@@ -24,7 +24,9 @@ export function actionBadge(action: string, t: T) {
         ? t.action.down
         : action === "init"
           ? t.action.init
-          : t.action.hold;
+          : action === "paused"
+            ? t.action.paused
+            : t.action.hold;
   const color =
     action === "up"
       ? "bg-green-100 text-green-800"
@@ -32,7 +34,9 @@ export function actionBadge(action: string, t: T) {
         ? "bg-red-100 text-red-800"
         : action === "init"
           ? "bg-blue-100 text-blue-800"
-          : "bg-ink/10 text-ink/70";
+          : action === "paused"
+            ? "bg-red-100 text-red-800"
+            : "bg-ink/10 text-ink/70";
   return (
     <span
       className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-medium ${color}`}
@@ -157,6 +161,14 @@ export default function BudgetRuleRowActions({
               {h.taskId && (
                 <p className="font-mono text-ink/50">task {h.taskId}</p>
               )}
+              {h.action === "paused" &&
+                h.spendCap !== undefined &&
+                h.cumulativeSpend !== undefined && (
+                  <p>
+                    spend cap {h.spendCap} · cumulative spend{" "}
+                    {h.cumulativeSpend}
+                  </p>
+                )}
             </div>
           ))}
         </div>

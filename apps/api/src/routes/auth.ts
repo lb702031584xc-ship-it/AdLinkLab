@@ -12,12 +12,15 @@ import { hashPassword, verifyPassword } from "../auth/password.js";
 import {
   SESSION_COOKIE_MAX_AGE,
   SESSION_COOKIE_NAME,
+  SESSION_TTL_MS,
   authenticateSessionRequest,
   createSession,
   extractSessionToken,
+  hashSessionToken,
   revokeSession,
   type SessionAuthInfo,
 } from "../auth/sessions.js";
+import { revokeToken } from "../auth/token-revocation.js";
 
 /**
  * Phase 10 — user auth (one tenant per user).
@@ -61,7 +64,7 @@ const VALID_ROLES = new Set(["admin", "member", "researcher"]);
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-async function requireSession(
+export async function requireSession(
   deps: AuthRouteDeps,
   request: FastifyRequest
 ): Promise<SessionAuthInfo> {
@@ -74,7 +77,7 @@ async function requireSession(
   return info;
 }
 
-async function requireAdmin(
+export async function requireAdmin(
   deps: AuthRouteDeps,
   request: FastifyRequest
 ): Promise<SessionAuthInfo> {
@@ -195,8 +198,71 @@ export async function registerAuthRoutes(
     const token = extractSessionToken(request);
     if (token) {
       await revokeSession(prisma, token);
+      // P0-5 — blacklist the token hash as well (belt-and-braces: the row
+      // is gone, but a replayed token must stay dead).
+      await revokeToken(prisma, {
+        tokenHash: hashSessionToken(token),
+        type: "session",
+        reason: "logout",
+        expiresAt: new Date(Date.now() + SESSION_TTL_MS),
+      });
     }
     return { ok: true };
+  });
+
+  app.post("/api/v1/auth/change-password", async (request, reply) => {
+    const info = await requireSession(deps, request);
+    const body = (request.body ?? {}) as {
+      currentPassword?: unknown;
+      newPassword?: unknown;
+    };
+    const currentPassword =
+      typeof body.currentPassword === "string" ? body.currentPassword : "";
+    const newPassword =
+      typeof body.newPassword === "string" ? body.newPassword : "";
+    if (!currentPassword || !newPassword) {
+      throw new ValidationError(
+        "Current password and new password are required"
+      );
+    }
+    if (newPassword.length < 8) {
+      throw new ValidationError("Password must be at least 8 characters");
+    }
+    const user = await prisma.user.findUnique({ where: { id: info.id } });
+    if (
+      !user ||
+      user.status !== "ACTIVE" ||
+      !user.passwordHash ||
+      !verifyPassword(currentPassword, user.passwordHash)
+    ) {
+      throw new UnauthorizedError("Current password is incorrect");
+    }
+    await prisma.user.update({
+      where: { id: info.id },
+      data: { passwordHash: hashPassword(newPassword) },
+    });
+    // P0-5 — every other session dies with the old password: blacklist each
+    // session token hash, then delete the rows. A fresh session keeps the
+    // current request signed in.
+    const sessions = await prisma.session.findMany({
+      where: { userId: info.id },
+    });
+    for (const session of sessions) {
+      await revokeToken(prisma, {
+        tokenHash: session.tokenHash,
+        type: "session",
+        reason: "password_change",
+        expiresAt: session.expiresAt,
+      });
+    }
+    await prisma.session.deleteMany({ where: { userId: info.id } });
+    const session = await createSession(prisma, info.id);
+    setSessionCookie(reply, session.token);
+    return {
+      ok: true,
+      token: session.token,
+      expiresAt: session.expiresAt.toISOString(),
+    };
   });
 
   app.get("/api/v1/auth/me", async (request) => {
@@ -315,6 +381,19 @@ export async function registerAuthRoutes(
       where: { id },
       data: { status: "DISABLED", deletedAt: new Date() },
     });
+    // P0-5 — blacklist every session token of the disabled user, then
+    // delete the rows (a stale token must stay dead even if a row lingers).
+    const sessions = await prisma.session
+      .findMany({ where: { userId: id } })
+      .catch(() => []);
+    for (const session of sessions) {
+      await revokeToken(prisma, {
+        tokenHash: session.tokenHash,
+        type: "session",
+        reason: "admin_user_disabled",
+        expiresAt: session.expiresAt ?? new Date(Date.now() + SESSION_TTL_MS),
+      });
+    }
     await prisma.session.deleteMany({ where: { userId: id } });
     return { ok: true };
   });

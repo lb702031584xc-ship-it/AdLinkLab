@@ -3,17 +3,24 @@
  */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { AppError } from "@adlinklab/shared";
+import type { PrismaClient } from "@adlinklab/database";
 import { appLogger } from "./logger.js";
 import { httpMetrics } from "./metrics.js";
 import {
   REQUEST_ID_HEADER,
   resolveRequestId,
 } from "./request-id.js";
+import { recordErrorReport } from "./error-reports.js";
 
 declare module "fastify" {
   interface FastifyRequest {
     requestId: string;
     observabilityStartedAt: number;
+    /**
+     * P0-8 — 错误处理层留下的安全错误文案（AppError.message / 通用 500 文案），
+     * onResponse 用它作为 error_reports.message；未经过错误处理层时为空。
+     */
+    lastErrorMessage?: string;
   }
 }
 
@@ -31,8 +38,17 @@ function logLevelForStatus(statusCode: number): "info" | "warn" | "error" {
   return "info";
 }
 
+export interface ObservabilityOptions {
+  /**
+   * P0-8 — 传入后，5xx 响应在 onResponse 里立即写 error_reports。
+   * 不传则只记日志（内存模式/单测）。
+   */
+  prisma?: PrismaClient;
+}
+
 export async function registerObservability(
-  app: FastifyInstance
+  app: FastifyInstance,
+  opts: ObservabilityOptions = {}
 ): Promise<void> {
   app.addHook("onRequest", async (request, reply) => {
     const requestId = resolveRequestId(request.headers[REQUEST_ID_HEADER]);
@@ -77,6 +93,20 @@ export async function registerObservability(
     } else {
       appLogger.info(fields);
     }
+
+    // P0-8 — 5xx 立即写 error_reports（唯一上报点：错误处理层已发送的
+    // 5xx 也会走到这里，避免重复上报。recordErrorReport 自身 best-effort）。
+    if (opts.prisma && statusCode >= 500) {
+      await recordErrorReport(opts.prisma, {
+        tenantId: request.sessionAuth?.tenantId ?? null,
+        level: "error",
+        message: request.lastErrorMessage ?? `HTTP ${statusCode}`,
+        requestId: request.requestId,
+        path,
+        method: request.method,
+        statusCode,
+      });
+    }
   });
 }
 
@@ -106,7 +136,21 @@ export function createObservabilityErrorHandler() {
           durationMs,
         });
       }
-      return reply.status(error.statusCode).header(REQUEST_ID_HEADER, request.requestId).send({
+      // P0-8 — onResponse 用它作为 error_reports.message（AppError 文案是安全的）。
+      request.lastErrorMessage = error.message;
+      // P0-6 — AI 配额超限带 Retry-After 头。
+      const retryAfter =
+        error.code === "AI_QUOTA_EXCEEDED" &&
+        typeof error.details?.retryAfterSeconds === "number"
+          ? String(error.details.retryAfterSeconds)
+          : undefined;
+      const errorReply = reply
+        .status(error.statusCode)
+        .header(REQUEST_ID_HEADER, request.requestId);
+      if (retryAfter !== undefined) {
+        errorReply.header("Retry-After", retryAfter);
+      }
+      return errorReply.send({
         error: error.code,
         message: error.message,
         details: error.details,
@@ -146,6 +190,8 @@ export function createObservabilityErrorHandler() {
       errorName,
       durationMs,
     });
+    // P0-8 — 未知错误不向客户端泄露细节；error_reports 只记通用文案。
+    request.lastErrorMessage = "Internal server error";
 
     return reply.status(500).header(REQUEST_ID_HEADER, request.requestId).send({
       error: "INTERNAL_ERROR",

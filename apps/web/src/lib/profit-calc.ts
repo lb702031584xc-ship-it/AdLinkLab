@@ -22,6 +22,12 @@ export interface ProfitInputs {
   shaveF?: number;
   /** Target ROI as a fraction (e.g. 1 for 100%). Default 1. */
   targetRoiF?: number;
+  /**
+   * Whether the inputs are estimates (AI guess / defaults) rather than
+   * measured data. Default false. Never silently treat a guess as measured:
+   * callers that cannot prove a measured source must pass true.
+   */
+  inputsEstimated?: boolean;
 }
 
 export interface ProfitResult {
@@ -47,6 +53,8 @@ export interface ProfitResult {
   testBudgetCost: number | null;
   /** Rule-of-thumb budget: 3x payout. */
   ruleBudget: number;
+  /** True when the inputs were estimates, not measured data. */
+  isEstimated: boolean;
 }
 
 function clamp01(n: number): number {
@@ -141,5 +149,6 @@ export function calcProfit(inputs: ProfitInputs): ProfitResult {
     testBudgetCost:
       clicks !== null && Number.isFinite(cpc) && cpc > 0 ? clicks * cpc : null,
     ruleBudget: Number.isFinite(payout) && payout > 0 ? 3 * payout : 0,
+    isEstimated: inputs.inputsEstimated ?? false,
   };
 }

@@ -7,6 +7,7 @@ import {
 import type { PrismaClient } from "@adlinklab/database";
 import {
   authenticateApiKey,
+  authenticateDbApiKey,
   extractApiKeyFromHeaders,
   loadApiKeyRegistry,
   resolveAuthMode,
@@ -30,6 +31,12 @@ export interface SessionAuthPrincipal {
 declare module "fastify" {
   interface FastifyRequest {
     auth?: AuthPrincipal | SessionAuthPrincipal;
+    /** Principal resolved from a DB-backed API key (P0-3). */
+    dbApiKeyAuth?: {
+      tenantId: string;
+      keyId: string;
+      scopes: string[];
+    };
   }
 }
 
@@ -63,6 +70,52 @@ export function registerSessionAuthHook(
 }
 
 /**
+ * P0-3 — resolve DB-backed API keys before route handlers run.
+ * No-op without prisma or when a session / no key was presented.
+ * A known-but-rejected DB key (expired / revoked / IP not allowed) fails
+ * the request with 401 here; an unknown key falls through so the env
+ * registry in requireTenant still gets its chance.
+ * Register AFTER registerSessionAuthHook (sessions take precedence).
+ */
+export function registerDbApiKeyAuthHook(
+  app: FastifyInstance,
+  prisma?: PrismaClient
+): void {
+  app.addHook("onRequest", async (request) => {
+    if (!prisma) return;
+    if (request.sessionAuth) return;
+    const raw = extractApiKeyFromHeaders({
+      authorization: request.headers.authorization,
+      "x-api-key":
+        typeof request.headers["x-api-key"] === "string"
+          ? request.headers["x-api-key"]
+          : undefined,
+    });
+    if (!raw) return;
+    const result = await authenticateDbApiKey(prisma, raw, request.ip);
+    if (result.status === "not_found") return;
+    if (result.status === "rejected") {
+      const messages = {
+        expired: "API key expired",
+        revoked: "API key revoked",
+        ip_not_allowed: "API key not allowed from this IP",
+      } as const;
+      throw new UnauthorizedError(messages[result.reason]);
+    }
+    request.dbApiKeyAuth = {
+      tenantId: result.tenantId,
+      keyId: result.keyId,
+      scopes: result.scopes,
+    };
+    request.auth = {
+      tenantId: result.tenantId,
+      keyId: result.keyId,
+      authMode: "api_key",
+    };
+  });
+}
+
+/**
  * Bind tenant for management APIs.
  * - session: tenant comes from the login session (admin x-view-tenant override
  *   already applied during session resolution); takes precedence when present
@@ -84,6 +137,27 @@ export function requireTenant(
       tenantId: sessionAuth.tenantId,
     };
     return sessionAuth.tenantId;
+  }
+
+  // P0-3 — DB-backed API key resolved by registerDbApiKeyAuthHook.
+  const dbKey = request.dbApiKeyAuth;
+  if (dbKey) {
+    request.auth = {
+      tenantId: dbKey.tenantId,
+      keyId: dbKey.keyId,
+      authMode: "api_key",
+    };
+    const claimed =
+      bodyTenant ??
+      (typeof request.headers["x-tenant-id"] === "string"
+        ? request.headers["x-tenant-id"]
+        : undefined);
+    if (claimed && claimed !== dbKey.tenantId) {
+      throw new ForbiddenError("tenantId does not match API key tenant", {
+        claimedTenantId: claimed,
+      });
+    }
+    return dbKey.tenantId;
   }
 
   if (auth.mode === "api_key") {

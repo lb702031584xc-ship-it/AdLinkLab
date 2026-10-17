@@ -168,6 +168,29 @@ export interface MonitoringAlert {
   createdAt: string;
 }
 
+/** P0-8 — 近 24h 服务端错误（error_reports 去重后列表）。 */
+export interface MonitoringError {
+  id: string;
+  level: string;
+  message: string;
+  requestId: string | null;
+  path: string | null;
+  method: string | null;
+  statusCode: number | null;
+  count: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
+}
+
+export async function listMonitoringErrors(
+  limit = 50
+): Promise<MonitoringError[]> {
+  const data = await p1Fetch<{ errors: MonitoringError[] }>(
+    `/api/v1/monitoring/errors?limit=${limit}`
+  );
+  return data.errors ?? [];
+}
+
 export async function listMonitoringRules(): Promise<MonitoringRule[]> {
   const data = await p1Fetch<{ rules: MonitoringRule[] }>(
     "/api/v1/monitoring/rules"

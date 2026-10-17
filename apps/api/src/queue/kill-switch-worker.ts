@@ -56,6 +56,8 @@ export async function processKillSwitchJob(input: {
           triggers: result.triggers.map((t) => t.type),
           actionTaken: result.actionTaken,
           linksPaused: result.linksPaused,
+          googleAdsPaused: result.googleAdsPaused,
+          googleAdsTaskIds: result.googleAdsTaskIds,
         });
       }
     } catch (error) {

@@ -30,6 +30,8 @@ import {
   type AiScreenResponse,
   type AiSettings,
   type AiTermsResult,
+  getAiUsageSummary,
+  type AiUsageSummary,
   type BrandBiddingResult,
   type ParsedKeywordData,
   type EcommerceData,
@@ -134,6 +136,20 @@ export async function getAiSettingsAction(): Promise<
 > {
   try {
     return { ok: true, data: await getAiSettings() };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof Error ? e.message : "failed",
+    };
+  }
+}
+
+/** P0-6 — 今日/本月 AI 用量汇总（用量卡片用）。 */
+export async function getAiUsageSummaryAction(): Promise<
+  AiActionResult<AiUsageSummary>
+> {
+  try {
+    return { ok: true, data: await getAiUsageSummary() };
   } catch (e) {
     return {
       ok: false,

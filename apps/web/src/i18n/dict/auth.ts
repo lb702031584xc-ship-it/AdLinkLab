@@ -40,6 +40,7 @@ export const zh = {
   },
   nav: {
     users: "用户管理",
+    apiKeys: "API Keys 管理",
   },
   userMenu: {
     admin: "管理员",
@@ -109,6 +110,7 @@ export const en: typeof zh = {
   },
   nav: {
     users: "Users",
+    apiKeys: "API Keys",
   },
   userMenu: {
     admin: "Admin",

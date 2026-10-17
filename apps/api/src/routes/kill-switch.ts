@@ -95,6 +95,8 @@ const DEFAULT_CONFIG = {
   pauseOnMerchantTerminated: true,
   testSpendCap: null,
   testZeroConvSpend: null,
+  // P0-10: also queue a Google Ads campaign-toggle PAUSE on auto-pause.
+  pauseGoogleAdsToo: false,
 };
 
 function serializeConfig(row: {
@@ -108,6 +110,7 @@ function serializeConfig(row: {
   pauseOnMerchantTerminated: boolean;
   testSpendCap: unknown;
   testZeroConvSpend: unknown;
+  pauseGoogleAdsToo: boolean;
   createdAt: unknown;
   updatedAt: unknown;
 }) {
@@ -124,6 +127,7 @@ function serializeConfig(row: {
     testSpendCap: row.testSpendCap === null ? null : Number(row.testSpendCap),
     testZeroConvSpend:
       row.testZeroConvSpend === null ? null : Number(row.testZeroConvSpend),
+    pauseGoogleAdsToo: row.pauseGoogleAdsToo ?? false,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -221,6 +225,11 @@ export async function registerKillSwitchRoutes(
       body.testZeroConvSpend,
       "testZeroConvSpend"
     );
+    // P0-10: default false — the operator opts in deliberately.
+    const pauseGoogleAdsToo = asOptionalBoolean(
+      body.pauseGoogleAdsToo,
+      "pauseGoogleAdsToo"
+    );
 
     if (
       maxSpend !== undefined &&
@@ -262,6 +271,7 @@ export async function registerKillSwitchRoutes(
       data.pauseOnMerchantTerminated = pauseOnMerchantTerminated;
     if (testSpendCap !== undefined) data.testSpendCap = testSpendCap;
     if (testZeroConvSpend !== undefined) data.testZeroConvSpend = testZeroConvSpend;
+    if (pauseGoogleAdsToo !== undefined) data.pauseGoogleAdsToo = pauseGoogleAdsToo;
 
     const before = (await prisma.killSwitchConfig.findUnique({
       where: { offerId: offer.id },
@@ -281,6 +291,7 @@ export async function registerKillSwitchRoutes(
         pauseOnMerchantTerminated: pauseOnMerchantTerminated ?? true,
         testSpendCap: testSpendCap ?? null,
         testZeroConvSpend: testZeroConvSpend ?? null,
+        pauseGoogleAdsToo: pauseGoogleAdsToo ?? false,
       },
       update: data,
     })) as Parameters<typeof serializeConfig>[0];

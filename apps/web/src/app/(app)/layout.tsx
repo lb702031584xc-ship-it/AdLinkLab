@@ -212,6 +212,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
             ...(isAdmin
               ? [
                   { href: "/admin/users", label: t.auth.nav.users },
+                  { href: "/admin/api-keys", label: t.auth.nav.apiKeys },
                 ]
               : []),
           ],

@@ -19,6 +19,11 @@
  * budget up/down pushes as SyncJob task records for the Google Ads Script
  * channel. NEVER calls the Google Ads API directly.
  *
+ * P0-9: evaluateRules() checks the spend-cap breaker FIRST for each rule
+ * (maxSpendCap + autoPauseOnBreach vs cumulative LaunchArchive spend) and
+ * queues a campaign-toggle PAUSE before any ROAS logic. See
+ * getRuleCumulativeSpend() for the spend口径.
+ *
  * Failures never throw out of a single rule (the service records a hold
  * lastAction); a top-level failure here only surfaces as a rejected job so
  * BullMQ retry policy applies.

@@ -48,6 +48,8 @@ interface Ctx {
   events: Row[];
   alerts: Row[];
   auditLogs: Row[];
+  campaigns: Row[];
+  syncJobs: Row[];
 }
 
 function makeFake(ctx: Ctx) {
@@ -113,6 +115,8 @@ function makeFake(ctx: Ctx) {
           .map((r) => ({ trackingLinkId: r.trackingLinkId })),
     },
     trackingLink: {
+      findMany: async (args: any) =>
+        ctx.links.filter((r) => matches(r, args?.where, ctx)),
       updateMany: async (args: any) => {
         let count = 0;
         for (const link of ctx.links) {
@@ -151,6 +155,28 @@ function makeFake(ctx: Ctx) {
         return row;
       },
     },
+    campaign: {
+      findMany: async (args: any) =>
+        ctx.campaigns.filter((r) => matches(r, args?.where, ctx)),
+    },
+    syncJob: {
+      findUnique: async (args: any) =>
+        ctx.syncJobs.find(
+          (j) =>
+            j.tenantId ===
+              args.where.tenantId_idempotencyScope_idempotencyKey.tenantId &&
+            j.idempotencyScope ===
+              args.where.tenantId_idempotencyScope_idempotencyKey
+                .idempotencyScope &&
+            j.idempotencyKey ===
+              args.where.tenantId_idempotencyScope_idempotencyKey.idempotencyKey
+        ) ?? null,
+      create: async (args: any) => {
+        const row = { ...args.data };
+        ctx.syncJobs.push(row);
+        return row;
+      },
+    },
   } as unknown as PrismaClient;
 }
 
@@ -170,6 +196,8 @@ function baseCtx(): Ctx {
     events: [],
     alerts: [],
     auditLogs: [],
+    campaigns: [],
+    syncJobs: [],
   };
 }
 
@@ -514,5 +542,134 @@ describe("executeKillSwitch", () => {
     expect(ctx.events).toHaveLength(0);
     expect(ctx.alerts).toHaveLength(0);
     expect(ctx.auditLogs).toHaveLength(0);
+  });
+
+  // P0-10: kill-switch → Google Ads campaign-toggle PAUSE.
+  it("pauseGoogleAdsToo=true + enabled → queues campaign-toggle PAUSE + event/audit carry googleAdsPaused", async () => {
+    const offerId = seedFiringOffer(true);
+    // seedFiringOffer already created a config; opt this offer into P0-10.
+    ctx.configs.find((c) => c.offerId === offerId).pauseGoogleAdsToo = true;
+    const campaignId = randomUUID();
+    const accountId = randomUUID();
+    ctx.campaigns.push({
+      id: campaignId,
+      tenantId: TENANT,
+      googleCampaignId: "123456789",
+      googleAccountId: accountId,
+      status: "ACTIVE",
+      deletedAt: null,
+    });
+    const linkId = randomUUID();
+    ctx.links.push({
+      id: linkId,
+      tenantId: TENANT,
+      offerId,
+      campaignId,
+      status: "ACTIVE",
+      deletedAt: null,
+    });
+    ctx.linkOffers.push({
+      id: randomUUID(),
+      tenantId: TENANT,
+      trackingLinkId: linkId,
+      offerId,
+    });
+
+    const result = await executeKillSwitch(makeFake(ctx), offerId);
+
+    expect(result.actionTaken).toBe("PAUSED_ALL_LINKS");
+    expect(result.googleAdsPaused).toBe(true);
+    expect(result.googleAdsTaskIds).toHaveLength(1);
+    expect(ctx.syncJobs).toHaveLength(1);
+    expect(ctx.syncJobs[0].type).toBe("campaign-toggle");
+    expect(ctx.syncJobs[0].status).toBe("PENDING");
+    expect(ctx.events[0].googleAdsPaused).toBe(true);
+    expect(ctx.events[0].googleAdsTaskId).toBe(result.googleAdsTaskIds[0]);
+    const killSwitchAudit = ctx.auditLogs.find(
+      (a) => a.action === "KILL_SWITCH_AUTO_PAUSE"
+    );
+    expect(killSwitchAudit.after.googleAdsPaused).toBe(true);
+    expect(killSwitchAudit.after.googleAdsTaskIds).toEqual(
+      result.googleAdsTaskIds
+    );
+  });
+
+  it("pauseGoogleAdsToo=false → no Google Ads task (unchanged behavior)", async () => {
+    const offerId = seedFiringOffer(true);
+    const campaignId = randomUUID();
+    ctx.campaigns.push({
+      id: campaignId,
+      tenantId: TENANT,
+      googleCampaignId: "123456789",
+      googleAccountId: randomUUID(),
+      status: "ACTIVE",
+      deletedAt: null,
+    });
+    ctx.links.push({
+      id: randomUUID(),
+      tenantId: TENANT,
+      offerId,
+      campaignId,
+      status: "ACTIVE",
+      deletedAt: null,
+    });
+    const result = await executeKillSwitch(makeFake(ctx), offerId);
+    expect(result.actionTaken).toBe("PAUSED_ALL_LINKS");
+    expect(result.googleAdsPaused).toBe(false);
+    expect(result.googleAdsTaskIds).toHaveLength(0);
+    expect(ctx.syncJobs).toHaveLength(0);
+    expect(ctx.events[0].googleAdsPaused).toBe(false);
+    expect(ctx.events[0].googleAdsTaskId).toBeNull();
+  });
+
+  it("ALERT_ONLY (enabled=false) + pauseGoogleAdsToo=true → no Google Ads task", async () => {
+    const offerId = seedFiringOffer(false);
+    ctx.configs.find((c) => c.offerId === offerId).pauseGoogleAdsToo = true;
+    const campaignId = randomUUID();
+    ctx.campaigns.push({
+      id: campaignId,
+      tenantId: TENANT,
+      googleCampaignId: "123456789",
+      googleAccountId: randomUUID(),
+      status: "ACTIVE",
+      deletedAt: null,
+    });
+    ctx.links.push({
+      id: randomUUID(),
+      tenantId: TENANT,
+      offerId,
+      campaignId,
+      status: "ACTIVE",
+      deletedAt: null,
+    });
+    const result = await executeKillSwitch(makeFake(ctx), offerId);
+    expect(result.actionTaken).toBe("ALERT_ONLY");
+    expect(result.googleAdsPaused).toBe(false);
+    expect(ctx.syncJobs).toHaveLength(0);
+  });
+
+  it("skips campaigns already PAUSED in Google Ads", async () => {
+    const offerId = seedFiringOffer(true);
+    ctx.configs.find((c) => c.offerId === offerId).pauseGoogleAdsToo = true;
+    const campaignId = randomUUID();
+    ctx.campaigns.push({
+      id: campaignId,
+      tenantId: TENANT,
+      googleCampaignId: "123456789",
+      googleAccountId: randomUUID(),
+      status: "PAUSED",
+      deletedAt: null,
+    });
+    ctx.links.push({
+      id: randomUUID(),
+      tenantId: TENANT,
+      offerId,
+      campaignId,
+      status: "ACTIVE",
+      deletedAt: null,
+    });
+    const result = await executeKillSwitch(makeFake(ctx), offerId);
+    expect(result.googleAdsPaused).toBe(false);
+    expect(ctx.syncJobs).toHaveLength(0);
   });
 });

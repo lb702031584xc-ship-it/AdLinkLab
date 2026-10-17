@@ -9,6 +9,9 @@
  * by each task, via AdsApp.campaigns().withIds([id]) — it never enumerates
  * or touches any other campaign.
  */
+import { randomUUID } from "node:crypto";
+import { AuditActions } from "@adlinklab/domain";
+import type { PrismaClient } from "@adlinklab/database";
 
 /** SyncJob.type value for campaign toggle tasks. */
 export const CAMPAIGN_TOGGLE_TASK_TYPE = "campaign-toggle";
@@ -97,6 +100,89 @@ export function campaignToggleIdempotencyKey(
   action: CampaignToggleAction
 ): string {
   return `toggle:${campaignId}:${action}`;
+}
+
+export interface QueueCampaignToggleTaskInput {
+  tenantId: string;
+  campaignId: string;
+  googleCampaignId: string;
+  googleAccountId: string;
+  action: CampaignToggleAction;
+  requestedBy?: string;
+  reason?: string;
+}
+
+/**
+ * Programmatic campaign-toggle queueing (P0-9 spend-cap breach, P0-10
+ * kill-switch): the same SyncJob + idempotency + audit-snapshot pattern as
+ * POST /api/v1/google-ads/campaigns/:id/toggle in routes/campaign-toggle.ts.
+ * NEVER calls the Google Ads API directly — the user's Script consumes the
+ * task via GET /api/v1/script/campaign-toggle-tasks. Idempotent: a
+ * PENDING/RUNNING task for the same (campaign, action) is returned instead
+ * of duplicated.
+ */
+export async function queueCampaignToggleTask(
+  prisma: PrismaClient,
+  input: QueueCampaignToggleTaskInput
+): Promise<{ taskId: string; deduped: boolean }> {
+  const idempotencyKey = campaignToggleIdempotencyKey(
+    input.campaignId,
+    input.action
+  );
+  const existing = (await prisma.syncJob.findUnique({
+    where: {
+      tenantId_idempotencyScope_idempotencyKey: {
+        tenantId: input.tenantId,
+        idempotencyScope: CAMPAIGN_TOGGLE_IDEMPOTENCY_SCOPE,
+        idempotencyKey,
+      },
+    },
+  })) as { id: string; type: string; status: string } | null;
+  if (
+    existing &&
+    existing.type === CAMPAIGN_TOGGLE_TASK_TYPE &&
+    (existing.status === "PENDING" || existing.status === "RUNNING")
+  ) {
+    return { taskId: existing.id, deduped: true };
+  }
+
+  const taskId = randomUUID();
+  const payload = buildCampaignToggleTaskPayload({
+    taskId,
+    campaignId: input.campaignId,
+    googleCampaignId: input.googleCampaignId,
+    action: input.action,
+    googleAccountId: input.googleAccountId,
+    tenantId: input.tenantId,
+    requestedBy: input.requestedBy,
+  });
+  await prisma.syncJob.create({
+    data: {
+      id: taskId,
+      tenantId: input.tenantId,
+      type: CAMPAIGN_TOGGLE_TASK_TYPE,
+      status: "PENDING",
+      provider: CAMPAIGN_TOGGLE_PROVIDER,
+      externalAccountId: input.googleAccountId,
+      idempotencyScope: CAMPAIGN_TOGGLE_IDEMPOTENCY_SCOPE,
+      idempotencyKey,
+      attempts: 0,
+    },
+  });
+  await prisma.auditLog.create({
+    data: {
+      id: randomUUID(),
+      tenantId: input.tenantId,
+      actorId: input.requestedBy ?? null,
+      action: AuditActions.CAMPAIGN_TOGGLE_QUEUED,
+      entityType: "SyncJob",
+      entityId: taskId,
+      after: JSON.parse(JSON.stringify(payload)) as never,
+      reason:
+        input.reason ?? `campaign ${input.action} requested by automation`,
+    },
+  });
+  return { taskId, deduped: false };
 }
 
 export interface CampaignToggleScriptSourceParams {

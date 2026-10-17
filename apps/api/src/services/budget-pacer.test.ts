@@ -11,10 +11,12 @@ import { describe, expect, it } from "vitest";
 import { ValidationError } from "@adlinklab/shared";
 import type { PrismaClient } from "@adlinklab/database";
 import {
+  BUDGET_PACER_SPEND_CAP_BREACH_ACTION,
   BUDGET_PACER_TASK_TYPE,
   createRule,
   decideBudgetAction,
   evaluateRules,
+  getRuleCumulativeSpend,
   getRuleHistory,
   updateRule,
   validateBudgetRuleInput,
@@ -33,6 +35,8 @@ interface Ctx {
   syncJobs: Row[];
   auditLogs: Row[];
   alerts: Row[];
+  trackingLinks: Row[];
+  launchArchives: Row[];
 }
 
 function baseCtx(): Ctx {
@@ -45,6 +49,8 @@ function baseCtx(): Ctx {
     syncJobs: [],
     auditLogs: [],
     alerts: [],
+    trackingLinks: [],
+    launchArchives: [],
   };
 }
 
@@ -81,8 +87,48 @@ function makeFake(ctx: Ctx) {
         ctx.googleAccounts.find((a) => a.id === args.where.id) ?? null,
     },
     campaign: {
-      findFirst: async () => null,
-      findMany: async () => [],
+      findFirst: async (args: any) =>
+        ctx.campaigns.find(
+          (c) =>
+            (!args.where.id || c.id === args.where.id) &&
+            (!args.where.tenantId || c.tenantId === args.where.tenantId)
+        ) ?? null,
+      findMany: async (args: any) => {
+        const w = args?.where ?? {};
+        return ctx.campaigns.filter(
+          (c) =>
+            (!w.id || c.id === w.id) &&
+            (!w.tenantId || c.tenantId === w.tenantId) &&
+            (!w.googleAccountId || c.googleAccountId === w.googleAccountId) &&
+            (w.deletedAt === undefined || c.deletedAt === w.deletedAt)
+        );
+      },
+    },
+    trackingLink: {
+      findMany: async (args: any) => {
+        const w = args?.where ?? {};
+        return ctx.trackingLinks.filter(
+          (l) =>
+            (!w.tenantId || l.tenantId === w.tenantId) &&
+            (w.campaignId === undefined ||
+              (w.campaignId?.in
+                ? w.campaignId.in.includes(l.campaignId)
+                : l.campaignId === w.campaignId))
+        );
+      },
+    },
+    launchArchive: {
+      findMany: async (args: any) => {
+        const w = args?.where ?? {};
+        return ctx.launchArchives.filter(
+          (a) =>
+            (!w.tenantId || a.tenantId === w.tenantId) &&
+            (w.offerId === undefined ||
+              (w.offerId?.in
+                ? w.offerId.in.includes(a.offerId)
+                : a.offerId === w.offerId))
+        );
+      },
     },
     click: { count: async () => 0 },
     conversion: {
@@ -150,6 +196,8 @@ function ruleRow(over: Partial<BudgetRuleRow> = {}): BudgetRuleRow {
     decreasePct: 20,
     checkIntervalDays: 7,
     enabled: true,
+    maxSpendCap: null,
+    autoPauseOnBreach: false,
     lastEvaluatedAt: null,
     lastAction: null,
     ...over,
@@ -296,6 +344,28 @@ describe("validateBudgetRuleInput", () => {
       validateBudgetRuleInput({ ...validInput(), campaignName: "  " })
     ).toThrow(ValidationError);
   });
+
+  it("P0-9: defaults maxSpendCap=null / autoPauseOnBreach=false", () => {
+    const v = validateBudgetRuleInput(validInput());
+    expect(v.maxSpendCap).toBeNull();
+    expect(v.autoPauseOnBreach).toBe(false);
+  });
+
+  it("P0-9: accepts maxSpendCap >= 0 + autoPauseOnBreach=true", () => {
+    const v = validateBudgetRuleInput({
+      ...validInput(),
+      maxSpendCap: 500,
+      autoPauseOnBreach: true,
+    });
+    expect(v.maxSpendCap).toBe(500);
+    expect(v.autoPauseOnBreach).toBe(true);
+  });
+
+  it("P0-9: rejects negative maxSpendCap", () => {
+    expect(() =>
+      validateBudgetRuleInput({ ...validInput(), maxSpendCap: -1 })
+    ).toThrow(ValidationError);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -359,6 +429,42 @@ describe("createRule / updateRule / getRuleHistory", () => {
     );
     expect(h.history).toHaveLength(1);
     expect(h.history[0].action).toBe("up");
+  });
+
+  it("P0-9: createRule persists maxSpendCap + autoPauseOnBreach", async () => {
+    const ctx = baseCtx();
+    ctx.googleAccounts.push({ id: ACCOUNT, tenantId: TENANT });
+    const fake = makeFake(ctx);
+    const created = await createRule(
+      fake as unknown as PrismaClient,
+      TENANT,
+      { ...validInput(), maxSpendCap: 500, autoPauseOnBreach: true },
+      "test"
+    );
+    expect(created.maxSpendCap).toBe(500);
+    expect(created.autoPauseOnBreach).toBe(true);
+  });
+
+  it("P0-9: updateRule patches maxSpendCap / clears it with null", async () => {
+    const ctx = baseCtx();
+    ctx.budgetRules.push(ruleRow({ enabled: false }) as any);
+    const fake = makeFake(ctx);
+    const updated = await updateRule(
+      fake as unknown as PrismaClient,
+      TENANT,
+      ruleRow().id,
+      { maxSpendCap: 250, autoPauseOnBreach: true }
+    );
+    expect(updated.maxSpendCap).toBe(250);
+    expect(updated.autoPauseOnBreach).toBe(true);
+    const cleared = await updateRule(
+      fake as unknown as PrismaClient,
+      TENANT,
+      ruleRow().id,
+      { maxSpendCap: null }
+    );
+    expect(cleared.maxSpendCap).toBeNull();
+    expect(cleared.autoPauseOnBreach).toBe(true); // untouched key preserved
   });
 });
 
@@ -484,5 +590,208 @@ describe("evaluateRules", () => {
     );
     expect(summary.checked).toBe(1);
     expect(summary.adjusted).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P0-9 spend-cap circuit breaker
+// ---------------------------------------------------------------------------
+
+describe("evaluateRules — spend-cap breaker (P0-9)", () => {
+  const CAMPAIGN = "55555555-5555-4555-8555-555555555555";
+  const OFFER = "66666666-6666-4666-8666-666666666666";
+
+  function seedCampaign(ctx: Ctx, status = "ACTIVE") {
+    ctx.campaigns.push({
+      id: CAMPAIGN,
+      tenantId: TENANT,
+      googleAccountId: ACCOUNT,
+      googleCampaignId: "123456789",
+      name: "Cashback US",
+      status,
+      deletedAt: null,
+    });
+  }
+
+  it("pauses via campaign-toggle when cumulative spend >= cap (before ROAS)", async () => {
+    const ctx = baseCtx();
+    ctx.budgetRules.push(
+      ruleRow({
+        maxSpendCap: 100,
+        autoPauseOnBreach: true,
+        lastAction: { action: "init", reason: "r", at: "t", newBudget: 50 },
+      }) as any
+    );
+    seedCampaign(ctx);
+    const fake = makeFake(ctx);
+    const summary = await evaluateRules(
+      fake as unknown as PrismaClient,
+      TENANT,
+      {
+        // ROAS would say "up" (400/100) — the breaker must win.
+        performanceProvider: async () => perf({ spend: 100, revenue: 400 }),
+        cumulativeSpendProvider: async () => 150,
+      }
+    );
+    expect(summary.checked).toBe(1);
+    expect(summary.paused).toBe(1);
+    expect(summary.adjusted).toBe(0);
+    expect(summary.results[0].action).toBe("paused");
+    expect(ctx.syncJobs).toHaveLength(1);
+    expect(ctx.syncJobs[0].type).toBe("campaign-toggle");
+    expect(ctx.syncJobs[0].status).toBe("PENDING");
+    const breach = ctx.auditLogs.find(
+      (a) => a.action === BUDGET_PACER_SPEND_CAP_BREACH_ACTION
+    );
+    expect(breach).toBeDefined();
+    expect(breach.after.cumulativeSpend).toBe(150);
+    expect(breach.after.maxSpendCap).toBe(100);
+    const rule = ctx.budgetRules[0];
+    expect(rule.lastAction.action).toBe("paused");
+    expect(rule.lastAction.cumulativeSpend).toBe(150);
+    expect(rule.lastAction.spendCap).toBe(100);
+    expect(rule.lastAction.taskId).toBe(ctx.syncJobs[0].id);
+  });
+
+  it("does not fire when autoPauseOnBreach is false — ROAS path unchanged", async () => {
+    const ctx = baseCtx();
+    ctx.budgetRules.push(
+      ruleRow({
+        maxSpendCap: 100,
+        autoPauseOnBreach: false,
+        lastAction: { action: "init", reason: "r", at: "t", newBudget: 50 },
+      }) as any
+    );
+    const fake = makeFake(ctx);
+    const summary = await evaluateRules(
+      fake as unknown as PrismaClient,
+      TENANT,
+      {
+        performanceProvider: async () => perf({ spend: 100, revenue: 400 }),
+        cumulativeSpendProvider: async () => 150,
+      }
+    );
+    expect(summary.paused).toBe(0);
+    expect(summary.adjusted).toBe(1);
+    expect(ctx.syncJobs[0].type).toBe(BUDGET_PACER_TASK_TYPE);
+  });
+
+  it("does not fire when cumulative spend is below the cap", async () => {
+    const ctx = baseCtx();
+    ctx.budgetRules.push(
+      ruleRow({
+        maxSpendCap: 100,
+        autoPauseOnBreach: true,
+        lastAction: { action: "init", reason: "r", at: "t", newBudget: 50 },
+      }) as any
+    );
+    const fake = makeFake(ctx);
+    const summary = await evaluateRules(
+      fake as unknown as PrismaClient,
+      TENANT,
+      {
+        performanceProvider: async () => perf({ spend: 100, revenue: 400 }),
+        cumulativeSpendProvider: async () => 99.99,
+      }
+    );
+    expect(summary.paused).toBe(0);
+    expect(summary.adjusted).toBe(1);
+  });
+
+  it("does not fire when cumulative spend is unknown (null) — never pauses on missing data", async () => {
+    const ctx = baseCtx();
+    ctx.budgetRules.push(
+      ruleRow({
+        maxSpendCap: 100,
+        autoPauseOnBreach: true,
+        lastAction: { action: "init", reason: "r", at: "t", newBudget: 50 },
+      }) as any
+    );
+    const fake = makeFake(ctx);
+    const summary = await evaluateRules(
+      fake as unknown as PrismaClient,
+      TENANT,
+      {
+        performanceProvider: async () => perf({ spend: 100, revenue: 400 }),
+        cumulativeSpendProvider: async () => null,
+      }
+    );
+    expect(summary.paused).toBe(0);
+    expect(summary.adjusted).toBe(1);
+  });
+
+  it("fires at exactly the cap (>=) and skips already-PAUSED campaigns", async () => {
+    const ctx = baseCtx();
+    ctx.budgetRules.push(
+      ruleRow({
+        maxSpendCap: 100,
+        autoPauseOnBreach: true,
+        lastAction: { action: "init", reason: "r", at: "t", newBudget: 50 },
+      }) as any
+    );
+    seedCampaign(ctx, "PAUSED");
+    const fake = makeFake(ctx);
+    const summary = await evaluateRules(
+      fake as unknown as PrismaClient,
+      TENANT,
+      {
+        performanceProvider: async () => perf({ spend: 100, revenue: 400 }),
+        cumulativeSpendProvider: async () => 100,
+      }
+    );
+    expect(summary.paused).toBe(1);
+    expect(ctx.syncJobs).toHaveLength(0); // nothing to pause
+    expect(ctx.budgetRules[0].lastAction.action).toBe("paused");
+  });
+});
+
+describe("getRuleCumulativeSpend (P0-9 spend口径)", () => {
+  const CAMPAIGN = "55555555-5555-4555-8555-555555555555";
+  const OFFER = "66666666-6666-4666-8666-666666666666";
+
+  it("sums LaunchArchive.spend via campaign → tracking link → offer", async () => {
+    const ctx = baseCtx();
+    ctx.campaigns.push({
+      id: CAMPAIGN,
+      tenantId: TENANT,
+      googleAccountId: ACCOUNT,
+      name: "Cashback US",
+      deletedAt: null,
+    });
+    ctx.trackingLinks.push({
+      id: "77777777-7777-4777-8777-777777777777",
+      tenantId: TENANT,
+      campaignId: CAMPAIGN,
+      offerId: OFFER,
+    });
+    ctx.launchArchives.push(
+      { tenantId: TENANT, offerId: OFFER, spend: 60 },
+      { tenantId: TENANT, offerId: OFFER, spend: 40 },
+      { tenantId: TENANT, offerId: OFFER, spend: null } // null ignored
+    );
+    const fake = makeFake(ctx);
+    const spend = await getRuleCumulativeSpend(
+      fake as unknown as PrismaClient,
+      ruleRow({ campaignId: CAMPAIGN })
+    );
+    expect(spend).toBe(100);
+  });
+
+  it("returns null when no archives / no spend data", async () => {
+    const ctx = baseCtx();
+    ctx.campaigns.push({
+      id: CAMPAIGN,
+      tenantId: TENANT,
+      googleAccountId: ACCOUNT,
+      name: "Cashback US",
+      deletedAt: null,
+    });
+    const fake = makeFake(ctx);
+    expect(
+      await getRuleCumulativeSpend(
+        fake as unknown as PrismaClient,
+        ruleRow({ campaignId: CAMPAIGN })
+      )
+    ).toBeNull();
   });
 });

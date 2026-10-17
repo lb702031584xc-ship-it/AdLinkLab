@@ -19,6 +19,7 @@ export function TestStopLossSection({ offerId }: { offerId: string }) {
   const [enabled, setEnabled] = useState(false);
   const [cap, setCap] = useState("");
   const [zeroConv, setZeroConv] = useState("");
+  const [pauseGoogleAdsToo, setPauseGoogleAdsToo] = useState(false);
   const [snap, setSnap] = useState<TestSpendData | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -40,6 +41,7 @@ export function TestStopLossSection({ offerId }: { offerId: string }) {
         setZeroConv(
           cfg.data.testZeroConvSpend != null ? String(cfg.data.testZeroConvSpend) : ""
         );
+        setPauseGoogleAdsToo(cfg.data.pauseGoogleAdsToo ?? false);
       } else {
         setErr(cfg.error);
       }
@@ -52,6 +54,11 @@ export function TestStopLossSection({ offerId }: { offerId: string }) {
   }, [offerId]);
 
   async function onSave() {
+    // P0-10: opting into Google Ads pausing needs a second confirmation —
+    // firing the kill-switch will pause real Google Ads campaigns.
+    if (pauseGoogleAdsToo && !window.confirm(d.pauseGoogleAdsConfirm)) {
+      return;
+    }
     setSaving(true);
     setMsg(null);
     const capNum = cap.trim() === "" ? null : Number(cap);
@@ -68,6 +75,7 @@ export function TestStopLossSection({ offerId }: { offerId: string }) {
       enabled,
       testSpendCap: capNum,
       testZeroConvSpend: zeroNum,
+      pauseGoogleAdsToo,
     });
     setSaving(false);
     if (!res.ok) {
@@ -109,6 +117,21 @@ export function TestStopLossSection({ offerId }: { offerId: string }) {
             className="h-4 w-4"
           />
           {d.enabled}
+        </label>
+
+        <label className="flex items-start gap-2 text-sm text-ink">
+          <input
+            type="checkbox"
+            checked={pauseGoogleAdsToo}
+            onChange={(e) => setPauseGoogleAdsToo(e.target.checked)}
+            className="mt-0.5 h-4 w-4"
+          />
+          <span>
+            {d.pauseGoogleAdsToo}
+            <span className="mt-0.5 block text-xs text-ink/50">
+              {d.pauseGoogleAdsHint}
+            </span>
+          </span>
         </label>
 
         <div>

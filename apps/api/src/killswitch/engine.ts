@@ -21,6 +21,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@adlinklab/database";
+import { queueCampaignToggleTask } from "../services/campaign-toggle-script.js";
 
 export type KillSwitchTriggerType =
   | "SPEND_PROFIT"
@@ -44,6 +45,8 @@ export interface KillSwitchEvaluation {
   config: {
     id: string;
     enabled: boolean;
+    /** P0-10: also queue a Google Ads campaign-toggle PAUSE on auto-pause. */
+    pauseGoogleAdsToo: boolean;
   } | null;
   triggers: KillSwitchTrigger[];
   /** Condition names skipped because required data was missing. */
@@ -56,6 +59,10 @@ export interface KillSwitchExecutionResult extends KillSwitchEvaluation {
   linksPaused: number;
   eventIds: string[];
   alertCreated: boolean;
+  /** P0-10: whether a Google Ads campaign-toggle PAUSE was queued. */
+  googleAdsPaused: boolean;
+  /** P0-10: campaign-toggle task ids queued (empty when none). */
+  googleAdsTaskIds: string[];
 }
 
 const ALERT_DEDUPE_MS = 24 * 3600 * 1000;
@@ -151,6 +158,7 @@ export async function evaluateKillSwitch(
     pauseOnMerchantTerminated: boolean;
     testSpendCap: unknown;
     testZeroConvSpend: unknown;
+    pauseGoogleAdsToo: boolean;
   } | null;
 
   const evaluation: KillSwitchEvaluation = {
@@ -159,7 +167,11 @@ export async function evaluateKillSwitch(
     offerName: offer.name,
     config:
       config && config.tenantId === tenantId
-        ? { id: config.id, enabled: config.enabled }
+        ? {
+            id: config.id,
+            enabled: config.enabled,
+            pauseGoogleAdsToo: config.pauseGoogleAdsToo ?? false,
+          }
         : null,
     triggers: [],
     skipped: [],
@@ -372,6 +384,83 @@ export async function getTestSpendSnapshot(
   };
 }
 
+/**
+ * P0-10: queue a Google Ads campaign-toggle PAUSE for every campaign bound
+ * to this offer (via TrackingLink.campaignId — direct links and
+ * TrackingLinkOffer bindings). Same Script channel + producer pattern as
+ * the manual toggle endpoint: SyncJob task records consumed by the user's
+ * Script, never a direct Google Ads API call. Campaigns already PAUSED
+ * are skipped. Never throws — callers record the error instead so one
+ * failed queue cannot wedge the kill-switch run.
+ */
+async function queueGoogleAdsPauseForOffer(
+  prisma: PrismaClient,
+  tenantId: string,
+  offerId: string,
+  boundLinkIds: string[]
+): Promise<{ taskIds: string[]; error: string | null }> {
+  try {
+    const boundLinks = (
+      boundLinkIds.length > 0
+        ? await prisma.trackingLink.findMany({
+            where: { tenantId, id: { in: boundLinkIds } },
+            select: { campaignId: true },
+          })
+        : []
+    ) as Array<{ campaignId: string | null }>;
+    const directLinks = (await prisma.trackingLink.findMany({
+      where: { tenantId, offerId },
+      select: { campaignId: true },
+    })) as Array<{ campaignId: string | null }>;
+    const campaignIds = [
+      ...new Set(
+        [...boundLinks, ...directLinks]
+          .map((l) => l.campaignId)
+          .filter((id): id is string => typeof id === "string" && id !== "")
+      ),
+    ];
+    if (campaignIds.length === 0) return { taskIds: [], error: null };
+
+    const campaigns = (await prisma.campaign.findMany({
+      where: { tenantId, id: { in: campaignIds }, deletedAt: null },
+      select: {
+        id: true,
+        googleCampaignId: true,
+        googleAccountId: true,
+        status: true,
+      },
+    })) as Array<{
+      id: string;
+      googleCampaignId: string;
+      googleAccountId: string;
+      status: string;
+    }>;
+    const taskIds: string[] = [];
+    for (const campaign of campaigns) {
+      if (campaign.status === "PAUSED") continue;
+      const { taskId } = await queueCampaignToggleTask(prisma, {
+        tenantId,
+        campaignId: campaign.id,
+        googleCampaignId: campaign.googleCampaignId,
+        googleAccountId: campaign.googleAccountId,
+        action: "PAUSE",
+        reason: `kill-switch fired for offer ${offerId} — pausing Google Ads campaign`,
+      });
+      taskIds.push(taskId);
+    }
+    return { taskIds, error: null };
+  } catch (error) {
+    return {
+      taskIds: [],
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * Evaluate and, when conditions fire, record KillSwitchEvents and either
+ * alert (config.enabled=false) or auto-pause all bound tracking links.
+ */
 export interface ExecuteKillSwitchOptions {
   actorId?: string;
   requestId?: string;
@@ -379,10 +468,6 @@ export interface ExecuteKillSwitchOptions {
   triggeredBy?: "schedule" | "manual" | "api";
 }
 
-/**
- * Evaluate and, when conditions fire, record KillSwitchEvents and either
- * alert (config.enabled=false) or auto-pause all bound tracking links.
- */
 export async function executeKillSwitch(
   prisma: PrismaClient,
   offerId: string,
@@ -395,6 +480,8 @@ export async function executeKillSwitch(
     linksPaused: 0,
     eventIds: [],
     alertCreated: false,
+    googleAdsPaused: false,
+    googleAdsTaskIds: [],
   };
   if (evaluation.triggers.length === 0 || !evaluation.config) return base;
 
@@ -427,6 +514,22 @@ export async function executeKillSwitch(
   base.linksPaused = linksPaused;
   base.actionTaken = actionTaken;
 
+  // P0-10: only on the PAUSED_ALL_LINKS path (config.enabled) AND when the
+  // offer opted in via pauseGoogleAdsToo — ALERT_ONLY never touches Google
+  // Ads, and opt-out behaves exactly as before.
+  let googleAdsError: string | null = null;
+  if (autoExecute && evaluation.config.pauseGoogleAdsToo) {
+    const queued = await queueGoogleAdsPauseForOffer(
+      prisma,
+      evaluation.tenantId,
+      offerId,
+      pausedLinkIds
+    );
+    base.googleAdsTaskIds = queued.taskIds;
+    base.googleAdsPaused = queued.taskIds.length > 0;
+    googleAdsError = queued.error;
+  }
+
   for (const trigger of evaluation.triggers) {
     const event = (await prisma.killSwitchEvent.create({
       data: {
@@ -442,10 +545,15 @@ export async function executeKillSwitch(
             actionTaken,
             offerName: evaluation.offerName,
             triggeredBySource: opts.triggeredBy ?? "schedule",
+            googleAdsPaused: base.googleAdsPaused,
+            googleAdsTaskIds: base.googleAdsTaskIds,
+            googleAdsError,
           })
         ),
         actionTaken,
         linksPaused,
+        googleAdsPaused: base.googleAdsPaused,
+        googleAdsTaskId: base.googleAdsTaskIds[0] ?? null,
         autoExecute,
       },
       select: { id: true },
@@ -516,6 +624,9 @@ export async function executeKillSwitch(
           actionTaken,
           linksPaused,
           pausedLinkIds,
+          googleAdsPaused: base.googleAdsPaused,
+          googleAdsTaskIds: base.googleAdsTaskIds,
+          googleAdsError,
         })
       ) as never,
       reason: `kill-switch fired (${evaluation.triggers.map((t) => t.type).join(", ")}); ${actionTaken}`,

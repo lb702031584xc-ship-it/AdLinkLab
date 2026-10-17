@@ -305,6 +305,54 @@ export async function registerMonitoringRoutes(
     return { ok: true };
   });
 
+  /**
+   * P0-8 — 近 24h 服务端错误（error_reports，租户隔离，按 lastSeenAt 倒序）。
+   * limit 默认 50，上限 200。
+   */
+  app.get("/api/v1/monitoring/errors", async (request) => {
+    const info = await requireSession(deps, request);
+    const query = (request.query ?? {}) as { limit?: unknown };
+    let limit = 50;
+    if (query.limit !== undefined) {
+      const n = Number(query.limit);
+      if (!Number.isInteger(n) || n < 1 || n > 200) {
+        throw new ValidationError("limit must be an integer between 1 and 200");
+      }
+      limit = n;
+    }
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const rows = (await prisma.errorReport.findMany({
+      where: { tenantId: info.tenantId, lastSeenAt: { gte: since } },
+      orderBy: { lastSeenAt: "desc" },
+      take: limit,
+    })) as Array<{
+      id: string;
+      level: string;
+      message: string;
+      requestId: string | null;
+      path: string | null;
+      method: string | null;
+      statusCode: number | null;
+      count: number;
+      firstSeenAt: Date;
+      lastSeenAt: Date;
+    }>;
+    return {
+      errors: rows.map((r) => ({
+        id: r.id,
+        level: r.level,
+        message: r.message,
+        requestId: r.requestId,
+        path: r.path,
+        method: r.method,
+        statusCode: r.statusCode,
+        count: r.count,
+        firstSeenAt: r.firstSeenAt.toISOString(),
+        lastSeenAt: r.lastSeenAt.toISOString(),
+      })),
+    };
+  });
+
   /** Synchronously run the enabled rules for this tenant now (cap 50 links). */
   app.post("/api/v1/monitoring/run", async (request) => {
     const info = await requireSession(deps, request);

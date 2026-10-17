@@ -55,6 +55,8 @@ export type ProfitMode = "ecommerce" | "other";
 export interface ProfitStepState {
   status: StepStatus;
   summary: string;
+  /** P0-2：本次测算是否基于估算输入（true = 估算值，未实测）。来源不明时默认 true。 */
+  isEstimated?: boolean;
   /** ③ 的输入（用于快照恢复 + 往 ④ 投流模块同步 payout/CVR/退款率）。 */
   inputs?: {
     /** 电商：payout = 均价 × 佣金率（算出后存这里，供 ④ 同步）；其他：手填固定 payout。 */
@@ -108,6 +110,22 @@ function ProfitStep({
   const [refundPct, setRefundPct] = useState(initialValues?.refundPct ?? "");
   const [shavePct, setShavePct] = useState(initialValues?.shavePct ?? "");
   const [cpcFromKeywords, setCpcFromKeywords] = useState(false);
+  /** P0-2 输入来源：均价 / 佣金率 / payout / CPC / CVR 各自从哪来。
+      来源不明时默认估算（宁可标估算，不把猜测当实测）。
+      offer = 库里 Offer 带入；manual = 用户手填；keywords = 投放选词快照；
+      planner = 投流决策（④）快照；snapshot = 上次保存的工作表快照；
+      derived = 切到“其他”时由均价×佣金率带过去的 payout。 */
+  type ProvSource = "offer" | "manual" | "keywords" | "planner" | "snapshot" | "derived" | null;
+  type ProvField = "avgPrice" | "commissionRate" | "payout" | "cpc" | "cvrPct";
+  const [prov, setProv] = useState<Record<ProvField, ProvSource>>({
+    avgPrice: initialValues?.avgPrice ? "snapshot" : initialAvgPrice ? "offer" : null,
+    commissionRate: initialValues?.commissionRate ? "snapshot" : initialCommissionRate ? "offer" : null,
+    payout: initialValues?.payout ? "snapshot" : initialPayout ? "offer" : null,
+    cpc: initialValues?.cpc ? "snapshot" : null,
+    cvrPct: initialValues?.cvrPct ? "snapshot" : null,
+  });
+  const setFieldProv = (field: ProvField, src: Exclude<ProvSource, null>) =>
+    setProv((p) => (p[field] === src ? p : { ...p, [field]: src }));
   /** 模式/期望 ROI 是否已由快照恢复过（晚到快照只应用一次，不覆盖手改）。 */
   const snapshotAppliedRef = useRef(false);
 
@@ -119,14 +137,16 @@ function ProfitStep({
       if (initialValues.mode) setMode(initialValues.mode);
       if (initialValues.targetRoiPct) setTargetRoiPct(initialValues.targetRoiPct);
     }
-    if (!payout && initialValues.payout) setPayout(initialValues.payout);
-    if (!cpc && initialValues.cpc) setCpc(initialValues.cpc);
-    if (!cvrPct && initialValues.cvrPct) setCvrPct(initialValues.cvrPct);
+    if (!payout && initialValues.payout) { setPayout(initialValues.payout); setFieldProv("payout", "snapshot"); }
+    if (!cpc && initialValues.cpc) { setCpc(initialValues.cpc); setFieldProv("cpc", "snapshot"); }
+    if (!cvrPct && initialValues.cvrPct) { setCvrPct(initialValues.cvrPct); setFieldProv("cvrPct", "snapshot"); }
     if (!refundPct && initialValues.refundPct) setRefundPct(initialValues.refundPct);
     if (!shavePct && initialValues.shavePct) setShavePct(initialValues.shavePct);
-    if (!avgPrice && initialValues.avgPrice) setAvgPrice(initialValues.avgPrice);
-    if (!commissionRate && initialValues.commissionRate)
+    if (!avgPrice && initialValues.avgPrice) { setAvgPrice(initialValues.avgPrice); setFieldProv("avgPrice", "snapshot"); }
+    if (!commissionRate && initialValues.commissionRate) {
       setCommissionRate(initialValues.commissionRate);
+      setFieldProv("commissionRate", "snapshot");
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialValues]);
 
@@ -146,6 +166,7 @@ function ProfitStep({
         const avg = nums.reduce((a, b) => a + b, 0) / nums.length;
         setCpc(String(Math.round(avg * 100) / 100));
         setCpcFromKeywords(true);
+        setFieldProv("cpc", "keywords");
       } catch {
         /* 取不到就不填 */
       }
@@ -168,13 +189,13 @@ function ProfitStep({
         const s = res.data.state as Record<string, unknown>;
         const str = (v: unknown) => (v == null ? "" : String(v).trim());
         const cvr = str(s.networkCvr);
-        if (cvr) setCvrPct((prev) => (prev.trim() ? prev : cvr));
+        if (cvr) { setCvrPct((prev) => (prev.trim() ? prev : cvr)); setFieldProv("cvrPct", "planner"); }
         const refund = str(s.refundRate);
         if (refund) setRefundPct((prev) => (prev.trim() ? prev : refund));
         // offer 佣金算不出 payout 时（按比例缺均价等），取 ④ 里手填过的 payout
         if (!initialPayout) {
           const p = str(s.payout);
-          if (p) setPayout((prev) => (prev.trim() ? prev : p));
+          if (p) { setPayout((prev) => (prev.trim() ? prev : p)); setFieldProv("payout", "planner"); }
         }
       } catch {
         /* 取不到就不填 */
@@ -201,6 +222,22 @@ function ProfitStep({
     return payout;
   }, [mode, avgPrice, commissionRate, payout]);
 
+  /* P0-2：均价/CPC/CVR 任一来源不明 → 本次测算为估算。电商 payout 由均价×佣金率
+     推导时看两者来源；否则看 payout 字段本身。退款/扣量不参与估算判定。 */
+  const isEstimated = useMemo(() => {
+    const measured = (s: ProvSource) => s !== null;
+    const derivedFromPrice = parseFloat(avgPrice) > 0 && parseFloat(commissionRate) > 0;
+    const payoutMeasured =
+      mode === "ecommerce"
+        ? derivedFromPrice
+          ? measured(prov.avgPrice) && measured(prov.commissionRate)
+          : measured(prov.payout)
+        : prov.payout === "derived"
+          ? measured(prov.avgPrice) && measured(prov.commissionRate)
+          : measured(prov.payout);
+    return !(payoutMeasured && measured(prov.cpc) && measured(prov.cvrPct));
+  }, [mode, avgPrice, commissionRate, prov]);
+
   const result = useMemo(() => {
     const p = parseFloat(derivedPayout);
     const c = parseFloat(cpc);
@@ -219,8 +256,9 @@ function ProfitStep({
       refundF: mode === "ecommerce" ? pct(refundPct) : 0,
       shaveF: mode === "other" ? pct(shavePct) : 0,
       targetRoiF: Number.isFinite(roi) && roi >= 0 ? roi / 100 : 1,
+      inputsEstimated: isEstimated,
     });
-  }, [derivedPayout, cpc, cvrPct, refundPct, shavePct, mode, targetRoiPct]);
+  }, [derivedPayout, cpc, cvrPct, refundPct, shavePct, mode, targetRoiPct, isEstimated]);
 
   /* 按期望 ROI 反推 CPC：不依赖已填 CPC，只用 payout/CVR/退货/扣量/目标 ROI。 */
   const reverseCpc = useMemo(() => {
@@ -239,9 +277,10 @@ function ProfitStep({
       refundF: mode === "ecommerce" ? pct(refundPct) : 0,
       shaveF: mode === "other" ? pct(shavePct) : 0,
       targetRoiF: Number.isFinite(roi) && roi >= 0 ? roi / 100 : 1,
+      inputsEstimated: isEstimated,
     });
     return r.maxCpcAtTargetRoi;
-  }, [derivedPayout, cvrPct, refundPct, shavePct, mode, targetRoiPct]);
+  }, [derivedPayout, cvrPct, refundPct, shavePct, mode, targetRoiPct, isEstimated]);
 
   useEffect(() => {
     if (!result) {
@@ -254,6 +293,7 @@ function ProfitStep({
     onChange({
       status,
       summary: `EPC ${fmt(result.epc)} · ${d.results.breakEvenCvr} ${result.breakEvenCvrPct !== null ? `${fmt(result.breakEvenCvrPct)}%` : "—"} · ${w.perClickProfit} ${p > 0 ? "+" : ""}${fmt(p)}`,
+      isEstimated: result.isEstimated,
       inputs: {
         payout: derivedPayout,
         cpc,
@@ -291,6 +331,7 @@ function ProfitStep({
                 // 切到其他时把电商算出的 payout 带过去，别让框变空
                 if (m === "other" && mode === "ecommerce" && derivedPayout) {
                   setPayout(derivedPayout);
+                  setFieldProv("payout", "derived");
                 }
                 setMode(m);
               }}
@@ -311,7 +352,7 @@ function ProfitStep({
             <div>
               <label className={labelClass} htmlFor="ws-avg-price">{w.avgPriceLabel}</label>
               <input id="ws-avg-price" inputMode="decimal" value={avgPrice}
-                onChange={(e) => setAvgPrice(e.target.value)} placeholder="49.99" className={inputClass} />
+                onChange={(e) => { setAvgPrice(e.target.value); setFieldProv("avgPrice", "manual"); }} placeholder="49.99" className={inputClass} />
               {initialAvgPrice && avgPrice === initialAvgPrice && (
                 <p className="mt-1 text-xs text-ink/45">✨ {w.avgPriceFromOffer}</p>
               )}
@@ -319,7 +360,7 @@ function ProfitStep({
             <div>
               <label className={labelClass} htmlFor="ws-commission-rate">{w.commissionRateLabel}</label>
               <input id="ws-commission-rate" inputMode="decimal" value={commissionRate}
-                onChange={(e) => setCommissionRate(e.target.value)} placeholder="10" className={inputClass} />
+                onChange={(e) => { setCommissionRate(e.target.value); setFieldProv("commissionRate", "manual"); }} placeholder="10" className={inputClass} />
               {initialCommissionRate && commissionRate === initialCommissionRate && (
                 <p className="mt-1 text-xs text-ink/45">✨ {w.commissionRateFromOffer}</p>
               )}
@@ -339,7 +380,7 @@ function ProfitStep({
           <div>
             <label className={labelClass} htmlFor="ws-payout">{d.payoutLabel}</label>
             <input id="ws-payout" inputMode="decimal" value={payout}
-              onChange={(e) => setPayout(e.target.value)} placeholder="12.50" className={inputClass} />
+              onChange={(e) => { setPayout(e.target.value); setFieldProv("payout", "manual"); }} placeholder="12.50" className={inputClass} />
             {initialPayout && payout === initialPayout && (
               <p className="mt-1 text-xs text-ink/45">✨ {w.payoutFromOffer}</p>
             )}
@@ -348,7 +389,7 @@ function ProfitStep({
         <div>
           <label className={labelClass} htmlFor="ws-cpc">{d.cpcLabel}</label>
           <input id="ws-cpc" inputMode="decimal" value={cpc}
-            onChange={(e) => { setCpc(e.target.value); setCpcFromKeywords(false); }} placeholder="0.80" className={inputClass} />
+            onChange={(e) => { setCpc(e.target.value); setCpcFromKeywords(false); setFieldProv("cpc", "manual"); }} placeholder="0.80" className={inputClass} />
           {cpcFromKeywords && (
             <p className="mt-1 text-xs text-ink/45">✨ {w.cpcFromKeywords}</p>
           )}
@@ -362,7 +403,7 @@ function ProfitStep({
         <div>
           <label className={labelClass} htmlFor="ws-cvr">{w.cvrLabel}</label>
           <input id="ws-cvr" inputMode="decimal" value={cvrPct}
-            onChange={(e) => setCvrPct(e.target.value)} placeholder="2" className={inputClass} />
+            onChange={(e) => { setCvrPct(e.target.value); setFieldProv("cvrPct", "manual"); }} placeholder="2" className={inputClass} />
         </div>
         {mode === "ecommerce" ? (
           <div>
@@ -809,6 +850,45 @@ export function WorksheetClient({
           ? w.verdict.noGo
           : w.verdict.incomplete;
 
+  /* P0-1 一票否决汇总条（只展示已有分析结果的合成，不改任何判定逻辑）：
+     条款 stop（= DO_NOT_RUN）/ 盈利 EPC ≤ CPC 任一命中 → 红条；
+     仅 unknown（条款/盈利尚未分析）且无红条 → 黄条；两者都没有 → 不显示。
+     注意：工作表 ④ 是投流决策（TrafficPlanner），不含流量门（TrafficGate）结果，
+     因此流量门不参与本横幅——如需接入，需另行把流量门检测接进工作表。 */
+  const profitVeto = useMemo(() => {
+    const inp = profitState?.inputs;
+    if (!inp) return null;
+    const p = parseFloat(inp.payout);
+    const c = parseFloat(inp.cpc);
+    const cvr = parseFloat(inp.cvrPct);
+    if (!(p > 0) || !(c > 0) || !(cvr > 0) || cvr >= 100) return null;
+    const pct = (s: string) => {
+      const n = parseFloat(s);
+      return Number.isFinite(n) ? Math.min(Math.max(n, 0), 100) / 100 : 0;
+    };
+    const r = calcProfit({
+      payout: p,
+      cpc: c,
+      cvrF: cvr / 100,
+      refundF: inp.mode === "ecommerce" ? pct(inp.refundPct) : 0,
+      shaveF: inp.mode === "other" ? pct(inp.shavePct) : 0,
+    });
+    return Number.isFinite(r.epc) && r.epc <= c ? { epc: r.epc, cpc: c } : null;
+  }, [profitState]);
+
+  const vetoReasons: string[] = [];
+  if (termsVerdict === "stop") vetoReasons.push(w.vetoBanner.termsStop);
+  if (profitVeto) {
+    vetoReasons.push(
+      w.vetoBanner.profitEpc
+        .replace("{epc}", fmt(profitVeto.epc))
+        .replace("{cpc}", fmt(profitVeto.cpc)),
+    );
+  }
+  const vetoUnknowns: string[] = [];
+  if (termsVerdict === null) vetoUnknowns.push(w.vetoBanner.termsUnknown);
+  if (profitState === null) vetoUnknowns.push(w.vetoBanner.profitUnknown);
+
   const toggleStep = (n: number) => setOpenStep((o) => (o === n ? 0 : n));
 
   return (
@@ -824,6 +904,27 @@ export function WorksheetClient({
           <span className="text-xs text-ink/50">（上方已选）</span>
         }
       />
+
+      {/* P0-1 一票否决汇总条 */}
+      {vetoReasons.length > 0 ? (
+        <div className="rounded-xl border border-red-300 bg-red-50 p-5" role="alert">
+          <p className="text-base font-bold text-red-800">{w.vetoBanner.titleRed}</p>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-red-800">
+            {vetoReasons.map((r, i) => (
+              <li key={i}>{r}</li>
+            ))}
+          </ul>
+        </div>
+      ) : vetoUnknowns.length > 0 ? (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 p-5">
+          <p className="text-base font-bold text-amber-800">{w.vetoBanner.titleYellow}</p>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-amber-800">
+            {vetoUnknowns.map((r, i) => (
+              <li key={i}>{r}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {/* 自动保存状态 + 历史记录入口 */}
       <div className="flex flex-wrap items-center gap-2">
@@ -1145,6 +1246,11 @@ export function WorksheetClient({
         statusLabel={statusText(profitStatus)}
         open={openStep === 3}
         onToggle={() => toggleStep(3)}
+        extraBadge={
+          profitState && profitState.isEstimated !== false
+            ? t.ai.profit.estimatedBadge
+            : null
+        }
       >
         <ProfitStep
           onChange={setProfitState}

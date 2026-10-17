@@ -1,5 +1,6 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { UnauthorizedError } from "@adlinklab/shared";
+import type { PrismaClient } from "@adlinklab/database";
 
 /** Fixture Tenant A / B — deterministic research keys (never for real production). */
 export const FIXTURE_API_KEYS = {
@@ -156,4 +157,127 @@ export function extractApiKeyFromHeaders(headers: {
   if (!auth) return undefined;
   const bearer = /^Bearer\s+(.+)$/i.exec(auth);
   return bearer?.[1]?.trim();
+}
+
+// ---------------------------------------------------------------------------
+// P0-3 — DB-backed API keys (ApiKey table). Env keys keep working as before;
+// DB keys are checked after the env registry misses (see tenant.ts hook).
+// Only the SHA-256 hash + 8-char prefix are stored; the plaintext key is
+// returned exactly once at create/rotate time.
+// ---------------------------------------------------------------------------
+
+/** Rotation grace window: a revoked key still authenticates for 24h. */
+export const DB_API_KEY_GRACE_MS = 24 * 60 * 60 * 1000;
+
+/** Prefix length stored alongside the hash (first 8 chars of the raw key). */
+export const DB_API_KEY_PREFIX_LEN = 8;
+
+export function generateDbApiKey(): {
+  key: string;
+  keyHash: string;
+  keyPrefix: string;
+} {
+  const key = `alk_${randomBytes(32).toString("hex")}`;
+  return {
+    key,
+    keyHash: hashApiKey(key),
+    keyPrefix: key.slice(0, DB_API_KEY_PREFIX_LEN),
+  };
+}
+
+export type DbApiKeyStatus = "active" | "grace" | "revoked" | "expired";
+
+/** Pure status resolution (used by routes + tests). */
+export function resolveDbApiKeyStatus(
+  row: {
+    expiresAt?: Date | null;
+    revokedAt?: Date | null;
+    graceExpiresAt?: Date | null;
+  },
+  now: Date = new Date()
+): DbApiKeyStatus {
+  if (row.expiresAt && row.expiresAt.getTime() <= now.getTime()) {
+    return "expired";
+  }
+  if (row.revokedAt) {
+    if (
+      row.graceExpiresAt &&
+      row.graceExpiresAt.getTime() > now.getTime()
+    ) {
+      return "grace";
+    }
+    return "revoked";
+  }
+  return "active";
+}
+
+export type DbApiKeyCheck =
+  | {
+      status: "ok";
+      tenantId: string;
+      keyId: string;
+      scopes: string[];
+      inGrace: boolean;
+    }
+  | { status: "not_found" }
+  | {
+      status: "rejected";
+      reason: "expired" | "revoked" | "ip_not_allowed";
+    };
+
+/**
+ * Validate a raw key against the DB ApiKey table.
+ * - `not_found` → caller falls through to the env registry / 401.
+ * - `rejected` → the key is known but must not authenticate (expired,
+ *   revoked past grace, or caller IP outside ipWhitelist).
+ * - `ok` → best-effort lastUsedAt update; a failed update never blocks.
+ * Never throws: DB failures resolve to `not_found` (fail-open to the env
+ * registry path, which still enforces its own checks).
+ */
+export async function authenticateDbApiKey(
+  prisma: PrismaClient,
+  rawKey: string | undefined,
+  requestIp: string | undefined,
+  now: Date = new Date()
+): Promise<DbApiKeyCheck> {
+  const trimmed = rawKey?.trim();
+  if (!trimmed) return { status: "not_found" };
+  try {
+    const row = await prisma.apiKey.findUnique({
+      where: { keyHash: hashApiKey(trimmed) },
+    });
+    if (!row) return { status: "not_found" };
+
+    const status = resolveDbApiKeyStatus(row, now);
+    if (status === "expired") return { status: "rejected", reason: "expired" };
+    if (status === "revoked") return { status: "rejected", reason: "revoked" };
+
+    const whitelist = (row.ipWhitelist ?? []).map((ip) => ip.trim());
+    if (whitelist.length > 0) {
+      const ip = (requestIp ?? "").trim();
+      if (!ip || !whitelist.includes(ip)) {
+        return { status: "rejected", reason: "ip_not_allowed" };
+      }
+    }
+
+    // Best-effort: a failed lastUsedAt write must never block the request.
+    try {
+      await prisma.apiKey.update({
+        where: { id: row.id },
+        data: { lastUsedAt: now },
+      });
+    } catch {
+      // ignore — usage bookkeeping only
+    }
+
+    return {
+      status: "ok",
+      tenantId: row.tenantId,
+      keyId: `db:${row.id}`,
+      scopes: [...(row.scopes ?? [])],
+      inGrace: status === "grace",
+    };
+  } catch {
+    return { status: "not_found" };
+  }
 }

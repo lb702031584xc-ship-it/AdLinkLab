@@ -28,10 +28,18 @@
  *
  * History: the rule only persists lastAction (no history table by design);
  * getRuleHistory() returns that single entry.
+ *
+ * P0-9 spend-cap circuit breaker: before any ROAS logic, evaluateRule()
+ * checks maxSpendCap + autoPauseOnBreach against the rule's cumulative
+ * spend (see getRuleCumulativeSpend() for the spend口径). On breach it
+ * queues campaign-toggle PAUSE task(s) via the Script channel, writes the
+ * trigger into lastAction + an AuditLog entry, and returns action "paused".
+ * The ROAS path is untouched when the breaker does not fire.
  */
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@adlinklab/database";
 import { ValidationError } from "@adlinklab/shared";
+import { queueCampaignToggleTask } from "./campaign-toggle-script.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -50,6 +58,9 @@ export const BUDGET_PACER_QUEUED_ACTION = "BUDGET_PACER_QUEUED";
 export const BUDGET_PACER_RESULT_ACTION = "BUDGET_PACER_RESULT";
 /** Payload version so the script can evolve independently. */
 export const BUDGET_PACER_PAYLOAD_VERSION = 1;
+/** Audit action written when the P0-9 spend-cap breaker fires. */
+export const BUDGET_PACER_SPEND_CAP_BREACH_ACTION =
+  "BUDGET_PACER_SPEND_CAP_BREACH";
 
 /** Alert dedupe window: one open alert per rule per 24h. */
 const ALERT_DEDUPE_WINDOW_MS = 24 * 3600 * 1000;
@@ -63,7 +74,7 @@ const UUID_RE =
 // Types
 // ---------------------------------------------------------------------------
 
-export type BudgetPacerAction = "up" | "down" | "hold" | "init";
+export type BudgetPacerAction = "up" | "down" | "hold" | "init" | "paused";
 
 export interface BudgetRuleRow {
   id: string;
@@ -78,6 +89,10 @@ export interface BudgetRuleRow {
   decreasePct: number;
   checkIntervalDays: number;
   enabled: boolean;
+  /** P0-9: cumulative-spend circuit-breaker cap (null = disabled). */
+  maxSpendCap: number | null;
+  /** P0-9: when true, breaching maxSpendCap auto-pauses the campaign. */
+  autoPauseOnBreach: boolean;
   lastEvaluatedAt: Date | null;
   lastAction: unknown;
 }
@@ -101,6 +116,13 @@ export interface CreateBudgetRuleInput {
    */
   initialBudget?: number;
   reason?: string;
+  /**
+   * P0-9: cumulative spend cap (same currency as the Google Ads account).
+   * null/undefined = breaker disabled. Requires autoPauseOnBreach to act.
+   */
+  maxSpendCap?: number | null;
+  /** P0-9: pause the campaign via campaign-toggle when maxSpendCap is hit. */
+  autoPauseOnBreach?: boolean;
 }
 
 export type UpdateBudgetRulePatch = Partial<
@@ -115,6 +137,8 @@ export type UpdateBudgetRulePatch = Partial<
     | "decreasePct"
     | "checkIntervalDays"
     | "enabled"
+    | "maxSpendCap"
+    | "autoPauseOnBreach"
   >
 >;
 
@@ -128,6 +152,10 @@ export interface LastActionJson {
   spend?: number;
   revenue?: number;
   taskId?: string;
+  /** P0-9: spend-cap breach details (only on action "paused"). */
+  spendCap?: number;
+  cumulativeSpend?: number;
+  taskIds?: string[];
 }
 
 /** Performance window for one rule. spend is 0 until a spend source exists. */
@@ -177,10 +205,11 @@ export interface BudgetPacerTaskPayload {
 export interface EvaluateRuleResult {
   ruleId: string;
   tenantId: string;
-  action: BudgetDecision["action"];
+  action: BudgetDecision["action"] | "paused";
   reason: string;
   newBudget?: number;
   taskId?: string;
+  taskIds?: string[];
   alertCreated?: boolean;
   evaluated: boolean;
 }
@@ -189,6 +218,8 @@ export interface EvaluateRulesSummary {
   checked: number;
   adjusted: number;
   held: number;
+  /** P0-9: rules paused by the spend-cap breaker. */
+  paused: number;
   alertsCreated: number;
   errors: number;
   results: EvaluateRuleResult[];
@@ -244,6 +275,8 @@ export function validateBudgetRuleInput(input: CreateBudgetRuleInput): {
   checkIntervalDays: number;
   enabled: boolean;
   initialBudget?: number;
+  maxSpendCap: number | null;
+  autoPauseOnBreach: boolean;
 } {
   const googleAccountId = asTrimmedString(input.googleAccountId);
   if (!googleAccountId || !UUID_RE.test(googleAccountId)) {
@@ -304,6 +337,23 @@ export function validateBudgetRuleInput(input: CreateBudgetRuleInput): {
     }
     initialBudget = Math.round(initialBudgetRaw * 100) / 100;
   }
+  // P0-9: maxSpendCap null/undefined = breaker disabled; otherwise >= 0.
+  let maxSpendCap: number | null = null;
+  if (input.maxSpendCap !== undefined && input.maxSpendCap !== null) {
+    const cap = asNumber(input.maxSpendCap);
+    if (cap === undefined || cap < 0) {
+      throw new ValidationError("maxSpendCap must be >= 0 or null", {
+        maxSpendCap: input.maxSpendCap,
+      });
+    }
+    maxSpendCap = cap;
+  }
+  const autoPauseOnBreach = input.autoPauseOnBreach ?? false;
+  if (typeof autoPauseOnBreach !== "boolean") {
+    throw new ValidationError("autoPauseOnBreach must be a boolean", {
+      autoPauseOnBreach: input.autoPauseOnBreach,
+    });
+  }
   return {
     googleAccountId,
     campaignName,
@@ -316,6 +366,8 @@ export function validateBudgetRuleInput(input: CreateBudgetRuleInput): {
     checkIntervalDays,
     enabled: input.enabled ?? false,
     initialBudget,
+    maxSpendCap,
+    autoPauseOnBreach,
   };
 }
 
@@ -529,6 +581,8 @@ export function serializeBudgetRule(row: BudgetRuleRow) {
     decreasePct: row.decreasePct,
     checkIntervalDays: row.checkIntervalDays,
     enabled: row.enabled,
+    maxSpendCap: row.maxSpendCap ?? null,
+    autoPauseOnBreach: row.autoPauseOnBreach ?? false,
     lastEvaluatedAt: row.lastEvaluatedAt
       ? (row.lastEvaluatedAt as Date).toISOString()
       : null,
@@ -598,6 +652,8 @@ export async function createRule(
       decreasePct: v.decreasePct,
       checkIntervalDays: v.checkIntervalDays,
       enabled: v.enabled,
+      maxSpendCap: v.maxSpendCap,
+      autoPauseOnBreach: v.autoPauseOnBreach,
       lastAction: lastAction
         ? (JSON.parse(JSON.stringify(lastAction)) as never)
         : undefined,
@@ -632,6 +688,12 @@ export async function updateRule(
     decreasePct: patch.decreasePct ?? existing.decreasePct,
     checkIntervalDays: patch.checkIntervalDays ?? existing.checkIntervalDays,
     enabled: patch.enabled ?? existing.enabled,
+    maxSpendCap:
+      patch.maxSpendCap !== undefined
+        ? patch.maxSpendCap
+        : (existing.maxSpendCap ?? null),
+    autoPauseOnBreach:
+      patch.autoPauseOnBreach ?? existing.autoPauseOnBreach ?? false,
   };
   const v = validateBudgetRuleInput(merged);
 
@@ -647,6 +709,8 @@ export async function updateRule(
       decreasePct: v.decreasePct,
       checkIntervalDays: v.checkIntervalDays,
       enabled: v.enabled,
+      maxSpendCap: v.maxSpendCap,
+      autoPauseOnBreach: v.autoPauseOnBreach,
     },
   })) as unknown as BudgetRuleRow;
   return serializeBudgetRule(updated);
@@ -874,6 +938,126 @@ export type PerformanceProvider = (
   rule: BudgetRuleRow
 ) => Promise<CampaignPerformance>;
 
+/** Cumulative-spend provider seam for the P0-9 breaker (tests + overrides). */
+export type CumulativeSpendProvider = (
+  rule: BudgetRuleRow
+) => Promise<number | null>;
+
+export interface RuleCampaign {
+  id: string;
+  googleCampaignId: string;
+  googleAccountId: string;
+  status: string;
+}
+
+/**
+ * Resolve the Campaign rows a rule governs: exact campaignId when set,
+ * otherwise the same case-insensitive `contains` name match scoped to the
+ * tenant + Google account as getCampaignPerformance().
+ */
+export async function resolveRuleCampaigns(
+  prisma: PrismaClient,
+  rule: BudgetRuleRow
+): Promise<RuleCampaign[]> {
+  if (rule.campaignId) {
+    const campaign = (await prisma.campaign.findFirst({
+      where: {
+        id: rule.campaignId,
+        tenantId: rule.tenantId,
+        googleAccountId: rule.googleAccountId,
+        deletedAt: null,
+      },
+      select: { id: true, googleCampaignId: true, googleAccountId: true, status: true },
+    })) as RuleCampaign | null;
+    return campaign ? [campaign] : [];
+  }
+  const campaigns = (await prisma.campaign.findMany({
+    where: {
+      tenantId: rule.tenantId,
+      googleAccountId: rule.googleAccountId,
+      name: { contains: rule.campaignName, mode: "insensitive" },
+      deletedAt: null,
+    },
+    select: { id: true, googleCampaignId: true, googleAccountId: true, status: true },
+  })) as RuleCampaign[];
+  return campaigns;
+}
+
+/**
+ * P0-9 cumulative-spend口径（写清口径，不编造）：
+ *
+ *   SUM(LaunchArchive.spend)
+ *   WHERE LaunchArchive.offerId IN (
+ *     SELECT TrackingLink.offerId FROM TrackingLink
+ *     WHERE TrackingLink.campaignId IN (<rule's campaigns>)
+ *   ) AND LaunchArchive.tenantId = <rule tenant>
+ *
+ * - LaunchArchive.spend 是运营在投放档案报表（/reports/launch）里手动回填的
+ *   实际花费，不是估算；Google Ads 同步数据里没有花费表（见
+ *   getCampaignPerformance 的 "unavailable" 说明），ManualSpend 是租户级
+ *   总数、无法归属到单个广告系列，所以两者都不作为本熔断的口径。
+ * - 无档案 / 档案 spend 全为 null → 返回 null（无花费数据），绝不触发熔断。
+ * - 货币：档案 spend 与 maxSpendCap 约定为同一货币（档案 budgetCurrency
+ *   默认为 USD；跨货币档案求和时不做换算，见 lastAction 审计记录）。
+ */
+export async function getRuleCumulativeSpend(
+  prisma: PrismaClient,
+  rule: BudgetRuleRow
+): Promise<number | null> {
+  const campaigns = await resolveRuleCampaigns(prisma, rule);
+  if (campaigns.length === 0) return null;
+  const campaignIds = campaigns.map((c) => c.id);
+  const links = (await prisma.trackingLink.findMany({
+    where: { tenantId: rule.tenantId, campaignId: { in: campaignIds } },
+    select: { offerId: true },
+  })) as Array<{ offerId: string }>;
+  const offerIds = [...new Set(links.map((l) => l.offerId).filter(Boolean))];
+  if (offerIds.length === 0) return null;
+  const archives = (await prisma.launchArchive.findMany({
+    where: { tenantId: rule.tenantId, offerId: { in: offerIds } },
+    select: { spend: true },
+  })) as Array<{ spend: unknown }>;
+  let total = 0;
+  let found = false;
+  for (const row of archives) {
+    const spend = row.spend == null ? null : Number(row.spend);
+    if (spend !== null && Number.isFinite(spend)) {
+      total += spend;
+      found = true;
+    }
+  }
+  return found ? Math.round(total * 100) / 100 : null;
+}
+
+/**
+ * Queue a campaign-toggle PAUSE task for every still-active campaign the
+ * rule governs (already-PAUSED campaigns are skipped — no redundant task).
+ * Returns the queued task ids (deduped tasks count as queued: the pending
+ * task already represents the pause request).
+ */
+export async function queueSpendCapPause(
+  prisma: PrismaClient,
+  rule: BudgetRuleRow,
+  opts: { actorId?: string | null } = {}
+): Promise<{ taskIds: string[] }> {
+  const campaigns = await resolveRuleCampaigns(prisma, rule);
+  const taskIds: string[] = [];
+  for (const campaign of campaigns) {
+    if (campaign.status === "PAUSED") continue;
+    const { taskId } = await queueCampaignToggleTask(prisma, {
+      tenantId: rule.tenantId,
+      campaignId: campaign.id,
+      googleCampaignId: campaign.googleCampaignId,
+      googleAccountId: campaign.googleAccountId,
+      action: "PAUSE",
+      requestedBy: opts.actorId ?? undefined,
+      reason: `budget pacer spend-cap breach: rule ${rule.id} (${rule.campaignName})`,
+    });
+    taskIds.push(taskId);
+  }
+  return { taskIds };
+}
+
 function defaultLog(prefix: string): BudgetPacerLog {
   return {
     info: (msg, meta) => console.log(`[${prefix}] ${msg}`, meta ?? ""),
@@ -891,6 +1075,7 @@ export async function evaluateRule(
   opts: {
     log?: BudgetPacerLog;
     performanceProvider?: PerformanceProvider;
+    cumulativeSpendProvider?: CumulativeSpendProvider;
     actorId?: string | null;
   } = {}
 ): Promise<EvaluateRuleResult> {
@@ -903,6 +1088,70 @@ export async function evaluateRule(
     evaluated: true,
   };
   try {
+    // P0-9 spend-cap breaker — runs BEFORE any ROAS logic.
+    // Fires only when maxSpendCap is set AND autoPauseOnBreach is true AND
+    // cumulative spend (LaunchArchive口径, see getRuleCumulativeSpend) >= cap.
+    // Missing spend data (null) never fires. Non-firing rules fall through
+    // to the original ROAS path unchanged.
+    if (rule.maxSpendCap != null && rule.autoPauseOnBreach) {
+      const cumulativeSpend = opts.cumulativeSpendProvider
+        ? await opts.cumulativeSpendProvider(rule)
+        : await getRuleCumulativeSpend(prisma, rule);
+      if (cumulativeSpend != null && cumulativeSpend >= rule.maxSpendCap) {
+        const { taskIds } = await queueSpendCapPause(prisma, rule, {
+          actorId: opts.actorId,
+        });
+        const reason =
+          `spend-cap breach: cumulative spend ${cumulativeSpend} >= maxSpendCap ${rule.maxSpendCap} — campaign paused via campaign-toggle`;
+        const lastAction: LastActionJson = {
+          action: "paused",
+          reason,
+          at: new Date().toISOString(),
+          spendCap: rule.maxSpendCap,
+          cumulativeSpend,
+          taskId: taskIds[0],
+          taskIds,
+        };
+        await prisma.budgetRule.update({
+          where: { id: rule.id },
+          data: {
+            lastEvaluatedAt: new Date(),
+            lastAction: JSON.parse(JSON.stringify(lastAction)) as never,
+          },
+        });
+        await prisma.auditLog.create({
+          data: {
+            id: randomUUID(),
+            tenantId: rule.tenantId,
+            actorId: opts.actorId ?? null,
+            action: BUDGET_PACER_SPEND_CAP_BREACH_ACTION,
+            entityType: "BudgetRule",
+            entityId: rule.id,
+            after: JSON.parse(
+              JSON.stringify({
+                ruleId: rule.id,
+                campaignName: rule.campaignName,
+                campaignId: rule.campaignId,
+                maxSpendCap: rule.maxSpendCap,
+                cumulativeSpend,
+                taskIds,
+                action: "paused",
+              })
+            ) as never,
+            reason,
+          },
+        });
+        log.info("budget-pacer spend-cap breach — campaign paused", {
+          ruleId: rule.id,
+          campaignName: rule.campaignName,
+          maxSpendCap: rule.maxSpendCap,
+          cumulativeSpend,
+          taskIds,
+        });
+        return { ...base, action: "paused", reason, taskId: taskIds[0], taskIds };
+      }
+    }
+
     const perf = opts.performanceProvider
       ? await opts.performanceProvider(rule)
       : await getCampaignPerformance(prisma, rule.tenantId, {
@@ -1024,6 +1273,7 @@ export async function evaluateRules(
   opts: {
     log?: BudgetPacerLog;
     performanceProvider?: PerformanceProvider;
+    cumulativeSpendProvider?: CumulativeSpendProvider;
     actorId?: string | null;
   } = {}
 ): Promise<EvaluateRulesSummary> {
@@ -1044,6 +1294,7 @@ export async function evaluateRules(
     checked: 0,
     adjusted: 0,
     held: 0,
+    paused: 0,
     alertsCreated: 0,
     errors: 0,
     results: [],
@@ -1055,6 +1306,8 @@ export async function evaluateRules(
     summary.results.push(result);
     if (result.action === "up" || result.action === "down") {
       summary.adjusted += 1;
+    } else if (result.action === "paused") {
+      summary.paused += 1;
     } else {
       summary.held += 1;
     }

@@ -1,0 +1,14 @@
+# AdLinkLab 自动备份 — systemd timer（P0-7，每日跑一次）。
+# 安装：与 adlinklab-backup.service 一起复制到 /etc/systemd/system/，
+# 然后 systemctl daemon-reload && systemctl enable --now adlinklab-backup.timer。
+[Unit]
+Description=Daily AdLinkLab backup (P0-7)
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=600
+Unit=adlinklab-backup.service
+
+[Install]
+WantedBy=timers.target

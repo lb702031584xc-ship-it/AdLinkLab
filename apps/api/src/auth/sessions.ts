@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { FastifyRequest } from "fastify";
 import type { PrismaClient } from "@adlinklab/database";
+import { isRevoked } from "./token-revocation.js";
 
 /**
  * Opaque login sessions.
@@ -118,6 +119,12 @@ export async function resolveSession(
   if (!session) return null;
   if (session.expiresAt.getTime() <= Date.now()) {
     // Best-effort cleanup of the expired row.
+    await prisma.session.delete({ where: { id: session.id } }).catch(() => undefined);
+    return null;
+  }
+  // P0-5 — blacklisted sessions (logout / password change / admin disable)
+  // are dead even though the row still exists. isRevoked never throws.
+  if (await isRevoked(prisma, { tokenHash: session.tokenHash })) {
     await prisma.session.delete({ where: { id: session.id } }).catch(() => undefined);
     return null;
   }

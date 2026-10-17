@@ -240,6 +240,25 @@ export async function getAiSettings(): Promise<AiSettings> {
   return aiFetch<AiSettings>("/api/v1/ai/settings");
 }
 
+/** P0-6 — AI 用量汇总（今日/本月，UTC）。costCents 为美分。 */
+export interface AiUsageTotals {
+  tokensIn: number;
+  tokensOut: number;
+  costCents: number;
+  calls: number;
+}
+
+export interface AiUsageSummary {
+  tenantId: string;
+  today: AiUsageTotals;
+  month: AiUsageTotals;
+}
+
+/** Admin-only: 今日/本月 AI 用量汇总。 */
+export async function getAiUsageSummary(): Promise<AiUsageSummary> {
+  return aiFetch<AiUsageSummary>("/api/v1/admin/ai-usage/summary");
+}
+
 /** Admin-only: update AI provider settings. */
 export async function saveAiSettings(
   input: SaveSettingsInput

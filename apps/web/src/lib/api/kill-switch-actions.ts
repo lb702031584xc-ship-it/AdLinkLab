@@ -22,6 +22,8 @@ export interface KillSwitchConfigData {
   pauseOnMerchantTerminated: boolean;
   testSpendCap: number | null;
   testZeroConvSpend: number | null;
+  /** P0-10: also queue a Google Ads campaign-toggle PAUSE on auto-pause. */
+  pauseGoogleAdsToo: boolean;
   configured: boolean;
 }
 
@@ -89,6 +91,7 @@ export async function saveKillSwitchAction(
     enabled: boolean;
     testSpendCap: number | null;
     testZeroConvSpend: number | null;
+    pauseGoogleAdsToo?: boolean;
   }
 ): Promise<KillSwitchActionResult<KillSwitchConfigData>> {
   return callApi<KillSwitchConfigData>(

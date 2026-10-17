@@ -1,10 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useDict } from "@/i18n/use-dict";
 import { EntityPageHeader, ErrorState } from "@/components/entities/ui";
-import { saveAiSettingsAction, testAiConnectionAction } from "@/lib/api/ai-actions";
-import type { AiSettings } from "@/lib/api/ai";
+import {
+  getAiUsageSummaryAction,
+  saveAiSettingsAction,
+  testAiConnectionAction,
+} from "@/lib/api/ai-actions";
+import type { AiSettings, AiUsageSummary } from "@/lib/api/ai";
 import type { AiConnectionTestResult } from "@/lib/api/ai";
 
 const PRESETS = {
@@ -38,6 +42,22 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
   const [error, setError] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<AiConnectionTestResult | null>(null);
+  // P0-6 — 今日/本月 AI 用量（用量卡片）。
+  const [usage, setUsage] = useState<AiUsageSummary | null>(null);
+  const [usageError, setUsageError] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const res = await getAiUsageSummaryAction();
+      if (cancelled) return;
+      if (res.ok) setUsage(res.data);
+      else setUsageError(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const inputClass =
     "w-full rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm text-ink placeholder:text-ink/35 focus:border-signal focus:outline-none";
@@ -114,12 +134,50 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
     }
   }
 
+  const usageDict = t.ai.admin.settings.usage;
+  const formatCost = (cents: number) => `$${(cents / 100).toFixed(2)}`;
+
   return (
     <div>
       <EntityPageHeader
         title={t.ai.admin.settings.title}
         description={t.ai.admin.settings.description}
       />
+
+      {/* P0-6 — 今日/本月 AI 花费 + 调用数 */}
+      <div className="mt-6 grid max-w-xl gap-4 rounded-xl border border-ink/10 bg-white/70 p-6 sm:grid-cols-2">
+        <h2 className="text-base font-semibold text-ink sm:col-span-2">
+          {usageDict.title}
+        </h2>
+        {usageError ? (
+          <p className="text-sm text-red-800 sm:col-span-2">
+            {usageDict.loadFailed}
+          </p>
+        ) : usage ? (
+          ([
+            { label: usageDict.today, data: usage.today },
+            { label: usageDict.month, data: usage.month },
+          ] as const).map((col) => (
+            <div key={col.label}>
+              <p className="text-sm font-medium text-ink/60">{col.label}</p>
+              <p className="mt-1 text-lg font-semibold text-ink">
+                {formatCost(col.data.costCents)}
+                <span className="ml-2 text-sm font-normal text-ink/60">
+                  {usageDict.cost}
+                </span>
+              </p>
+              <p className="mt-1 text-sm text-ink/70">
+                {usageDict.calls}：{col.data.calls}
+              </p>
+              <p className="mt-1 text-sm text-ink/70">
+                {usageDict.tokens}：{col.data.tokensIn} / {col.data.tokensOut}
+              </p>
+            </div>
+          ))
+        ) : (
+          <p className="text-sm text-ink/50 sm:col-span-2">…</p>
+        )}
+      </div>
 
       <form
         onSubmit={onSubmit}

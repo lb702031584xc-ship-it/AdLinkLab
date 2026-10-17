@@ -10,11 +10,16 @@ import {
   createMonitoringRuleAction,
   deleteMonitoringRuleAction,
   listMonitoringAlertsAction,
+  listMonitoringErrorsAction,
   listMonitoringRulesAction,
   runMonitoringCheckAction,
   updateMonitoringRuleAction,
 } from "@/lib/api/p1-actions";
-import type { MonitoringAlert, MonitoringRule } from "@/lib/api/p1";
+import type {
+  MonitoringAlert,
+  MonitoringError,
+  MonitoringRule,
+} from "@/lib/api/p1";
 import { useI18n } from "@/i18n/I18nProvider";
 import { zh as budgetZh, en as budgetEn } from "@/i18n/dict/budget";
 
@@ -57,6 +62,8 @@ export function MonitoringClient() {
   }
   const [rules, setRules] = useState<MonitoringRule[]>([]);
   const [alerts, setAlerts] = useState<MonitoringAlert[]>([]);
+  // P0-8 — 近 24h 服务端错误（error_reports 去重后列表）。
+  const [errors, setErrors] = useState<MonitoringError[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [runMsg, setRunMsg] = useState<string | null>(null);
@@ -89,14 +96,17 @@ export function MonitoringClient() {
       setLoading(true);
       setError(null);
       try {
-        const [r, a] = await Promise.all([
+        const [r, a, e] = await Promise.all([
           listMonitoringRulesAction(),
           listMonitoringAlertsAction(),
+          listMonitoringErrorsAction(),
         ]);
         if (r.ok) setRules(r.data);
         else setError(r.error);
         if (a.ok) setAlerts(a.data);
         else if (!r.ok) setError(a.error);
+        if (e.ok) setErrors(e.data);
+        else if (!r.ok && !a.ok) setError(e.error);
       } finally {
         setLoading(false);
       }
@@ -557,6 +567,55 @@ export function MonitoringClient() {
               <tr>
                 <td className="px-3 py-6 text-ink/50" colSpan={7}>
                   {d.noAlerts}
+                </td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </div>
+
+      {/* P0-8 — 近 24h 服务端错误（5xx 去重后） */}
+      <h2 className="mt-8 text-base font-semibold text-ink">
+        {d.errorsTitle}
+      </h2>
+      <div className="mt-4 overflow-x-auto rounded-xl border border-ink/10 bg-white/70">
+        <table className="min-w-full text-left text-sm">
+          <thead className="bg-ink/5 text-ink/60">
+            <tr>
+              <th className="px-3 py-2">{d.errorColumns.time}</th>
+              <th className="px-3 py-2">{d.errorColumns.level}</th>
+              <th className="px-3 py-2">{d.errorColumns.status}</th>
+              <th className="px-3 py-2">{d.errorColumns.message}</th>
+              <th className="px-3 py-2">{d.errorColumns.path}</th>
+              <th className="px-3 py-2">{d.errorColumns.count}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {errors.map((e) => (
+              <tr key={e.id} className="border-t border-ink/10">
+                <td className="whitespace-nowrap px-3 py-2 text-xs text-ink/60">
+                  {formatDateTime(e.lastSeenAt)}
+                </td>
+                <td className="px-3 py-2">
+                  <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800">
+                    {e.level}
+                  </span>
+                </td>
+                <td className="px-3 py-2 text-ink/70">{e.statusCode ?? "—"}</td>
+                <td className="max-w-md px-3 py-2 text-sm text-ink/80">
+                  {e.message}
+                </td>
+                <td className="max-w-xs truncate px-3 py-2 font-mono text-xs text-ink/60">
+                  {e.method ? `${e.method} ` : ""}
+                  {e.path ?? "—"}
+                </td>
+                <td className="px-3 py-2 text-ink/70">{e.count}</td>
+              </tr>
+            ))}
+            {!loading && errors.length === 0 ? (
+              <tr>
+                <td className="px-3 py-6 text-ink/50" colSpan={6}>
+                  {d.noErrors}
                 </td>
               </tr>
             ) : null}
