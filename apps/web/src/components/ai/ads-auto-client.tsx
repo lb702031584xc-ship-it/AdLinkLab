@@ -31,6 +31,7 @@ import {
   confirmAdPlanAction,
   getCopyPackAction,
   getCreateCampaignScriptAction,
+  getRotationScriptAction,
   requestAdPlanAction,
 } from "@/lib/api/ads-auto-actions";
 import type {
@@ -548,6 +549,60 @@ export function AdsAutoClient({
   // 当前优惠（用户填店铺真实优惠，如 Up to 30% Off，绝不编造）：同上，watch 在 render 时读取，需提前声明。
   const [promotion, setPromotion] = useState("");
 
+  // 直链轮换：与返利网直链轮换同一份脚本生成逻辑（标签 → Script）。
+  // 注意：轮换本身在 Google Ads 里跑（脚本粘过去、每小时运行），
+  // AdLinkLab 只生成脚本、不直接执行轮换，文案里要说清这点。
+  const [rotationLabel, setRotationLabel] = useState("");
+  const [rotationSource, setRotationSource] = useState<string | null>(null);
+  const [rotationFileName, setRotationFileName] = useState("");
+  const [rotationGenerating, setRotationGenerating] = useState(false);
+  const [rotationError, setRotationError] = useState<string | null>(null);
+  const [rotationCopied, setRotationCopied] = useState(false);
+
+  async function onGenerateRotationScript() {
+    const label = rotationLabel.trim();
+    if (!label) {
+      setRotationError(d.form.rotation.emptyLabel);
+      return;
+    }
+    if (!/^[a-zA-Z0-9_-]+$/.test(label)) {
+      setRotationError(d.form.rotation.labelInvalid);
+      return;
+    }
+    setRotationGenerating(true);
+    setRotationError(null);
+    setRotationSource(null);
+    try {
+      const res = await getRotationScriptAction(label);
+      if (res.ok) {
+        setRotationSource(res.data.source);
+        setRotationFileName(res.data.fileName);
+      } else {
+        setRotationError(res.error);
+      }
+    } finally {
+      setRotationGenerating(false);
+    }
+  }
+
+  async function onCopyRotationScript() {
+    if (!rotationSource) return;
+    await navigator.clipboard.writeText(rotationSource);
+    setRotationCopied(true);
+    setTimeout(() => setRotationCopied(false), 2000);
+  }
+
+  function onDownloadRotationScript() {
+    if (!rotationSource) return;
+    const blob = new Blob([rotationSource], { type: "text/javascript;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = rotationFileName || "adlinklab-rotation.js";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   /** 快照恢复（URL 参数优先于快照）。挂载恢复和上次 offer 回落共用。 */
   const applyAdsAutoSnapshot = (snap: Record<string, unknown>) => {
     const str = (v: unknown) => (v == null ? "" : String(v));
@@ -817,7 +872,9 @@ export function AdsAutoClient({
     setKeywordCheck({ status: "checking", results: [], error: null });
     const res = await checkKeywordsAction({
       productDescription: manualText.trim() || urlsText.trim(),
-      offerName: commissionFromOffer ?? "",
+      // Offer 名优先用 Offer 实体；没有则用计划系列名兜底（生成后必有），
+      // 保证不传空字符串（接口要求 offerName 非空）。
+      offerName: offerNameFromOffer?.trim() || plan.campaign.name || "Offer",
       offerUrl: parseUrls()[0],
       keywords,
     });
@@ -962,20 +1019,28 @@ export function AdsAutoClient({
   );
   // 佣金是否从上方 Offer 带入（展示提示用）。
   const [commissionFromOffer, setCommissionFromOffer] = useState<string | null>(null);
+  // Offer 名（关键词检查用，与佣金是否带入无关——之前误把 commissionFromOffer
+  // 当 offerName 传，佣金手填/无 offer 时它是 null，检查接口直接报 offerName 为空）。
+  const [offerNameFromOffer, setOfferNameFromOffer] = useState<string | null>(null);
 
   // 佣金从上方 Offer 带入：?offerId= 时按 commissionType 推导 payout
   //（fixed → 固定金额；percentage → 均价 × 百分比）。只在输入框为空时带入，不覆盖手填。
   const bidCommissionRef = useRef("");
   bidCommissionRef.current = bidCommission;
   useEffect(() => {
-    if (!offerId) return;
+    if (!offerId) {
+      setOfferNameFromOffer(null);
+      return;
+    }
     let cancelled = false;
     void (async () => {
       const res = await getOfferAction(offerId);
       if (cancelled || !res.ok) return;
+      const o = res.data;
+      // Offer 名单独记下来给关键词检查用（与佣金是否带入无关）。
+      if (o.name) setOfferNameFromOffer(o.name);
       // 用户已手填则不带入（ref 读最新值，避免闭包旧值）。
       if (bidCommissionRef.current.trim()) return;
-      const o = res.data;
       const value = Number(o.commissionValue);
       if (!Number.isFinite(value) || value <= 0) return;
       let payout: number | null = null;
@@ -1243,6 +1308,70 @@ export function AdsAutoClient({
             placeholder={d.form.promotionPlaceholder}
             className={inputClass}
           />
+        </div>
+
+        {/* 直链轮换：与返利网直链轮换同一份脚本（标签 → Script）。
+            AdLinkLab 只生成脚本；轮换本身在 Google Ads 里跑（脚本粘过去、每小时运行），不是点一下就自动轮换。 */}
+        <div className={`${cardClass} mt-3`}>
+          <h3 className="text-sm font-semibold text-ink">{d.form.rotation.title}</h3>
+          <p className="mt-1 text-xs text-ink/55">{d.form.rotation.hint}</p>
+          <div className="mt-3">
+            <label className={labelClass} htmlFor="ads-auto-rotation-label">
+              {d.form.rotation.labelLabel}
+            </label>
+            <input
+              id="ads-auto-rotation-label"
+              inputMode="text"
+              value={rotationLabel}
+              onChange={(e) => setRotationLabel(e.target.value)}
+              placeholder={d.form.rotation.labelPlaceholder}
+              className={`${inputClass} font-mono`}
+            />
+            {!rotationLabel.trim() ? (
+              <p className="mt-1 text-xs text-ink/55">{d.form.rotation.emptyLabel}</p>
+            ) : !/^[a-zA-Z0-9_-]+$/.test(rotationLabel.trim()) ? (
+              <p className="mt-1 text-xs text-red-600">{d.form.rotation.labelInvalid}</p>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            onClick={onGenerateRotationScript}
+            disabled={!/^[a-zA-Z0-9_-]+$/.test(rotationLabel.trim()) || rotationGenerating}
+            className="mt-3 rounded-lg bg-ink px-4 py-2 text-sm font-medium text-paper disabled:opacity-50"
+          >
+            {rotationGenerating ? d.form.rotation.generating : d.form.rotation.generate}
+          </button>
+          {rotationError ? (
+            <p className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              {rotationError}
+            </p>
+          ) : null}
+          {rotationSource ? (
+            <div className="mt-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-semibold text-ink">{d.form.rotation.resultTitle}</span>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={onCopyRotationScript}
+                    className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm"
+                  >
+                    {rotationCopied ? d.form.rotation.copied : d.form.rotation.copy}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onDownloadRotationScript}
+                    className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm"
+                  >
+                    {d.form.rotation.download}
+                  </button>
+                </div>
+              </div>
+              <pre className="mt-2 max-h-96 overflow-auto rounded-xl border border-ink/10 bg-ink p-4 font-mono text-xs text-paper">
+                {rotationSource}
+              </pre>
+            </div>
+          ) : null}
         </div>
 
         {/* 抓取失败兜底：Amazon 等反爬站点手动粘贴页面文字 */}
