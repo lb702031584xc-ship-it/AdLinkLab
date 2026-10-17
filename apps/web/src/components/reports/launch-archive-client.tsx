@@ -2,14 +2,18 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { EntityPageHeader } from "@/components/entities/ui";
+import { DailyAlertsCard } from "@/components/monitoring/daily-alerts-card";
 import type { LaunchArchiveDict } from "@/i18n/dict/launch-archive";
+import { paceChecklist, daysActiveSince } from "@/lib/pace-checklist";
 import {
   listLaunchArchivesAction,
   getLaunchArchiveAction,
+  getBudgetOverviewAction,
   createLaunchArchiveAction,
   updateLaunchArchiveAction,
   deleteLaunchArchiveAction,
   exportLaunchArchivesAction,
+  type BudgetOverview,
   type LaunchArchive,
   type LaunchArchiveCreateInput,
   type LaunchArchivePatchInput,
@@ -102,6 +106,15 @@ function toEditForm(a: LaunchArchive): Record<string, string> {
     notes: a.notes ?? "",
     launchedAt: a.launchedAt ? a.launchedAt.slice(0, 10) : "",
     endedAt: a.endedAt ? a.endedAt.slice(0, 10) : "",
+    // P1-4：分阶段预算（全部留空 = 不改；部分填 = 保存时报错）。
+    testDailyBudget: str(a.testingPhase?.dailyBudget),
+    testTotalBudget: str(a.testingPhase?.totalBudget),
+    testExpectedClicks: str(a.testingPhase?.expectedClicks),
+    testExpectedConversions: str(a.testingPhase?.expectedConversions),
+    testDurationDays: str(a.testingPhase?.durationDays),
+    scaleTriggerRoas: str(a.scalingPhase?.triggerRoas),
+    scaleDailyBudget: str(a.scalingPhase?.dailyBudget),
+    scaleMaxDailyBudget: str(a.scalingPhase?.maxDailyBudget),
   };
 }
 
@@ -137,6 +150,14 @@ export function LaunchArchiveClient({
   const [creating, setCreating] = useState(false);
 
   const [exporting, setExporting] = useState(false);
+
+  /** P1-28：预算总览 + 盈亏平衡点（与档案列表并行加载，无数据 → “—”）。 */
+  const [overview, setOverview] = useState<BudgetOverview | null>(null);
+  useEffect(() => {
+    void getBudgetOverviewAction().then((res) => {
+      if (res.ok) setOverview(res.data);
+    });
+  }, []);
 
   const load = useCallback(async (flt: AppliedFilters, oid: string | null, p: number) => {
     setLoading(true);
@@ -250,6 +271,34 @@ export function LaunchArchiveClient({
     setStr("notes", editForm.notes ?? "");
     setStr("launchedAt", editForm.launchedAt ?? "");
     setStr("endedAt", editForm.endedAt ?? "");
+    // P1-4：分阶段预算（每组全填才提交；部分填 → 报错不保存）。
+    const testKeys = ["testDailyBudget", "testTotalBudget", "testExpectedClicks", "testExpectedConversions", "testDurationDays"] as const;
+    const scaleKeys = ["scaleTriggerRoas", "scaleDailyBudget", "scaleMaxDailyBudget"] as const;
+    const testVals = testKeys.map((k) => (editForm[k] ?? "").trim());
+    const scaleVals = scaleKeys.map((k) => (editForm[k] ?? "").trim());
+    const anyTest = testVals.some(Boolean);
+    const anyScale = scaleVals.some(Boolean);
+    if ((anyTest && testVals.some((v) => !v)) || (anyScale && scaleVals.some((v) => !v))) {
+      setError(d.detail.phaseIncomplete);
+      setSaving(false);
+      return;
+    }
+    if (anyTest) {
+      (patch as Record<string, unknown>).testingPhase = {
+        dailyBudget: Number(testVals[0]),
+        totalBudget: Number(testVals[1]),
+        expectedClicks: Number(testVals[2]),
+        expectedConversions: Number(testVals[3]),
+        durationDays: Number(testVals[4]),
+      };
+    }
+    if (anyScale) {
+      (patch as Record<string, unknown>).scalingPhase = {
+        triggerRoas: Number(scaleVals[0]),
+        dailyBudget: Number(scaleVals[1]),
+        maxDailyBudget: Number(scaleVals[2]),
+      };
+    }
     const res = await updateLaunchArchiveAction(selected.id, patch);
     setSaving(false);
     if (!res.ok) {
@@ -382,6 +431,127 @@ export function LaunchArchiveClient({
         <div className="rounded-lg border border-red-600/30 bg-red-50 px-4 py-2 text-sm text-red-800">{error}</div>
       ) : null}
 
+      {/* P2-9：每日预警（分级 P0/P1/P2；仅展示，不自动执行）。 */}
+      <DailyAlertsCard
+        title={d.dailyAlertsTitle}
+        emptyText={d.dailyAlertsEmpty}
+      />
+
+      {/* P1-28：预算总览 + 盈亏平衡点（无数据 → “—”，绝不编造）。 */}
+      {overview ? (
+        <section className="rounded-xl border border-ink/10 bg-white p-5">
+          <h2 className="text-base font-semibold text-ink">{d.budgetOverview.title}</h2>
+          <div className="mt-3 grid gap-3 md:grid-cols-4">
+            {(
+              [
+                ["totalBudget", overview.totals.totalBudget],
+                ["totalSpend", overview.totals.totalSpend],
+                ["utilization", overview.totals.utilization],
+                ["remaining", overview.totals.remaining],
+                ["dailyAvg", overview.totals.dailyAvg],
+                ["projected30d", overview.totals.projected30d],
+                ["remainingDays", overview.totals.remainingDays],
+                ["activeCampaigns", overview.totals.activeCampaignCount],
+              ] as const
+            ).map(([k, v]) => (
+              <div key={k} className="rounded-lg border border-ink/10 bg-ink/[0.02] p-3">
+                <p className="text-xs text-ink/60">
+                  {(d.budgetOverview as Record<string, string>)[k] ?? k}
+                </p>
+                <p className="mt-1 text-lg font-semibold text-ink">
+                  {v === null || v === undefined
+                    ? d.budgetOverview.noData
+                    : k === "utilization"
+                      ? `${(Number(v) * 100).toFixed(1)}%`
+                      : k === "remainingDays"
+                        ? `${Number(v).toFixed(1)}`
+                        : k === "activeCampaigns"
+                          ? String(v)
+                          : `$${Number(v).toFixed(2)}`}
+                </p>
+              </div>
+            ))}
+          </div>
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <div>
+              <h3 className="text-sm font-semibold text-ink">{d.budgetOverview.breakevenTitle}</h3>
+              <ul className="mt-2 space-y-1 text-sm text-ink/80">
+                <li>
+                  {d.budgetOverview.requiredConversions}：
+                  {overview.breakeven.requiredConversions === null
+                    ? d.budgetOverview.noData
+                    : Math.ceil(overview.breakeven.requiredConversions).toLocaleString()}
+                </li>
+                <li>
+                  {d.budgetOverview.avgBreakevenCpa}：
+                  {overview.breakeven.avgBreakevenCpa === null
+                    ? d.budgetOverview.noData
+                    : `$${overview.breakeven.avgBreakevenCpa.toFixed(2)}`}
+                </li>
+                <li>
+                  {d.budgetOverview.totalRoas}：
+                  {overview.breakeven.totalRoas === null
+                    ? d.budgetOverview.noData
+                    : `${(overview.breakeven.totalRoas * 100).toFixed(1)}%`}
+                </li>
+                <li>
+                  {d.budgetOverview.totalCommission}：${overview.breakeven.totalCommission.toFixed(2)}
+                </li>
+                <li>
+                  {d.budgetOverview.conversionEfficiency}：
+                  {overview.breakeven.conversionEfficiency === null
+                    ? d.budgetOverview.noData
+                    : `${(overview.breakeven.conversionEfficiency * 100).toFixed(2)}%`}
+                </li>
+                <li>
+                  {d.budgetOverview.commissionRate}：
+                  {overview.breakeven.commissionRate === null
+                    ? d.budgetOverview.noData
+                    : `${(overview.breakeven.commissionRate * 100).toFixed(1)}%`}
+                </li>
+                <li>
+                  {d.budgetOverview.commissionPerConversion}：
+                  {overview.breakeven.commissionPerConversion === null
+                    ? d.budgetOverview.noData
+                    : `$${overview.breakeven.commissionPerConversion.toFixed(2)}`}
+                </li>
+              </ul>
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-ink">{d.budgetOverview.perOffer}</h3>
+              {overview.perOffer.length === 0 ? (
+                <p className="mt-2 text-sm text-ink/60">{d.budgetOverview.noData}</p>
+              ) : (
+                <ul className="mt-2 space-y-1 text-sm text-ink/80">
+                  {overview.perOffer.slice(0, 10).map((o) => (
+                    <li key={o.offerName}>
+                      {o.offerName}：预算 ${o.budget.toFixed(2)} · 已花 ${o.spent.toFixed(2)} ·
+                      转化 {o.conversions} · 佣金 ${o.commission.toFixed(2)} ·
+                      ROAS {o.roas === null ? d.budgetOverview.noData : `${(o.roas * 100).toFixed(1)}%`}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <h3 className="mt-4 text-sm font-semibold text-ink">{d.budgetOverview.top10}</h3>
+              {overview.top10.length === 0 ? (
+                <p className="mt-2 text-sm text-ink/60">{d.budgetOverview.noData}</p>
+              ) : (
+                <ul className="mt-2 space-y-1 text-sm text-ink/80">
+                  {overview.top10.map((c) => (
+                    <li key={c.id}>
+                      {c.offerName}：日预算{" "}
+                      {c.dailyBudget === null ? d.budgetOverview.noData : `$${c.dailyBudget.toFixed(2)}`} ·
+                      已花 {c.spend === null ? d.budgetOverview.noData : `$${c.spend.toFixed(2)}`} ·
+                      转化 {c.conversions ?? d.budgetOverview.noData}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </section>
+      ) : null}
+
       {/* Filters */}
       <section className="rounded-xl border border-ink/10 bg-white p-5">
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
@@ -497,6 +667,7 @@ export function LaunchArchiveClient({
                   <th className={thClass}>{d.columns.spend}</th>
                   <th className={thClass}>{d.columns.conversions}</th>
                   <th className={thClass}>{d.columns.roi}</th>
+                  <th className={thClass}>{d.columns.ctr}</th>
                   <th className={thClass}>{d.columns.diagnosis}</th>
                   <th className={thClass}>{d.columns.actions}</th>
                 </tr>
@@ -521,6 +692,10 @@ export function LaunchArchiveClient({
                     <td className={tdClass}>{it.spend != null ? fmtNum(it.spend) : "—"}</td>
                     <td className={tdClass}>{it.conversions != null ? String(it.conversions) : "—"}</td>
                     <td className={tdClass}>{fmtPct(it.actualRoi)}</td>
+                    {/* P1-29：样本不足显示“样本不足”，不显示 CTR。 */}
+                    <td className={tdClass} title={it.ctrNote ?? ""}>
+                      {it.actualCtr != null ? fmtPct(it.actualCtr) : "样本不足"}
+                    </td>
                     <td className={`${tdClass} max-w-[240px] truncate`} title={it.diagnosis ?? ""}>
                       {it.diagnosis ?? "—"}
                     </td>
@@ -696,6 +871,39 @@ export function LaunchArchiveClient({
                   <label className={labelClass} htmlFor="la-edit-notes">{f.notes}</label>
                   <textarea id="la-edit-notes" rows={2} className={inputClass} value={editForm.notes ?? ""} onChange={setEditField("notes")} />
                 </div>
+                {/* P1-4：分阶段预算编辑（测试期 5 项 + 扩量期 3 项）。 */}
+                <div>
+                  <label className={labelClass} htmlFor="la-edit-testDaily">{f.testDailyBudget}</label>
+                  <input id="la-edit-testDaily" inputMode="decimal" className={inputClass} value={editForm.testDailyBudget ?? ""} onChange={setEditField("testDailyBudget")} />
+                </div>
+                <div>
+                  <label className={labelClass} htmlFor="la-edit-testTotal">{f.testTotalBudget}</label>
+                  <input id="la-edit-testTotal" inputMode="decimal" className={inputClass} value={editForm.testTotalBudget ?? ""} onChange={setEditField("testTotalBudget")} />
+                </div>
+                <div>
+                  <label className={labelClass} htmlFor="la-edit-testClicks">{f.testExpectedClicks}</label>
+                  <input id="la-edit-testClicks" inputMode="decimal" className={inputClass} value={editForm.testExpectedClicks ?? ""} onChange={setEditField("testExpectedClicks")} />
+                </div>
+                <div>
+                  <label className={labelClass} htmlFor="la-edit-testConv">{f.testExpectedConversions}</label>
+                  <input id="la-edit-testConv" inputMode="decimal" className={inputClass} value={editForm.testExpectedConversions ?? ""} onChange={setEditField("testExpectedConversions")} />
+                </div>
+                <div>
+                  <label className={labelClass} htmlFor="la-edit-testDays">{f.testDurationDays}</label>
+                  <input id="la-edit-testDays" inputMode="numeric" className={inputClass} value={editForm.testDurationDays ?? ""} onChange={setEditField("testDurationDays")} />
+                </div>
+                <div>
+                  <label className={labelClass} htmlFor="la-edit-scaleRoas">{f.scaleTriggerRoas}</label>
+                  <input id="la-edit-scaleRoas" inputMode="decimal" className={inputClass} value={editForm.scaleTriggerRoas ?? ""} onChange={setEditField("scaleTriggerRoas")} />
+                </div>
+                <div>
+                  <label className={labelClass} htmlFor="la-edit-scaleDaily">{f.scaleDailyBudget}</label>
+                  <input id="la-edit-scaleDaily" inputMode="decimal" className={inputClass} value={editForm.scaleDailyBudget ?? ""} onChange={setEditField("scaleDailyBudget")} />
+                </div>
+                <div>
+                  <label className={labelClass} htmlFor="la-edit-scaleMax">{f.scaleMaxDailyBudget}</label>
+                  <input id="la-edit-scaleMax" inputMode="decimal" className={inputClass} value={editForm.scaleMaxDailyBudget ?? ""} onChange={setEditField("scaleMaxDailyBudget")} />
+                </div>
               </div>
             ) : (
               <dl className="mt-2 grid grid-cols-2 gap-x-6 gap-y-2 text-sm md:grid-cols-3">
@@ -727,8 +935,89 @@ export function LaunchArchiveClient({
               <div><dt className="text-ink/50">{f.actualCpc}</dt><dd>{fmtNum(selected.actualCpc)}</dd></div>
               <div><dt className="text-ink/50">{f.actualCvr}</dt><dd>{fmtPct(selected.actualCvr)}</dd></div>
               <div><dt className="text-ink/50">{f.actualRoi}</dt><dd>{fmtPct(selected.actualRoi)}</dd></div>
+              <div><dt className="text-ink/50">{f.actualCtr}</dt><dd>{selected.actualCtr != null ? fmtPct(selected.actualCtr) : "样本不足"}</dd></div>
               <div><dt className="text-ink/50">{f.profit}</dt><dd>{fmtNum(selected.profit)}</dd></div>
             </dl>
+            {selected.ctrNote ? (
+              <p className="mt-2 text-sm text-ink/60">{selected.ctrNote}</p>
+            ) : null}
+
+            {/* P1-4：分阶段预算（只读展示；扩量口径为上新系列、预算不变）。 */}
+            <h3 className="mt-6 text-sm font-semibold text-ink">{d.detail.stagedBudget}</h3>
+            {editing ? null : selected.testingPhase || selected.scalingPhase ? (
+              <dl className="mt-2 grid grid-cols-2 gap-x-6 gap-y-2 text-sm md:grid-cols-3">
+                {selected.testingPhase ? (
+                  <>
+                    <div><dt className="text-ink/50">{f.testDailyBudget}</dt><dd>{fmtNum(selected.testingPhase.dailyBudget)}</dd></div>
+                    <div><dt className="text-ink/50">{f.testTotalBudget}</dt><dd>{fmtNum(selected.testingPhase.totalBudget)}</dd></div>
+                    <div><dt className="text-ink/50">{f.testExpectedClicks}</dt><dd>{fmtNum(selected.testingPhase.expectedClicks)}</dd></div>
+                    <div><dt className="text-ink/50">{f.testExpectedConversions}</dt><dd>{fmtNum(selected.testingPhase.expectedConversions)}</dd></div>
+                    <div><dt className="text-ink/50">{f.testDurationDays}</dt><dd>{selected.testingPhase.durationDays}</dd></div>
+                  </>
+                ) : null}
+                {selected.scalingPhase ? (
+                  <>
+                    <div><dt className="text-ink/50">{f.scaleTriggerRoas}</dt><dd>{fmtNum(selected.scalingPhase.triggerRoas)}</dd></div>
+                    <div><dt className="text-ink/50">{f.scaleDailyBudget}</dt><dd>{fmtNum(selected.scalingPhase.dailyBudget)}</dd></div>
+                    <div><dt className="text-ink/50">{f.scaleMaxDailyBudget}</dt><dd>{fmtNum(selected.scalingPhase.maxDailyBudget)}</dd></div>
+                  </>
+                ) : null}
+              </dl>
+            ) : (
+              <p className="mt-2 text-sm text-ink/60">—</p>
+            )}
+            <p className="mt-2 text-sm text-ink/60">{d.detail.scaleNote}</p>
+
+            {/* P1-5：测试节奏清单（与 P2-9 同一份 pace-checklist 规则；展示建议，不自动执行）。 */}
+            <h3 className="mt-6 text-sm font-semibold text-ink">{d.detail.paceTitle}</h3>
+            {(() => {
+              const suggestions = paceChecklist({
+                impressions: selected.impressions,
+                clicks: selected.clicks,
+                conversions: selected.conversions,
+                spend: selected.spend,
+                revenue: selected.revenue,
+                daysActive: daysActiveSince(selected.launchedAt ?? selected.createdAt),
+              });
+              if (suggestions.length === 0) {
+                return <p className="mt-2 text-sm text-ink/60">{d.detail.paceEmpty}</p>;
+              }
+              return (
+                <ul className="mt-2 space-y-2 text-sm">
+                  {suggestions.map((s, i) => (
+                    <li key={i} className="rounded-lg border border-ink/10 bg-ink/[0.02] p-3">
+                      <p>
+                        <span className={s.level === "action" ? "font-semibold text-red-700" : s.level === "warn" ? "font-semibold text-amber-700" : "font-semibold"}>
+                          {s.level === "action" ? "建议动作" : s.level === "warn" ? "需要关注" : "观察提示"}
+                          ：
+                        </span>
+                        {s.text}
+                      </p>
+                      <p className="mt-1 text-xs text-ink/50">{s.source}</p>
+                    </li>
+                  ))}
+                </ul>
+              );
+            })()}
+            {/* P2-6：诊断码（统一阈值，仅真实数据触发）+ P1-5 节奏清单。 */}
+            {selected.diagnosisCodes && selected.diagnosisCodes.length > 0 && (
+              <div className="mt-4">
+                <h3 className="text-sm font-semibold text-ink">{d.detail.diagnosisCodes}</h3>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {selected.diagnosisCodes.map((code) => (
+                    <span
+                      key={code}
+                      className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800"
+                      title={
+                        (d.detail.diagnosisCodeLabels as Record<string, string>)[code] ?? code
+                      }
+                    >
+                      {(d.detail.diagnosisCodeLabels as Record<string, string>)[code] ?? code}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
             <p className="mt-2 text-sm"><span className="text-ink/50">{f.diagnosis}: </span>{selected.diagnosis ?? "—"}</p>
 
             <div className="mt-6 flex flex-wrap gap-2">

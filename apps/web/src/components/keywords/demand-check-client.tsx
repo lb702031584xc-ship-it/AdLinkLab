@@ -14,6 +14,7 @@ import {
   parseKeywordCaptureAiAction,
 } from "@/lib/api/ai-actions";
 import type { RecommendedKeyword } from "@/lib/api/ai";
+import { generateKeywordIdeasAction, type RuleKeywordIdea } from "@/lib/api/keyword-ideas-actions";
 import { CapturePicker } from "@/components/ai/capture-picker";
 
 type Trend = "up" | "flat" | "down";
@@ -147,6 +148,13 @@ export function DemandCheckClient({
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiKeywords, setAiKeywords] = useState<RecommendedKeyword[]>([]);
+  // P1-10：规则生成关键词（无 LLM，无假搜索量；规则分 + 来源 + 品牌覆盖警告）。
+  const [ruleSeeds, setRuleSeeds] = useState("");
+  const [ruleBrand, setRuleBrand] = useState("");
+  const [ruleDomain, setRuleDomain] = useState("");
+  const [ruleIdeas, setRuleIdeas] = useState<RuleKeywordIdea[]>([]);
+  const [ruleLoading, setRuleLoading] = useState(false);
+  const [ruleError, setRuleError] = useState<string | null>(null);
   const [captureExtracting, setCaptureExtracting] = useState(false);
   // 抓取填充参数：忙碌目标（"all" = 全部；行 id = 单条）与每条的提示
   const [fillBusy, setFillBusy] = useState<string | null>(null);
@@ -306,6 +314,57 @@ export function DemandCheckClient({
           if (k.volume != null) row.volume = String(k.volume);
           return row;
         });
+      return [...rs, ...fresh];
+    });
+  };
+
+  // P1-10：规则生成（种子默认取当前清单关键词；品牌/域名手动填）。
+  const onRuleGenerate = async () => {
+    const seeds = ruleSeeds
+      .split(/[,，\n]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const seedsFinal =
+      seeds.length > 0
+        ? seeds
+        : rows.map((r) => r.keyword.trim()).filter(Boolean);
+    if (seedsFinal.length === 0 || ruleLoading) return;
+    setRuleLoading(true);
+    setRuleError(null);
+    try {
+      const res = await generateKeywordIdeasAction({
+        seeds: seedsFinal,
+        brandTerms: ruleBrand.split(/[,，\n]/).map((s) => s.trim()).filter(Boolean),
+        domain: ruleDomain.trim() || undefined,
+      });
+      if (res.ok) {
+        setRuleIdeas(res.data.ideas);
+      } else {
+        setRuleError(res.error || d.ruleFailed);
+      }
+    } catch {
+      setRuleError(d.ruleFailed);
+    } finally {
+      setRuleLoading(false);
+    }
+  };
+
+  const importRuleIdea = (idea: RuleKeywordIdea) => {
+    const t = idea.keyword.trim();
+    if (!t) return;
+    setRows((rs) => {
+      const have = new Set(rs.map((r) => r.keyword.trim().toLowerCase()));
+      if (have.has(t.toLowerCase())) return rs;
+      return [...rs, newRow(t)];
+    });
+  };
+
+  const importAllRule = () => {
+    setRows((rs) => {
+      const have = new Set(rs.map((r) => r.keyword.trim().toLowerCase()));
+      const fresh = ruleIdeas
+        .filter((k) => k.keyword.trim() && !have.has(k.keyword.trim().toLowerCase()))
+        .map((k) => newRow(k.keyword.trim()));
       return [...rs, ...fresh];
     });
   };
@@ -584,6 +643,82 @@ export function DemandCheckClient({
                   className="shrink-0 text-xs text-signal hover:underline"
                 >
                   {d.aiImportOne}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* P1-10：规则生成关键词（规则分 + 来源 + 品牌覆盖警告；搜索量/竞争度 — 不编造）。 */}
+      <div className="rounded-xl border border-ink/10 bg-white p-4">
+        <h3 className="text-sm font-semibold text-ink">📏 {d.ruleTitle}</h3>
+        <p className="mt-1 text-xs text-ink/50">{d.ruleHint}</p>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <input
+            value={ruleSeeds}
+            onChange={(e) => setRuleSeeds(e.target.value)}
+            placeholder={d.ruleSeeds}
+            className={`${inputCls} max-w-xs`}
+          />
+          <input
+            value={ruleBrand}
+            onChange={(e) => setRuleBrand(e.target.value)}
+            placeholder={d.ruleBrand}
+            className={`${inputCls} max-w-xs`}
+          />
+          <input
+            value={ruleDomain}
+            onChange={(e) => setRuleDomain(e.target.value)}
+            placeholder={d.ruleDomain}
+            className={`${inputCls} max-w-xs`}
+          />
+          <button
+            type="button"
+            onClick={onRuleGenerate}
+            disabled={ruleLoading}
+            className="rounded-lg bg-ink px-3 py-1.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+          >
+            {ruleLoading ? d.ruleGenerating : d.ruleGenerate}
+          </button>
+          {ruleIdeas.length > 0 && (
+            <button
+              type="button"
+              onClick={importAllRule}
+              className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink/70 hover:bg-ink/5"
+            >
+              {d.ruleImportAll} ({ruleIdeas.length})
+            </button>
+          )}
+        </div>
+        {ruleError && <p className="mt-2 text-xs text-red-600">{ruleError}</p>}
+        {ruleIdeas.length > 0 && (
+          <div className="mt-3 space-y-1.5">
+            <p className="text-xs text-ink/50">{d.ruleNoVolume}</p>
+            {ruleIdeas.map((idea) => (
+              <div
+                key={idea.keyword}
+                className="flex items-center justify-between gap-2 rounded-lg bg-ink/[0.03] px-3 py-2"
+              >
+                <div className="min-w-0">
+                  <span className="text-sm font-medium text-ink">{idea.keyword}</span>
+                  <span className="ml-2 rounded bg-ink/5 px-1.5 py-0.5 text-[11px] text-ink/60">
+                    {d.ruleSourceLabel} · {d.ruleKindLabels[idea.kind]} · 规则分 {idea.ruleScore}
+                  </span>
+                  <span className="ml-2 text-xs text-ink/50">搜索量 — · 竞争度 —</span>
+                  {idea.brandCoverageWarn ? (
+                    <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[11px] text-amber-800">
+                      ⚠️ {d.ruleCoverageWarn}
+                      {idea.brandCoverage != null ? `（${idea.brandCoverage}）` : ""}
+                    </span>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => importRuleIdea(idea)}
+                  className="shrink-0 text-xs text-signal hover:underline"
+                >
+                  {d.ruleImportOne}
                 </button>
               </div>
             ))}

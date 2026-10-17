@@ -22,6 +22,8 @@
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@adlinklab/database";
 import { queueCampaignToggleTask } from "../services/campaign-toggle-script.js";
+import { checkDuplicateClicks } from "../monitoring/checker.js";
+import { businessMetrics } from "../observability/index.js";
 
 export type KillSwitchTriggerType =
   | "SPEND_PROFIT"
@@ -29,7 +31,8 @@ export type KillSwitchTriggerType =
   | "POLICY_RISK"
   | "MERCHANT_TERMINATED"
   | "TEST_STOPLOSS_CAP"
-  | "TEST_STOPLOSS_ZERO_CONV";
+  | "TEST_STOPLOSS_ZERO_CONV"
+  | "DUPLICATE_CLICKS";
 
 export interface KillSwitchTrigger {
   type: KillSwitchTriggerType;
@@ -342,6 +345,46 @@ export async function evaluateKillSwitch(
           },
         });
       }
+    }
+  }
+
+  // ---- (6) P1-24：重复点击闭环 -------------------------------------------
+  // gclid 优先、30 分钟窗口、重复率 >5%、样本 ≥50（K9 口径，小样本绝不触发）。
+  // 触发后走统一执行路径：KillSwitchEvent + Alert + 暂停链接（24h 去重见 execute）。
+  {
+    const since = new Date(Date.now() - 24 * 3600 * 1000);
+    const rows = (await prisma.click.findMany({
+      where: {
+        tenantId,
+        offerId,
+        isTest: { not: true },
+        occurredAt: { gte: since },
+      },
+      select: { gclid: true, ipAddress: true, trackingLinkId: true, occurredAt: true },
+      orderBy: { occurredAt: "asc" },
+      take: 5000,
+    })) as Array<{
+      gclid: string | null;
+      ipAddress: string | null;
+      trackingLinkId: string;
+      occurredAt: Date;
+    }>;
+    const dup = checkDuplicateClicks(rows, {});
+    if (typeof dup.windowValue === "number") {
+      businessMetrics.setDuplicateClickRate(dup.windowValue); // P2-3 gauge
+    }
+    if (dup.skipReason) {
+      skip(`DUPLICATE_CLICKS:${dup.skipReason}`);
+    } else if (dup.breached) {
+      pushTrigger({
+        type: "DUPLICATE_CLICKS",
+        message: `重复点击率 ${(dup.windowValue! * 100).toFixed(1)}% 超过 5%（样本 ${rows.length}，近 24h）`,
+        snapshot: {
+          duplicateRate: dup.windowValue,
+          sampleSize: rows.length,
+          deltaDescription: dup.deltaDescription,
+        },
+      });
     }
   }
 

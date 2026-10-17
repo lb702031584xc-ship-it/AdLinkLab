@@ -29,6 +29,7 @@ import {
   assertAiSettingsPepperConfigured,
   decryptSecret,
 } from "../ai/crypto.js";
+import { creativeSelfCheck } from "../ai/creative-self-check.js";
 import { AiError, chatJson, chatJsonValidated } from "../ai/llm.js";
 import { fetchPage } from "../ai/fetch-page.js";
 import {
@@ -41,9 +42,12 @@ import {
   buildCopyPack,
   createPlanStore,
   finalizeAdPlan,
+  mergeUserNegatives,
   normalizeCopyStyle,
   normalizeFestivalThemeInput,
   normalizeUserKeywords,
+  parseAdSchedules,
+  parseNegativeKeywords,
   validateAdPlanUrlDraft,
   type AdPlan,
   type AdPlanUrlDraft,
@@ -410,6 +414,21 @@ export async function registerAdsAutoRoutes(
       finalUrls,
     });
 
+    // P1-25：生成时传入的否词/排期（预览页也可再编辑，确认时以确认体为准）。
+    // 否词解析错误 → 显性 400，不静默丢弃。
+    let userNegatives: ReturnType<typeof parseNegativeKeywords> = [];
+    try {
+      userNegatives = parseNegativeKeywords((body as { negativeKeywords?: unknown }).negativeKeywords);
+    } catch (err) {
+      throw new ValidationError(err instanceof Error ? err.message : "negativeKeywords invalid");
+    }
+    mergeUserNegatives(plan, userNegatives);
+    try {
+      plan.adSchedules = parseAdSchedules((body as { adSchedules?: unknown }).adSchedules);
+    } catch (err) {
+      throw new ValidationError(err instanceof Error ? err.message : "adSchedules invalid");
+    }
+
     // 按广告账户结算货币换算计划金额：计划按 USD 生成，账户为 CNY 时必须换算，
     // 否则 Script 会把 USD 数值当成账户货币推出去（差一个汇率）。账户找不到时不换算。
     if (googleAccountId) {
@@ -432,9 +451,27 @@ export async function registerAdsAutoRoutes(
 
     planStore.put(plan);
 
+    // P1-9：创意 7 维自检（启发式规则，非 AI 评分；fail 仅为自检提醒，不拦截确认）。
+    // 品牌词取 Offer 的品牌名/名称（无 Offer 时为空，品牌维计 0 分但不 fail）。
+    let brandTerms: string[] = [];
+    if (plan.offerId) {
+      const offerRow = await prisma.offer.findFirst({
+        where: { id: plan.offerId, tenantId: info.tenantId },
+        select: { name: true, brandName: true },
+      });
+      brandTerms = [offerRow?.brandName ?? "", offerRow?.name ?? ""].filter(Boolean);
+    }
+    const creativeCheck = creativeSelfCheck({
+      headlines: plan.adGroups.flatMap((g) => g.rsa.headlines),
+      descriptions: plan.adGroups.flatMap((g) => g.rsa.descriptions),
+      keywords: plan.adGroups.flatMap((g) => g.group.keywords.map((k) => k.text)),
+      brandTerms,
+    });
+
     return {
       planId: plan.planId,
       plan,
+      creativeCheck,
       expiresInSeconds: 2 * 60 * 60,
     };
   });
@@ -454,6 +491,8 @@ export async function registerAdsAutoRoutes(
       dailyBudgetCurrency?: unknown;
       maxCpcCurrency?: unknown;
       geoTargets?: unknown;
+      negativeKeywords?: unknown;
+      adSchedules?: unknown;
     };
     const planId = asTrimmedString(body.planId);
     if (!planId || !UUID_RE.test(planId)) {
@@ -577,7 +616,39 @@ export async function registerAdsAutoRoutes(
       plan.campaign.geoTargets = geoTargetsOverride;
     }
 
-    // Resolve the Script integration that will execute the task.
+    // P1-25：预览页编辑的否词/排期（确认时生效）。
+    // 否词 = 全量替换各组否词（预览页展示的是完整列表）；排期 = 全量替换。
+    if (body.negativeKeywords !== undefined && body.negativeKeywords !== null) {
+      let confirmed: ReturnType<typeof parseNegativeKeywords>;
+      try {
+        confirmed = parseNegativeKeywords(body.negativeKeywords);
+      } catch (err) {
+        throw new ValidationError(err instanceof Error ? err.message : "negativeKeywords invalid");
+      }
+      for (const block of plan.adGroups) {
+        block.group.negativeKeywords = confirmed.map((k) => ({ ...k })).slice(0, 100);
+      }
+    }
+    if (body.adSchedules !== undefined && body.adSchedules !== null) {
+      try {
+        plan.adSchedules = parseAdSchedules(body.adSchedules);
+      } catch (err) {
+        throw new ValidationError(err instanceof Error ? err.message : "adSchedules invalid");
+      }
+    }
+
+    // P1-8：封停账号不进发布流程（显性拒绝，不静默跳过）。
+    if (plan.googleAccountId) {
+      const acct = await prisma.googleAccount.findFirst({
+        where: { id: plan.googleAccountId, tenantId: info.tenantId },
+        select: { healthStatus: true, suspensionReason: true },
+      });
+      if (acct?.healthStatus === "suspended") {
+        throw new ValidationError(
+          `Google 账号已封停，无法发布${acct.suspensionReason ? `（${acct.suspensionReason}）` : ""}。请处理申诉后再试。`
+        );
+      }
+    }
     const integrationWhere: Record<string, unknown> = {
       tenantId: info.tenantId,
       status: "ACTIVE",
@@ -630,6 +701,22 @@ export async function registerAdsAutoRoutes(
       };
     }
 
+    // P1-16：批量审计 — 确认前写 BEFORE（完整计划快照），确认后写 AFTER。
+    // 失败回滚靠这两条审计记录 + /ads/operations 回滚接口。
+    const beforeAuditId = randomUUID();
+    await prisma.auditLog.create({
+      data: {
+        id: beforeAuditId,
+        tenantId: info.tenantId,
+        actorId: info.id,
+        action: "BULK_CREATE_BEFORE",
+        entityType: "AdPlan",
+        entityId: plan.planId,
+        after: JSON.parse(JSON.stringify({ plan })) as never,
+        reason: "P1-16: bulk-create audit (before)",
+      },
+    });
+
     const target = await prisma.scriptSyncTarget.create({
       data: {
         id: randomUUID(),
@@ -647,9 +734,10 @@ export async function registerAdsAutoRoutes(
         id: randomUUID(),
         tenantId: info.tenantId,
         actorId: info.id,
-        action: "ADS_AUTO_CREATE_CONFIRMED",
+        action: "BULK_CREATE_AFTER",
         entityType: "ScriptSyncTarget",
         entityId: target.id,
+        before: { beforeAuditId },
         // Deep-clone to plain JSON for the Prisma Json field.
         after: JSON.parse(
           JSON.stringify({
@@ -661,6 +749,7 @@ export async function registerAdsAutoRoutes(
             dailyBudget: plan.campaign.dailyBudget,
           })
         ) as never,
+        reason: "P1-16: bulk-create audit (after)",
       },
     });
 

@@ -44,6 +44,13 @@ export interface AiAnalysisReport {
   suggestions: string[];
   keywords: string[];
   adAngles: string[];
+  /** P1-9：评估扩展维度（可选；模型无依据时省略，不编造）。 */
+  dimensions?: Partial<
+    Record<
+      "seasonality" | "ltv" | "competition" | "conversionPath" | "budget",
+      { score: number; note: string }
+    >
+  >;
 }
 
 export interface AiAnalysis {
@@ -80,6 +87,9 @@ export interface AiSettings {
   hasTrafficDataforseo?: boolean;
   /** Keepa API Key 配置状态（后端未返回时为 undefined） */
   hasKeepa?: boolean;
+  /** P1-26：模型价格表（USD/1M tokens；配置价，非实时官方价）。 */
+  modelPricing?: Record<string, { inputPerMillionUsd: number; outputPerMillionUsd: number }>;
+  modelPricingNote?: string;
 }
 
 export interface AnalyzeInput {
@@ -189,6 +199,10 @@ export interface AiUrlCheckResult {
   isOwnedDomain: boolean;
   affiliateParams: string[];
   verdict: UrlCheckVerdict;
+  /** P1-3：重定向跳数（0 = 无重定向；>3 跳黄色警告）。旧数据可能缺失。 */
+  redirectHops?: number;
+  /** P1-3：重定向链（每跳 { url, status }）。 */
+  redirectChain?: Array<{ url: string; status: number }>;
 }
 
 export interface AiUrlCheckResponse {
@@ -309,6 +323,22 @@ export async function listAnalyses(): Promise<AiAnalysisSummary[]> {
 export async function getAnalysis(id: string): Promise<AiAnalysis> {
   return aiFetch<AiAnalysis>(
     `/api/v1/ai/analyses/${encodeURIComponent(id)}`
+  );
+}
+
+/** P2-1：同 URL 聚合 — 已评估次数 + 最新分。 */
+export interface AnalysesAggregate {
+  url: string;
+  count: number;
+  latestId: string | null;
+  latestOverallRisk: number | null;
+  latestRiskLevel: string | null;
+  latestCreatedAt: string | null;
+}
+
+export async function getAnalysesAggregate(url: string): Promise<AnalysesAggregate> {
+  return aiFetch<AnalysesAggregate>(
+    `/api/v1/ai/analyses/aggregate?url=${encodeURIComponent(url)}`
   );
 }
 

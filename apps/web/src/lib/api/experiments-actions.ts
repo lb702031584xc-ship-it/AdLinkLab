@@ -12,6 +12,7 @@ import {
   completeExperiment,
   createExperiment,
   getExperiment,
+  graduateExperiment,
   listExperiments,
   startExperiment,
   submitExperimentMetrics,
@@ -128,5 +129,17 @@ export async function cancelExperimentAction(
     return { ok: true, data: await cancelExperiment(id) };
   } catch (e) {
     return mapError(e, d.detail.cancelFailed);
+  }
+}
+
+/** P1-12：毕业（pause_loser 只返回 Script 指引，不直接暂停）。 */
+export async function graduateExperimentAction(
+  id: string
+): Promise<ExperimentActionResult<Experiment & { graduation: unknown }>> {
+  const d = await t();
+  try {
+    return { ok: true, data: await graduateExperiment(id) };
+  } catch (e) {
+    return mapError(e, d.detail.graduateFailed ?? d.detail.completeFailed);
   }
 }

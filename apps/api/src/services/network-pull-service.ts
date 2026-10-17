@@ -19,6 +19,24 @@ import {
 } from "../networks/network-crypto.js";
 import { getAdapter } from "../networks/index.js";
 import type { NetworkAdapter, NetworkOffer } from "../networks/types.js";
+import {
+  CircuitBreaker,
+  CircuitBreakerOpenError,
+} from "../utils/circuit-breaker.js";
+
+/**
+ * P2-10：每网络一个熔断器（按 network.id 分桶；调用保护，绝不暂停广告）。
+ * OPEN 时直接跳过下游拉取，pull 记 FAILED + 熔断原因，不重试轰炸已挂的联盟 API。
+ */
+const breakersByNetwork = new Map<string, CircuitBreaker>();
+export function breakerForNetwork(networkId: string): CircuitBreaker {
+  let cb = breakersByNetwork.get(networkId);
+  if (!cb) {
+    cb = new CircuitBreaker(`network-pull:${networkId}`);
+    breakersByNetwork.set(networkId, cb);
+  }
+  return cb;
+}
 
 export interface NetworkPullLog {
   info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -151,11 +169,22 @@ export async function pullNetwork(
     const apiKey = decryptApiKey(network.apiKeyRef, pepper);
     const adapter = getAdapterImpl(network.kind);
 
-    const offers = await adapter.pullOffers({
-      apiKey,
-      apiBaseUrl: (network.apiBaseUrl ?? "").trim() || adapter.defaultBaseUrl,
-      tenantId,
-    });
+    // P2-10：熔断器包裹下游拉取；OPEN 时直接 fail（不触碰联盟 API）。
+    let offers: NetworkOffer[];
+    try {
+      offers = await breakerForNetwork(network.id).execute(() =>
+        adapter.pullOffers({
+          apiKey,
+          apiBaseUrl: (network.apiBaseUrl ?? "").trim() || adapter.defaultBaseUrl,
+          tenantId,
+        })
+      );
+    } catch (e) {
+      if (e instanceof CircuitBreakerOpenError) {
+        return await fail(`联盟 API 熔断器已打开（连续失败），本次跳过拉取：${e.message}`);
+      }
+      throw e;
+    }
 
     let newCount = 0;
     let updatedCount = 0;

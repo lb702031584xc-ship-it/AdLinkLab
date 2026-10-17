@@ -36,6 +36,13 @@ export const zh = {
   variantType: {
     LANDING_PAGE: "落地页",
     DIRECT_LINK: "直链",
+    AD_GROUP: "广告组文案",
+  },
+  /** P1-12：实验类型标签。 */
+  experimentType: {
+    LANDING_PAGE: "落地页",
+    DIRECT_LINK: "直链",
+    AD_GROUP: "广告组文案 A/B",
   },
   form: {
     title: "新建实验",
@@ -55,6 +62,19 @@ export const zh = {
     creating: "创建中…",
     createFailed: "创建实验失败",
     missingField: "请填写完整：offer、名称、两个变体的类型与 tracking link",
+    /** P1-12：AD_GROUP 实验表单字段。 */
+    experimentTypeLabel: "实验类型",
+    seedAdGroupLabel: "种子广告组 ID（可选）",
+    seedAdGroupPlaceholder: "粘贴种子广告组的 UUID…",
+    graduationLabel: "毕业动作",
+    graduationNone: "无（只判定胜者）",
+    graduationPauseLoser: "暂停失败方（Script 渠道 + 人工确认）",
+    headlinesLabel: "标题（每行一条）",
+    headlinesPlaceholder: "每行一条标题…",
+    descriptionsLabel: "描述（每行一条）",
+    descriptionsPlaceholder: "每行一条描述…",
+    creativeDifference: "创意差异度",
+    creativeDifferenceWarn: "创意差异度不足，建议重新生成",
   },
   detail: {
     back: "返回实验列表",
@@ -80,6 +100,13 @@ export const zh = {
     winner: "胜者",
     confidence: "置信度",
     winnerNote: "判定说明",
+    /** P1-12：毕业（pause_loser 只返回 Script 指引，不直接暂停）。 */
+    graduate: "毕业（暂停失败方需人工确认）",
+    graduating: "毕业中…",
+    graduateFailed: "毕业失败",
+    graduated: "已记录毕业请求，请按指引在 Google Ads 中人工确认后通过 Script 暂停失败方。",
+    creativeDifference: "创意差异度",
+    abuseNote: "同一广告反复投放同一 ADS 属于滥用（禁止）；3 创意 A/B 需每对差异度 ≥ 50%。",
     precondition: "启动前检查证据",
     noMetrics: "尚未录入指标",
     field: {
@@ -131,6 +158,13 @@ export const en = {
   variantType: {
     LANDING_PAGE: "Landing page",
     DIRECT_LINK: "Direct link",
+    AD_GROUP: "Ad group copy",
+  },
+  /** P1-12：experiment type labels. */
+  experimentType: {
+    LANDING_PAGE: "Landing page",
+    DIRECT_LINK: "Direct link",
+    AD_GROUP: "Ad group copy A/B",
   },
   form: {
     title: "New experiment",
@@ -150,6 +184,19 @@ export const en = {
     creating: "Creating…",
     createFailed: "Failed to create experiment",
     missingField: "Please fill in: offer, name, and type + tracking link for both variants",
+    /** P1-12：AD_GROUP experiment form fields. */
+    experimentTypeLabel: "Experiment type",
+    seedAdGroupLabel: "Seed ad group ID (optional)",
+    seedAdGroupPlaceholder: "Paste the seed ad group UUID…",
+    graduationLabel: "Graduation action",
+    graduationNone: "None (decide winner only)",
+    graduationPauseLoser: "Pause loser (Script channel + manual confirmation)",
+    headlinesLabel: "Headlines (one per line)",
+    headlinesPlaceholder: "One headline per line…",
+    descriptionsLabel: "Descriptions (one per line)",
+    descriptionsPlaceholder: "One description per line…",
+    creativeDifference: "Creative difference",
+    creativeDifferenceWarn: "Creative difference is insufficient — regenerate",
   },
   detail: {
     back: "Back to experiments",
@@ -175,6 +222,13 @@ export const en = {
     winner: "Winner",
     confidence: "Confidence",
     winnerNote: "Decision note",
+    /** P1-12：graduate (pause_loser returns Script guidance only, never auto-pauses). */
+    graduate: "Graduate (pausing loser needs manual confirmation)",
+    graduating: "Graduating…",
+    graduateFailed: "Failed to graduate",
+    graduated: "Graduation request recorded. Follow the guidance to manually confirm in Google Ads, then pause the loser via Script.",
+    creativeDifference: "Creative difference",
+    abuseNote: "Running the same ad repeatedly in the same ADS is abuse (forbidden); 3-creative A/B requires every pair ≥ 50% different.",
     precondition: "Pre-start check evidence",
     noMetrics: "No metrics recorded yet",
     field: {

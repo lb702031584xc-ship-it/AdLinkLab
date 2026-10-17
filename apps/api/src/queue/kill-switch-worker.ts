@@ -1,5 +1,6 @@
 import type { PrismaClient } from "@adlinklab/database";
 import { executeKillSwitch } from "../killswitch/engine.js";
+import { businessMetrics } from "../observability/index.js";
 
 /**
  * Phase 3 — kill-switch worker entry (BullMQ Worker calls this on the
@@ -48,6 +49,7 @@ export async function processKillSwitchJob(input: {
       evaluated += 1;
       if (result.triggers.length > 0) {
         fired += 1;
+        businessMetrics.killSwitchFiredOnce(); // P2-3
         linksPaused += result.linksPaused;
         if (result.alertCreated) alertsCreated += 1;
         log.info("kill-switch fired", {

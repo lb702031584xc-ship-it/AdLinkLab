@@ -30,6 +30,26 @@ export interface GoogleAccount {
   status: string;
   createdAt: string;
   updatedAt: string;
+  /** P1-7：MCC | PERSONAL（创建时必填，创建后不可变更）。 */
+  accountType?: "MCC" | "PERSONAL";
+  managerCustomerId?: string;
+  /** P1-8：active | suspended | limited。 */
+  healthStatus?: "active" | "suspended" | "limited";
+  suspensionReason?: string;
+  appealStatus?: "none" | "pending" | "approved" | "rejected";
+  appealNote?: string;
+  suspendedAt?: string;
+}
+
+/** P1-8：账号申诉记录（只记录平台侧申诉时间/结果，不自动申诉）。 */
+export interface GoogleAccountAppeal {
+  id: string;
+  tenantId: string;
+  googleAccountId: string;
+  level: string;
+  status: string;
+  note?: string | null;
+  createdAt: string;
 }
 
 export interface GoogleAccountStatus {
@@ -84,6 +104,8 @@ export interface MetricsSummary {
   score: number | null;
   grade: string | null;
   fetchedAt: string;
+  /** P1-30：最近一次抓取的评论数（metrics.reviewCount），无数据时 null。 */
+  reviewCount: number | null;
 }
 
 export interface Offer {
@@ -387,15 +409,24 @@ function put<T>(path: string, body: unknown = {}): Promise<T> {
 
 export const entityApi = {
   googleAccounts: {
-    list: (page?: number, pageSize?: number) =>
-      apiFetch<Paginated<GoogleAccount>>(
-        `/api/v1/google-accounts${pageQuery(page, pageSize)}`
-      ),
+    list: (page?: number, pageSize?: number, filter?: { accountType?: string; healthStatus?: string }) => {
+      const params = new URLSearchParams();
+      if (page) params.set("page", String(page));
+      if (pageSize) params.set("pageSize", String(pageSize));
+      if (filter?.accountType) params.set("accountType", filter.accountType);
+      if (filter?.healthStatus) params.set("healthStatus", filter.healthStatus);
+      const qs = params.toString();
+      return apiFetch<Paginated<GoogleAccount>>(
+        `/api/v1/google-accounts${qs ? `?${qs}` : ""}`
+      );
+    },
     create: (input: {
       name: string;
       customerId: string;
       currency?: string;
       timezone?: string;
+      accountType: "MCC" | "PERSONAL";
+      managerCustomerId?: string;
     }) => post<GoogleAccount>(`/api/v1/google-accounts`, input),
     update: (id: string, input: { currency: string }) =>
       patch<GoogleAccount>(
@@ -409,6 +440,26 @@ export const entityApi = {
     sync: (id: string) =>
       post<{ job: SyncJob; summary: unknown; created: boolean; replayed: boolean }>(
         `/api/v1/google-accounts/${encodeURIComponent(id)}/sync`
+      ),
+    /** P1-7：MCC 子账号（个人账户调此接口会 400）。 */
+    listSubAccounts: (id: string) =>
+      apiFetch<{ items: GoogleAccount[] }>(
+        `/api/v1/google-accounts/${encodeURIComponent(id)}/sub-accounts`
+      ),
+    /** P1-8：记录封停 / 申诉（只做记录，不自动申诉）。 */
+    recordSuspension: (id: string, suspensionReason: string) =>
+      post<GoogleAccount>(
+        `/api/v1/google-accounts/${encodeURIComponent(id)}/suspension`,
+        { suspensionReason }
+      ),
+    listAppeals: (id: string) =>
+      apiFetch<{ items: GoogleAccountAppeal[] }>(
+        `/api/v1/google-accounts/${encodeURIComponent(id)}/appeals`
+      ),
+    recordAppeal: (id: string, input: { level: string; status: string; note?: string }) =>
+      post<GoogleAccountAppeal>(
+        `/api/v1/google-accounts/${encodeURIComponent(id)}/appeals`,
+        input
       ),
   },
 

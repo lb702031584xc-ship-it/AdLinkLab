@@ -8,6 +8,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@adlinklab/database";
+import { notifyAlert } from "../services/notify-alert.js";
 import {
   checkBreach,
   type MonitorAggregates,
@@ -338,7 +339,7 @@ export async function runMonitorScan(
           autoPaused = true;
         }
 
-        await prisma.alert.create({
+        const createdAlert = await prisma.alert.create({
           data: {
             id: randomUUID(),
             tenantId,
@@ -368,6 +369,16 @@ export async function runMonitorScan(
             ),
             status: "open",
           },
+        });
+        // P1-22：出站通知（Webhook，best-effort，绝不阻塞 Alert 创建）。
+        await notifyAlert(prisma, {
+          id: createdAlert.id,
+          tenantId,
+          ruleId: createdAlert.ruleId,
+          metric: createdAlert.metric,
+          severity: createdAlert.severity,
+          message: createdAlert.message,
+          createdAt: createdAlert.createdAt,
         });
         alertsCreated += 1;
       }

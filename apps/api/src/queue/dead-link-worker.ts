@@ -22,6 +22,7 @@ import {
   type DeadLinkScanOpts,
   type DeadLinkScanSummary,
 } from "../services/dead-link-service.js";
+import { recordDeadLetter } from "./dead-letter.js";
 
 export interface DeadLinkLog {
   info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -64,6 +65,15 @@ export async function processDeadLinkJob(
       tenantId: input.tenantId ?? "all",
       error: error instanceof Error ? error.message : String(error),
     });
+    // P1-21：整批扫描失败 → 记 DLQ（去重 1h），供 /jobs 页重试/丢弃。
+    if (input.tenantId) {
+      await recordDeadLetter(input.prisma, {
+        tenantId: input.tenantId,
+        jobName: "dead-link-check",
+        payload: { triggeredBy: input.triggeredBy },
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     summary = {
       checked: 0,
       alive: 0,

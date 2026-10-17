@@ -16,6 +16,8 @@ import {
 import { getLang } from "@/i18n/lang";
 import { getDictionary } from "@/i18n/dictionaries";
 
+import { DeadLetterClient } from "@/components/jobs/dead-letter-client";
+
 export const dynamic = "force-dynamic";
 
 type SearchParams = Record<string, string | string[] | undefined>;
@@ -102,16 +104,40 @@ export default async function JobsPage({
         description={t.ops.jobs.description}
       />
 
-      {error ? <ErrorState message={error} title={t.common.error.title} /> : null}
+      {/* P1-21：DLQ 页签。 */}
+      <div className="mt-3 flex gap-2 text-sm">
+        <a
+          href="/jobs"
+          className={`rounded-lg border px-3 py-1.5 ${params.tab !== "dlq" ? "bg-ink text-white" : "bg-white text-ink"}`}
+        >
+          任务
+        </a>
+        <a
+          href="/jobs?tab=dlq"
+          className={`rounded-lg border px-3 py-1.5 ${params.tab === "dlq" ? "bg-ink text-white" : "bg-white text-ink"}`}
+        >
+          死信队列（DLQ）
+        </a>
+      </div>
 
-      <DataTable columns={columns} rows={jobs} emptyText={t.ops.jobs.empty} />
-      <Pagination
-        labels={paginationLabels(t)}
-        page={page}
-        pageSize={pageSize}
-        total={total}
-        basePath="/jobs"
-      />
+      {params.tab === "dlq" ? (
+        <div className="mt-4">
+          <DeadLetterClient />
+        </div>
+      ) : (
+        <>
+          {error ? <ErrorState message={error} title={t.common.error.title} /> : null}
+
+          <DataTable columns={columns} rows={jobs} emptyText={t.ops.jobs.empty} />
+          <Pagination
+            labels={paginationLabels(t)}
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            basePath="/jobs"
+          />
+        </>
+      )}
     </div>
   );
 }

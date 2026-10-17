@@ -18,13 +18,19 @@ export class ExperimentApiError extends Error {
 }
 
 export type ExperimentStatus = "DRAFT" | "RUNNING" | "COMPLETED" | "CANCELLED";
-export type ExperimentVariantType = "LANDING_PAGE" | "DIRECT_LINK";
+export type ExperimentVariantType = "LANDING_PAGE" | "DIRECT_LINK" | "AD_GROUP";
 export type ExperimentWinner = "A" | "B" | "TIE";
+/** P1-12：实验类型 + 毕业动作。 */
+export type ExperimentType = "LANDING_PAGE" | "DIRECT_LINK" | "AD_GROUP";
+export type GraduationAction = "none" | "pause_loser";
 
 export interface ExperimentVariant {
   type: ExperimentVariantType;
-  trackingLinkId: string;
+  trackingLinkId: string | null;
   label: string;
+  /** P1-12：AD_GROUP 变体文案。 */
+  headlines?: string[];
+  descriptions?: string[];
 }
 
 export interface ExperimentMetrics {
@@ -66,6 +72,13 @@ export interface Experiment {
   endedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  /** P1-12：实验类型 / 种子广告组 / 毕业动作 / 创意差异度（AD_GROUP 才有）。 */
+  experimentType?: ExperimentType;
+  seedAdGroupId?: string | null;
+  graduationAction?: GraduationAction;
+  creativeDifference?: number | null;
+  creativeDifferenceSufficient?: boolean | null;
+  creativeDifferenceWarning?: string | null;
 }
 
 export interface ExperimentListResult {
@@ -76,9 +89,24 @@ export interface ExperimentListResult {
 export interface CreateExperimentInput {
   offerId: string;
   name: string;
-  variantA: { type: ExperimentVariantType; trackingLinkId: string; label?: string };
-  variantB: { type: ExperimentVariantType; trackingLinkId: string; label?: string };
+  variantA: {
+    type: ExperimentVariantType;
+    trackingLinkId?: string | null;
+    label?: string;
+    headlines?: string[];
+    descriptions?: string[];
+  };
+  variantB: {
+    type: ExperimentVariantType;
+    trackingLinkId?: string | null;
+    label?: string;
+    headlines?: string[];
+    descriptions?: string[];
+  };
   trafficSplitA?: number;
+  experimentType?: ExperimentType;
+  seedAdGroupId?: string | null;
+  graduationAction?: GraduationAction;
 }
 
 export interface WinnerDetail {
@@ -191,6 +219,14 @@ export async function completeExperiment(
 export async function cancelExperiment(id: string): Promise<Experiment> {
   return expFetch<Experiment>(
     `/api/v1/experiments/${encodeURIComponent(id)}/cancel`,
+    { method: "POST" }
+  );
+}
+
+/** P1-12：毕业（COMPLETED + 已分胜负；pause_loser 只返回 Script 指引，不直接暂停）。 */
+export async function graduateExperiment(id: string): Promise<Experiment & { graduation: unknown }> {
+  return expFetch<Experiment & { graduation: unknown }>(
+    `/api/v1/experiments/${encodeURIComponent(id)}/graduate`,
     { method: "POST" }
   );
 }

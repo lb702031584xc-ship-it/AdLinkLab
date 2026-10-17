@@ -7,6 +7,11 @@ import { getOfferPerformanceAction } from "@/lib/api/p1-actions";
 import type { OfferPerformance } from "@/lib/api/p1";
 import { analyzeProfitAction } from "@/lib/api/ai-actions";
 import type { ProfitAnalysisResult } from "@/lib/api/profit-types";
+import {
+  ASSUMED_CLICKS_TO_ORDER,
+  clicksToOrderFromCvr,
+  suggestCpcByClicksToOrder,
+} from "@/lib/profit-calc";
 
 export interface ProfitOfferOption {
   id: string;
@@ -74,6 +79,9 @@ export function ProfitClient({ offers }: { offers: ProfitOfferOption[] }) {
   const [bidResult, setBidResult] = useState<ProfitAnalysisResult | null>(null);
   const [bidLoading, setBidLoading] = useState(false);
   const [bidError, setBidError] = useState<string | null>(null);
+  /** P1-1：双公式输入（仅价格 × 比例区间模式）。 */
+  const [dualCtoOverride, setDualCtoOverride] = useState("");
+  const [dualTargetRoiPct, setDualTargetRoiPct] = useState("100");
 
   async function runBidAnalysis() {
     setBidLoading(true);
@@ -161,6 +169,60 @@ export function ProfitClient({ offers }: { offers: ProfitOfferOption[] }) {
   const budgetCost =
     budgetClicks !== null && hasCpc ? budgetClicks * cpcN : null;
   const ruleBudget = hasPayout ? 3 * payoutN : null;
+
+  /* P1-1 — 建议 CPC 双公式并列（补充，不改 K3 公式；仅价格 × 比例区间模式）。
+     A = 价格中值 × 佣金比例中值 ÷ 预期点击出单数；分母优先用填写的 CVR
+     （1 ÷ CVR），未填时用讲师假设 50 并打估算角标；用户可手改分母。
+     B = EPC ÷ (1 + 目标 ROI)，EPC = 区间佣金中值 × CVR。 */
+  const bidPriceMid =
+    bidMode === "range" &&
+    Number.isFinite(parseFloat(bidPriceMin)) &&
+    Number.isFinite(parseFloat(bidPriceMax))
+      ? (parseFloat(bidPriceMin) + parseFloat(bidPriceMax)) / 2
+      : null;
+  const bidPctMid =
+    bidMode === "range" &&
+    Number.isFinite(parseFloat(bidPctMin)) &&
+    Number.isFinite(parseFloat(bidPctMax))
+      ? (parseFloat(bidPctMin) + parseFloat(bidPctMax)) / 2
+      : null;
+  const bidCvrNum = parseFloat(bidCvr);
+  const dualCtoFromCvr =
+    Number.isFinite(bidCvrNum) && bidCvrNum > 0 && bidCvrNum < 100
+      ? clicksToOrderFromCvr(bidCvrNum / 100)
+      : null;
+  const dualCtoOverrideNum = parseFloat(dualCtoOverride);
+  const dualEffectiveCto =
+    Number.isFinite(dualCtoOverrideNum) && dualCtoOverrideNum > 0
+      ? dualCtoOverrideNum
+      : (dualCtoFromCvr ?? ASSUMED_CLICKS_TO_ORDER);
+  const dualCtoSource =
+    Number.isFinite(dualCtoOverrideNum) && dualCtoOverrideNum > 0
+      ? "manual"
+      : dualCtoFromCvr !== null
+        ? "measured"
+        : "assumed";
+  const dualFormulaA =
+    bidPriceMid !== null && bidPctMid !== null
+      ? suggestCpcByClicksToOrder({
+          price: bidPriceMid,
+          commissionRatePct: bidPctMid,
+          clicksToOrder: dualEffectiveCto,
+        })
+      : null;
+  const dualEpc =
+    bidPriceMid !== null &&
+    bidPctMid !== null &&
+    Number.isFinite(bidCvrNum) &&
+    bidCvrNum > 0 &&
+    bidCvrNum < 100
+      ? bidPriceMid * (bidPctMid / 100) * (bidCvrNum / 100)
+      : null;
+  const dualRoiNum = parseFloat(dualTargetRoiPct);
+  const dualFormulaB =
+    dualEpc !== null && Number.isFinite(dualRoiNum) && dualRoiNum >= 0
+      ? dualEpc / (1 + dualRoiNum / 100)
+      : null;
 
   return (
     <div>
@@ -515,6 +577,73 @@ export function ProfitClient({ offers }: { offers: ProfitOfferOption[] }) {
         </button>
         {bidError && <p className="mt-3 text-sm text-red-600">{bidError}</p>}
       </div>
+
+      {/* P1-1：建议 CPC 双公式并列（仅价格 × 比例区间模式有价格/佣金比例）。 */}
+      {bidMode === "range" ? (
+        <div className="mt-4 rounded-xl border border-ink/10 bg-white/70 p-5">
+          <p className="text-sm font-semibold text-ink">
+            建议 CPC 双公式（并列参考，K3 公式不变）
+          </p>
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            <div className="rounded-lg border border-ink/10 bg-ink/[0.02] p-4">
+              <p className="text-sm font-medium text-ink">公式 A：按出单成本</p>
+              <p className="mt-1 text-2xl font-semibold text-ink">
+                {dualFormulaA !== null ? `${fmt(dualFormulaA, 4)} ${currency}` : "—"}
+              </p>
+              <p className="mt-1 font-mono text-xs text-ink/45">
+                建议 CPC = 价格 × 佣金比例 ÷ 预期点击出单数（取价格/佣金区间中值）
+              </p>
+              <label className="mt-3 block text-xs font-medium text-ink/70">
+                预期点击出单数（可改）
+              </label>
+              <input
+                inputMode="decimal"
+                value={dualCtoOverride}
+                onChange={(e) => setDualCtoOverride(e.target.value)}
+                placeholder={String(Math.round(dualEffectiveCto))}
+                className="mt-1 w-full rounded-lg border border-ink/15 bg-white px-3 py-1.5 text-sm text-ink"
+              />
+              <p className="mt-1 text-xs text-ink/55">
+                {dualCtoSource === "assumed" ? (
+                  <span className="rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-800">
+                    暂无实测 CVR，用讲师假设 50 估算（非实测，请用实测 CVR 替换分母）
+                  </span>
+                ) : dualCtoSource === "measured" ? (
+                  "分母来自你填写的预期转化率（1 ÷ CVR）"
+                ) : (
+                  "分母：你手动填写的值"
+                )}
+              </p>
+            </div>
+            <div className="rounded-lg border border-ink/10 bg-ink/[0.02] p-4">
+              <p className="text-sm font-medium text-ink">公式 B：按目标 ROI（K3）</p>
+              <p className="mt-1 text-2xl font-semibold text-ink">
+                {dualFormulaB !== null ? `${fmt(dualFormulaB, 4)} ${currency}` : "—"}
+              </p>
+              <p className="mt-1 font-mono text-xs text-ink/45">
+                推荐出价 = EPC ÷ (1 + 目标 ROI)，EPC = 区间佣金中值 × 预期转化率
+              </p>
+              <label className="mt-3 block text-xs font-medium text-ink/70">
+                目标 ROI %
+              </label>
+              <input
+                inputMode="decimal"
+                value={dualTargetRoiPct}
+                onChange={(e) => setDualTargetRoiPct(e.target.value)}
+                placeholder="100"
+                className="mt-1 w-full rounded-lg border border-ink/15 bg-white px-3 py-1.5 text-sm text-ink"
+              />
+              <p className="mt-1 text-xs text-ink/55">
+                假设来源：目标 ROI {dualTargetRoiPct || "100"}%
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <p className="mt-4 text-xs text-ink/50">
+          固定佣金模式下公式 A 不适用（需价格 × 佣金比例拆分）；切到“价格 × 比例区间”可并列对比双公式。
+        </p>
+      )}
 
       {bidResult && (
         <div className="mt-4 space-y-4">

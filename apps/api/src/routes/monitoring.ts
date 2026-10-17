@@ -75,6 +75,9 @@ function serializeRule(r: {
   minClicks: number;
   autoPause: boolean;
   enabled: boolean;
+  /** P1-22：出站通知渠道 + Webhook URL。 */
+  channels?: string[];
+  webhookUrl?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }) {
@@ -88,9 +91,40 @@ function serializeRule(r: {
     minClicks: r.minClicks,
     autoPause: r.autoPause,
     enabled: r.enabled,
+    channels: r.channels ?? ["in_app"],
+    webhookUrl: r.webhookUrl ?? null,
     createdAt: r.createdAt.toISOString(),
     updatedAt: r.updatedAt.toISOString(),
   };
+}
+
+/** P1-22：校验通知渠道（in_app | webhook；email 延后，暂不支持）。 */
+function parseChannels(v: unknown): string[] {
+  if (!Array.isArray(v)) throw new ValidationError("channels must be an array");
+  const allowed = ["in_app", "webhook"];
+  const out: string[] = [];
+  for (const c of v) {
+    if (typeof c !== "string" || !allowed.includes(c)) {
+      throw new ValidationError("channels must only contain in_app or webhook");
+    }
+    if (!out.includes(c)) out.push(c);
+  }
+  return out;
+}
+
+function parseWebhookUrl(v: unknown): string | null {
+  if (v === undefined || v === null || v === "") return null;
+  if (typeof v !== "string") throw new ValidationError("webhookUrl must be a string");
+  let url: URL;
+  try {
+    url = new URL(v.trim());
+  } catch {
+    throw new ValidationError("webhookUrl must be a valid URL");
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new ValidationError("webhookUrl must use http(s)");
+  }
+  return url.toString();
 }
 
 export async function registerMonitoringRoutes(
@@ -120,6 +154,8 @@ export async function registerMonitoringRoutes(
       baselineHours?: unknown;
       minClicks?: unknown;
       autoPause?: unknown;
+      channels?: unknown;
+      webhookUrl?: unknown;
     };
 
     const name = asTrimmedString(body.name);
@@ -139,6 +175,9 @@ export async function registerMonitoringRoutes(
     const minClicks =
       body.minClicks === undefined ? 50 : asPositiveInt(body.minClicks, "minClicks", 100000);
     const autoPause = body.autoPause === undefined ? false : body.autoPause === true;
+    // P1-22：通知渠道 + Webhook URL（可配；默认仅站内）。
+    const channels = body.channels === undefined ? ["in_app"] : parseChannels(body.channels);
+    const webhookUrl = body.webhookUrl === undefined ? null : parseWebhookUrl(body.webhookUrl);
 
     const row = (await prisma.alertRule.create({
       data: {
@@ -152,6 +191,8 @@ export async function registerMonitoringRoutes(
         minClicks,
         autoPause,
         enabled: true,
+        channels,
+        webhookUrl,
       },
     })) as Parameters<typeof serializeRule>[0];
     return { rule: serializeRule(row) };
@@ -205,6 +246,8 @@ export async function registerMonitoringRoutes(
       minClicks?: unknown;
       autoPause?: unknown;
       enabled?: unknown;
+      channels?: unknown;
+      webhookUrl?: unknown;
     };
     const data: Record<string, unknown> = {};
     if (body.name !== undefined) {
@@ -221,6 +264,9 @@ export async function registerMonitoringRoutes(
       data.minClicks = asPositiveInt(body.minClicks, "minClicks", 100000);
     if (body.autoPause !== undefined) data.autoPause = body.autoPause === true;
     if (body.enabled !== undefined) data.enabled = body.enabled === true;
+    // P1-22：通知渠道 + Webhook URL。
+    if (body.channels !== undefined) data.channels = parseChannels(body.channels);
+    if (body.webhookUrl !== undefined) data.webhookUrl = parseWebhookUrl(body.webhookUrl);
     if (Object.keys(data).length === 0) {
       throw new ValidationError("No updatable fields provided");
     }
@@ -285,6 +331,72 @@ export async function registerMonitoringRoutes(
         status: r.status,
         createdAt: r.createdAt.toISOString(),
         updatedAt: r.updatedAt.toISOString(),
+      })),
+    };
+  });
+
+  /**
+   * P2-9：每日预警 — 只返回原始输入（档案摘要 + 近 90 天 Alerts），
+   * 分级（P0/P1/P2）由 Web 端用同一份 pace-checklist.ts 规则计算（与 P1-5 同源）。
+   * 无数据 → 空数组 + hasData=false，绝不编造。
+   */
+  app.get("/api/v1/monitoring/daily-alerts", async (request) => {
+    const info = await requireSession(deps, request);
+    const since90 = new Date(Date.now() - 90 * 86400 * 1000);
+    const [archives, alerts] = await Promise.all([
+      prisma.launchArchive.findMany({
+        where: { tenantId: info.tenantId },
+        orderBy: { createdAt: "desc" },
+        take: 500,
+        select: {
+          id: true,
+          offerName: true,
+          impressions: true,
+          clicks: true,
+          spend: true,
+          conversions: true,
+          revenue: true,
+          launchedAt: true,
+          createdAt: true,
+          endedAt: true,
+        },
+      }),
+      prisma.alert.findMany({
+        where: { tenantId: info.tenantId, createdAt: { gte: since90 } },
+        orderBy: { createdAt: "desc" },
+        take: 500,
+        select: {
+          id: true,
+          metric: true,
+          severity: true,
+          message: true,
+          status: true,
+          createdAt: true,
+        },
+      }),
+    ]);
+    return {
+      generatedAt: new Date().toISOString(),
+      hasData: archives.length > 0 || alerts.length > 0,
+      archives: archives.map((a) => ({
+        id: a.id,
+        offerName: a.offerName,
+        impressions: a.impressions,
+        clicks: a.clicks,
+        spend: a.spend,
+        conversions: a.conversions,
+        revenue: a.revenue,
+        launchedAt: a.launchedAt ? a.launchedAt.toISOString() : null,
+        createdAt: a.createdAt.toISOString(),
+        endedAt: a.endedAt ? a.endedAt.toISOString() : null,
+      })),
+      alerts: alerts.map((a) => ({
+        id: a.id,
+        metric: a.metric,
+        severity: a.severity,
+        message: a.message,
+        status: a.status,
+        createdAt: a.createdAt.toISOString(),
       })),
     };
   });

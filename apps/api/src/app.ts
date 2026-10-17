@@ -58,6 +58,7 @@ import { ScriptGeneratorService } from "./services/script-generator-service.js";
 import { DashboardQueryService } from "./services/dashboard-query-service.js";
 import { ScriptIntegrationService } from "./services/script-integration-service.js";
 import { ScriptIntegrationAdminService } from "./services/script-integration-admin-service.js";
+import { getAttributionSettings } from "./services/attribution-settings.js";
 import {
   createJobProducer,
   type JobProducer,
@@ -147,7 +148,32 @@ export function createServices(
     audit,
     repos.syncJobs,
     jobProducer,
-    trafficEvents
+    trafficEvents,
+    // P1-11：归因策略（设置 + gclid 去重查询；无 Prisma 时跳过去重查询）。
+    repos.prisma
+      ? (tenantId: string) => getAttributionSettings(repos.prisma!, tenantId)
+      : undefined,
+    repos.prisma
+      ? async (
+          tenantId: string,
+          gclid: string,
+          occurredAt: Date,
+          windowMinutes: number
+        ) => {
+          const earlier = await repos.prisma!.click.findFirst({
+            where: {
+              tenantId,
+              gclid,
+              occurredAt: {
+                lt: occurredAt,
+                gte: new Date(occurredAt.getTime() - windowMinutes * 60 * 1000),
+              },
+            },
+            select: { id: true },
+          });
+          return earlier !== null;
+        }
+      : undefined
   );
 
   const urlChangeRequests = new UrlChangeRequestService(

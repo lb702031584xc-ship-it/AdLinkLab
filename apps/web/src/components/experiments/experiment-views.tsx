@@ -90,9 +90,20 @@ export function VariantCard({
       <p className="mt-1 text-sm text-ink/70">
         {variantTypeLabel(variant.type, dict)} · {trafficShare}%
       </p>
-      <p className="mt-1 break-all font-mono text-xs text-ink/50">
-        {variant.trackingLinkId}
-      </p>
+      {variant.type === "AD_GROUP" ? (
+        <div className="mt-2 space-y-1 text-xs text-ink/70">
+          {(variant.headlines ?? []).map((h, i) => (
+            <p key={`h-${i}`}>H{i + 1}: {h}</p>
+          ))}
+          {(variant.descriptions ?? []).map((d, i) => (
+            <p key={`d-${i}`}>D{i + 1}: {d}</p>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-1 break-all font-mono text-xs text-ink/50">
+          {variant.trackingLinkId}
+        </p>
+      )}
     </div>
   );
 }

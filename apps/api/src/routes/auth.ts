@@ -21,6 +21,7 @@ import {
   type SessionAuthInfo,
 } from "../auth/sessions.js";
 import { revokeToken } from "../auth/token-revocation.js";
+import { isAdminRole, roleAssignDenied } from "../auth/rbac.js";
 
 /**
  * Phase 10 — user auth (one tenant per user).
@@ -59,7 +60,7 @@ function setSessionCookie(reply: FastifyReply, token: string): void {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-const VALID_ROLES = new Set(["admin", "member", "researcher"]);
+const VALID_ROLES = new Set(["owner", "admin", "member", "researcher", "viewer"]);
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -82,15 +83,19 @@ export async function requireAdmin(
   request: FastifyRequest
 ): Promise<SessionAuthInfo> {
   const info = await requireSession(deps, request);
-  if (info.role !== "admin") {
+  // P2-5：owner 是 admin 等价（接受 owner，绝不降级既有 admin）。
+  if (!isAdminRole(info.role)) {
     throw new ForbiddenError("Admin access required");
   }
   return info;
 }
 
 /** Soft-delete: DISABLED + deletedAt keeps the row, kills access (sessions revoked). */
+/** 管理员等价计数：owner + admin（防止删/降最后一位后无人可管理）。 */
 async function countActiveAdmins(prisma: PrismaClient): Promise<number> {
-  return prisma.user.count({ where: { role: "admin", status: "ACTIVE" } });
+  return prisma.user.count({
+    where: { role: { in: ["owner", "admin"] }, status: "ACTIVE" },
+  });
 }
 
 export async function registerAuthRoutes(
@@ -272,7 +277,8 @@ export async function registerAuthRoutes(
 
   app.get("/api/v1/auth/admin/users", async (request) => {
     const info = await requireSession(deps, request);
-    if (info.role !== "admin") {
+    // P2-5：用户列表可读：owner / admin / viewer（viewer 只读查看）；member/researcher 不可。
+    if (!isAdminRole(info.role) && info.role !== "viewer") {
       throw new ForbiddenError("Admin access required");
     }
     const users = await prisma.user.findMany({
@@ -300,7 +306,7 @@ export async function registerAuthRoutes(
   });
 
   app.post("/api/v1/auth/admin/users", async (request, reply) => {
-    await requireAdmin(deps, request);
+    const info = await requireAdmin(deps, request);
     const body = (request.body ?? {}) as {
       email?: unknown;
       name?: unknown;
@@ -321,9 +327,12 @@ export async function registerAuthRoutes(
     }
     if (!VALID_ROLES.has(role)) {
       throw new ValidationError(
-        "Role must be one of: admin, member, researcher"
+        "Role must be one of: owner, admin, member, researcher, viewer"
       );
     }
+    // P2-5：只有 owner 可新建 owner 角色账号。
+    const denied = roleAssignDenied(info.role, role);
+    if (denied) throw new ForbiddenError(denied);
 
     const existing = await prisma.user.findFirst({
       where: { email, status: "ACTIVE" },
@@ -373,7 +382,11 @@ export async function registerAuthRoutes(
     if (!target || target.status !== "ACTIVE") {
       throw new NotFoundError("User");
     }
-    if (target.role === "admin" && (await countActiveAdmins(prisma)) <= 1) {
+    // P2-5：非 owner 不可删 owner 账号。
+    if (target.role === "owner" && info.role !== "owner") {
+      throw new ForbiddenError("Only owner may delete an owner account");
+    }
+    if (isAdminRole(target.role) && (await countActiveAdmins(prisma)) <= 1) {
       throw new ConflictError("Cannot delete the last active admin");
     }
 
@@ -414,17 +427,23 @@ export async function registerAuthRoutes(
     const role = typeof body.role === "string" ? body.role.trim() : "";
     if (!VALID_ROLES.has(role)) {
       throw new ValidationError(
-        "Role must be one of: admin, member, researcher"
+        "Role must be one of: owner, admin, member, researcher, viewer"
       );
     }
+    // P2-5：只有 owner 可分配 owner 角色；非 owner 不可动 owner 账号的角色。
+    const denied = roleAssignDenied(info.role, role);
+    if (denied) throw new ForbiddenError(denied);
 
     const target = await prisma.user.findUnique({ where: { id } });
     if (!target || target.status !== "ACTIVE") {
       throw new NotFoundError("User");
     }
+    if (target.role === "owner" && info.role !== "owner") {
+      throw new ForbiddenError("Only owner may change an owner account's role");
+    }
     if (
-      target.role === "admin" &&
-      role !== "admin" &&
+      isAdminRole(target.role) &&
+      !isAdminRole(role) &&
       (await countActiveAdmins(prisma)) <= 1
     ) {
       throw new ConflictError("Cannot demote the last active admin");

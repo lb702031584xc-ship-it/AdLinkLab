@@ -127,7 +127,7 @@ export interface OfferBlueprint {
   };
   payout: number | null;
   payoutCurrency: string;
-  terms: { skipped: boolean; result: TermsShape | null; error: string | null };
+  terms: { skipped: boolean; result: TermsShape | null; error: string | null; promptVersion?: string };
   profit: BlueprintProfit;
   keywords: { items: BlueprintKeyword[]; error: string | null };
   adPlan: { plan: AdPlan | null; error: string | null };
@@ -270,7 +270,13 @@ export async function generateBlueprint(
   if (termsText.length >= 50) {
     terms.skipped = false;
     try {
-      const { system, user } = buildTermsPrompt(termsText.slice(0, 12_000), language);
+      // P1-18：提示词 DB 化 — 有 active 覆盖时用 DB 内容当 system prompt，
+      // 否则用代码默认 buildTermsPrompt；promptVersion 记实际使用的版本。
+      const { getActivePrompt } = await import("./prompts-store.js");
+      const override = await getActivePrompt(deps.prisma, "terms");
+      const { system, user } = override
+        ? { system: override.content, user: buildTermsPrompt(termsText.slice(0, 12_000), language).user }
+        : buildTermsPrompt(termsText.slice(0, 12_000), language);
       const called = await chatJsonValidatedAccounting(
         { ...llmArgs, system, user },
         validateTermsShape,
@@ -278,6 +284,7 @@ export async function generateBlueprint(
       );
       absorb(called.usage, called.latencyMs);
       terms.result = called.data;
+      terms.promptVersion = override ? `db:${override.version}` : PROMPT_VERSION;
     } catch (e) {
       terms.error = llmErrorMessage(e);
     }

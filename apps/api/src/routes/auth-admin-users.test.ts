@@ -18,7 +18,13 @@ type Row = Record<string, any>;
 function matchesWhere(row: Row, where: Row | undefined): boolean {
   if (!where) return true;
   return Object.entries(where).every(([key, value]) => {
-    if (value !== null && typeof value === "object") return false;
+    if (value !== null && typeof value === "object") {
+      // P2-5：countActiveAdmins 用 role: { in: ["owner", "admin"] }。
+      if ("in" in (value as Record<string, unknown>)) {
+        return ((value as Record<string, unknown>).in as unknown[]).includes(row[key]);
+      }
+      return false;
+    }
     return row[key] === value;
   });
 }
@@ -487,7 +493,7 @@ describe("admin user management routes", () => {
       method: "PATCH",
       url: `/api/v1/auth/admin/users/${memberId}`,
       headers,
-      payload: { role: "owner" },
+      payload: { role: "superuser" },
     });
     expect(badRole.statusCode).toBe(400);
     const badId = await app.inject({
@@ -504,5 +510,16 @@ describe("admin user management routes", () => {
       payload: { role: "member" },
     });
     expect(unknown.statusCode).toBe(404);
+  });
+
+  it("14b. P2-5: admin assigning owner → 403 (only owner may assign owner)", async () => {
+    const headers = bearer(adminToken);
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/auth/admin/users/${memberId}`,
+      headers,
+      payload: { role: "owner" },
+    });
+    expect(res.statusCode).toBe(403);
   });
 });

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useDict } from "@/i18n/use-dict";
 import { formatDateTime } from "@/lib/api/entities-config";
 import { EntityPageHeader } from "@/components/entities/ui";
+import { DailyAlertsCard } from "@/components/monitoring/daily-alerts-card";
 import {
   ackMonitoringAlertAction,
   createDefaultMonitoringRulesAction,
@@ -22,6 +23,8 @@ import type {
 } from "@/lib/api/p1";
 import { useI18n } from "@/i18n/I18nProvider";
 import { zh as budgetZh, en as budgetEn } from "@/i18n/dict/budget";
+import { listLaunchArchivesAction, type LaunchArchive } from "@/lib/api/launch-archive-actions";
+import { paceChecklist, daysActiveSince } from "@/lib/pace-checklist";
 
 function severityBadge(s: MonitoringAlert["severity"]): string {
   if (s === "high") return "bg-red-100 text-red-800";
@@ -64,6 +67,8 @@ export function MonitoringClient() {
   const [alerts, setAlerts] = useState<MonitoringAlert[]>([]);
   // P0-8 — 近 24h 服务端错误（error_reports 去重后列表）。
   const [errors, setErrors] = useState<MonitoringError[]>([]);
+  /** P1-5：投放档案（用于测试节奏清单；展示建议，不自动执行）。 */
+  const [archives, setArchives] = useState<LaunchArchive[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [runMsg, setRunMsg] = useState<string | null>(null);
@@ -80,11 +85,17 @@ export function MonitoringClient() {
   const [fBaseline, setFBaseline] = useState("168");
   const [fMinClicks, setFMinClicks] = useState("100");
   const [fAutoPause, setFAutoPause] = useState(false);
+  /** P1-22：Webhook 通知（默认关）。 */
+  const [fWebhook, setFWebhook] = useState(false);
+  const [fWebhookUrl, setFWebhookUrl] = useState("");
 
   // inline threshold edit
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editThreshold, setEditThreshold] = useState("");
   const [editAutoPause, setEditAutoPause] = useState(false);
+  // P1-22：编辑时也能改 Webhook（之前仅创建时可配）。
+  const [editWebhook, setEditWebhook] = useState(false);
+  const [editWebhookUrl, setEditWebhookUrl] = useState("");
   const [saving, setSaving] = useState(false);
 
   const inputClass =
@@ -96,10 +107,11 @@ export function MonitoringClient() {
       setLoading(true);
       setError(null);
       try {
-        const [r, a, e] = await Promise.all([
+        const [r, a, e, la] = await Promise.all([
           listMonitoringRulesAction(),
           listMonitoringAlertsAction(),
           listMonitoringErrorsAction(),
+          listLaunchArchivesAction({}),
         ]);
         if (r.ok) setRules(r.data);
         else setError(r.error);
@@ -107,6 +119,7 @@ export function MonitoringClient() {
         else if (!r.ok) setError(a.error);
         if (e.ok) setErrors(e.data);
         else if (!r.ok && !a.ok) setError(e.error);
+        if (la.ok) setArchives(la.data.items);
       } finally {
         setLoading(false);
       }
@@ -161,6 +174,8 @@ export function MonitoringClient() {
     setEditingId(rule.id);
     setEditThreshold(String(rule.thresholdPct));
     setEditAutoPause(rule.autoPause);
+    setEditWebhook((rule.channels ?? ["in_app"]).includes("webhook"));
+    setEditWebhookUrl(rule.webhookUrl ?? "");
   }
 
   async function saveEdit(id: string) {
@@ -171,6 +186,9 @@ export function MonitoringClient() {
       const res = await updateMonitoringRuleAction(id, {
         thresholdPct: th,
         autoPause: editAutoPause,
+        channels: editWebhook ? ["in_app", "webhook"] : ["in_app"],
+        webhookUrl:
+          editWebhook && editWebhookUrl.trim() ? editWebhookUrl.trim() : null,
       });
       if (res.ok) {
         setRules((rs) => rs.map((r) => (r.id === id ? res.data : r)));
@@ -197,6 +215,9 @@ export function MonitoringClient() {
         baselineHours: parseInt(fBaseline, 10) || undefined,
         minClicks: parseInt(fMinClicks, 10) || undefined,
         autoPause: fAutoPause,
+        // P1-22：勾选 Webhook 时把渠道设为 in_app + webhook。
+        channels: fWebhook ? ["in_app", "webhook"] : ["in_app"],
+        webhookUrl: fWebhook && fWebhookUrl.trim() ? fWebhookUrl.trim() : undefined,
       });
       if (res.ok) {
         setRules((rs) => [...rs, res.data]);
@@ -226,6 +247,15 @@ export function MonitoringClient() {
   return (
     <div>
       <EntityPageHeader title={d.title} description={d.description} />
+
+      {/* P2-9：每日预警（分级 P0/P1/P2；仅展示，不自动执行）。 */}
+      <div className="mt-6">
+        <DailyAlertsCard
+          title={d.dailyAlertsTitle}
+          emptyText={d.dailyAlertsEmpty}
+          detailLinkHref="/reports/launch"
+        />
+      </div>
 
       {error ? (
         <p className="mt-6 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
@@ -363,6 +393,33 @@ export function MonitoringClient() {
               {d.autoPauseLabel}
             </label>
           </div>
+          {/* P1-22：Webhook 通知（邮件延后）。 */}
+          <div className="flex items-center gap-2">
+            <input
+              id="rule-webhook"
+              type="checkbox"
+              checked={fWebhook}
+              onChange={(e) => setFWebhook(e.target.checked)}
+              className="h-4 w-4"
+            />
+            <label htmlFor="rule-webhook" className="text-sm text-ink/80">
+              {d.webhookLabel}
+            </label>
+          </div>
+          {fWebhook ? (
+            <div>
+              <label className={labelClass} htmlFor="rule-webhook-url">
+                {d.webhookUrlLabel}
+              </label>
+              <input
+                id="rule-webhook-url"
+                value={fWebhookUrl}
+                onChange={(e) => setFWebhookUrl(e.target.value)}
+                placeholder={d.webhookUrlPlaceholder}
+                className={inputClass}
+              />
+            </div>
+          ) : null}
           <div className="md:col-span-2">
             <button
               type="submit"
@@ -385,6 +442,7 @@ export function MonitoringClient() {
               <th className="px-3 py-2">{d.columns.window}</th>
               <th className="px-3 py-2">{d.columns.minClicks}</th>
               <th className="px-3 py-2">{d.columns.autoPause}</th>
+              <th className="px-3 py-2">{d.columns.notify}</th>
               <th className="px-3 py-2">{d.columns.enabled}</th>
               <th className="px-3 py-2">{d.columns.actions}</th>
             </tr>
@@ -428,6 +486,33 @@ export function MonitoringClient() {
                     >
                       {r.autoPause ? d.on : d.off}
                     </span>
+                  )}
+                </td>
+                <td className="px-3 py-2 text-ink/70">
+                  {editingId === r.id ? (
+                    <span className="flex flex-col gap-1">
+                      <label className="flex items-center gap-1 text-xs">
+                        <input
+                          type="checkbox"
+                          checked={editWebhook}
+                          onChange={(e) => setEditWebhook(e.target.checked)}
+                          className="h-4 w-4"
+                        />
+                        {d.webhookLabel}
+                      </label>
+                      {editWebhook ? (
+                        <input
+                          value={editWebhookUrl}
+                          onChange={(e) => setEditWebhookUrl(e.target.value)}
+                          placeholder={d.webhookUrlPlaceholder}
+                          className="w-44 rounded border border-ink/15 px-2 py-1 text-xs"
+                        />
+                      ) : null}
+                    </span>
+                  ) : (r.channels ?? ["in_app"]).includes("webhook") ? (
+                    `${d.notifyInApp} + ${d.notifyWebhook}`
+                  ) : (
+                    d.notifyInApp
                   )}
                 </td>
                 <td className="px-3 py-2">
@@ -495,6 +580,55 @@ export function MonitoringClient() {
             ) : null}
           </tbody>
         </table>
+      </div>
+
+      {/* P1-5：测试节奏清单（与 /reports/launch 同一份 pace-checklist 规则；展示建议，不自动执行）。 */}
+      <h2 className="mt-8 text-base font-semibold text-ink">{d.paceTitle}</h2>
+      <div className="mt-4 space-y-2">
+        {archives
+          .map((a) => ({
+            archive: a,
+            suggestions: paceChecklist({
+              impressions: a.impressions,
+              clicks: a.clicks,
+              conversions: a.conversions,
+              spend: a.spend,
+              revenue: a.revenue,
+              daysActive: daysActiveSince(a.launchedAt ?? a.createdAt),
+            }),
+          }))
+          .filter((x) => x.suggestions.length > 0)
+          .map(({ archive, suggestions }) => (
+            <div key={archive.id} className="rounded-xl border border-ink/10 bg-white/70 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium text-ink">{archive.offerName}</span>
+                <a href={`/reports/launch?offerId=${encodeURIComponent(archive.offerId ?? "")}`} className="text-xs text-signal hover:underline">
+                  {d.paceViewArchive}
+                </a>
+              </div>
+              <ul className="mt-2 space-y-1 text-sm text-ink/80">
+                {suggestions.map((s, i) => (
+                  <li key={i}>
+                    {s.text} <span className="text-xs text-ink/50">（{s.source}）</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        {!loading &&
+        archives.every(
+          (a) =>
+            paceChecklist({
+              impressions: a.impressions,
+              clicks: a.clicks,
+              conversions: a.conversions,
+              spend: a.spend,
+              revenue: a.revenue,
+              daysActive: daysActiveSince(a.launchedAt ?? a.createdAt),
+            }).length === 0
+        ) ? (
+          <p className="py-4 text-sm text-ink/50">{d.paceEmpty}</p>
+        ) : null}
       </div>
 
       {/* alerts */}

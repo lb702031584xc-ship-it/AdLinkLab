@@ -464,10 +464,15 @@ describe("POST /api/v1/ads/auto-create/confirm", () => {
     expect(targets[0].desiredVersion).toBe(1);
 
     const logs = await (fake as any).auditLog.findMany({});
-    expect(logs).toHaveLength(1);
-    expect(logs[0].action).toBe("ADS_AUTO_CREATE_CONFIRMED");
-    expect(logs[0].entityType).toBe("ScriptSyncTarget");
-    expect(logs[0].after.taskType).toBe("create-campaign");
+    // P1-16：确认写 BEFORE（AdPlan 快照）+ AFTER（ScriptSyncTarget）两条审计，
+    // 替代旧的单条 ADS_AUTO_CREATE_CONFIRMED。
+    expect(logs).toHaveLength(2);
+    const before = logs.find((l: any) => l.action === "BULK_CREATE_BEFORE");
+    const after = logs.find((l: any) => l.action === "BULK_CREATE_AFTER");
+    expect(before?.entityType).toBe("AdPlan");
+    expect(after?.entityType).toBe("ScriptSyncTarget");
+    expect(after?.after.taskType).toBe("create-campaign");
+    expect(after?.before.beforeAuditId).toBe(before?.id);
 
     // Confirming again is idempotent.
     const res2 = await app.inject({
@@ -529,7 +534,9 @@ describe("POST /api/v1/ads/auto-create/confirm", () => {
     expect(stored?.plan.campaign.dailyBudget.amount).toBe(50);
     expect(stored?.plan.campaign.geoTargets).toEqual(["US", "CA"]);
     const logs = await (fake as any).auditLog.findMany({});
-    expect(logs[0].after.dailyBudget.amount).toBe(50);
+    // P1-16：预算覆盖写在 BEFORE（计划快照）与 AFTER 中；取 AFTER 校验。
+    const after = logs.find((l: any) => l.action === "BULK_CREATE_AFTER");
+    expect(after?.after.dailyBudget.amount).toBe(50);
   });
 
   it("allows currency change when the amount changes with it (client already converted)", async () => {

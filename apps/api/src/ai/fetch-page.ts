@@ -152,6 +152,8 @@ async function readCapped(res: Response): Promise<Buffer> {
 export interface FetchedPage {
   finalUrl: string;
   text: string;
+  /** P1-3：重定向链（每跳 { url, status }）；0 跳 = 无重定向。 */
+  redirectChain?: Array<{ url: string; status: number }>;
 }
 
 /** Raw-HTML fetch result for HTML-structure analysis (Lander Intel). */
@@ -257,6 +259,7 @@ export async function fetchPage(rawUrl: string): Promise<FetchedPage> {
   }
 
   let current = parsed.toString();
+  const redirectChain: Array<{ url: string; status: number }> = [];
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const u = new URL(current);
     await assertPublicHostname(u.hostname);
@@ -284,6 +287,7 @@ export async function fetchPage(rawUrl: string): Promise<FetchedPage> {
       if (proto !== "http:" && proto !== "https:") {
         throw new AiError("Only http(s) URLs are allowed", 400);
       }
+      redirectChain.push({ url: current, status: res.status });
       continue;
     }
 
@@ -292,7 +296,7 @@ export async function fetchPage(rawUrl: string): Promise<FetchedPage> {
     }
     const buf = await readCapped(res);
     const text = stripHtml(buf.toString("utf8")).slice(0, MAX_TEXT_CHARS);
-    return { finalUrl: current, text };
+    return { finalUrl: current, text, redirectChain };
   }
   throw new AiError("Too many redirects", 400);
 }

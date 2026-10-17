@@ -120,6 +120,9 @@ export function buildFixtureDataset(): FixtureDataset {
       timezone: "America/Los_Angeles",
       oauthCredentialRef: "vault:ref:mock-google-ads-oauth-a",
       status: "ACTIVE",
+      accountType: "MCC",
+      healthStatus: "active",
+      appealStatus: "none",
     }),
     googleAccount({
       id: TenantB.account,
@@ -131,6 +134,9 @@ export function buildFixtureDataset(): FixtureDataset {
       timezone: "UTC",
       oauthCredentialRef: "vault:ref:mock-google-ads-oauth-b",
       status: "ACTIVE",
+      accountType: "MCC",
+      healthStatus: "active",
+      appealStatus: "none",
     }),
   ];
 

@@ -3,7 +3,7 @@
  *
  * 由 POST /api/v1/ads/auto-create/confirm 下发的建广告任务使用：
  * 用户把生成的 Script 粘贴到 Google Ads Scripts 中运行一次，
- * 按 AdPlan 创建 campaign → ad groups → keywords → 否词 → RSA。
+ * 按 AdPlan 创建 campaign → ad groups → keywords → 否词 → RSA → 排期。
  *
  * 安全铁律（模板内强制执行）：
  * 1. 只创建计划中指定的结构：创建前按精确名称检查已存在实体，
@@ -26,7 +26,7 @@
 import { jsStringLiteral } from "./script-generator-source.js";
 import type { AdPlan } from "../ai/ad-generator.js";
 
-export const CREATE_CAMPAIGN_SCRIPT_VERSION = "1.1.0";
+export const CREATE_CAMPAIGN_SCRIPT_VERSION = "1.2.0";
 
 /** ISO country code → Google Ads geo target location ID (criteria ID). */
 export const COUNTRY_LOCATION_IDS: Record<string, number> = {
@@ -88,6 +88,32 @@ export function validateCreateCampaignPlan(plan: AdPlan): string[] {
     }
     if (!block?.rsa?.finalUrl) {
       problems.push(`adGroups[${i}].rsa.finalUrl is required`);
+    }
+  }
+  // P1-25：排期形状校验（非法排期拒绝建 Script，不静默丢弃）。
+  const DAYS = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"];
+  for (const [i, s] of ((plan as AdPlan).adSchedules ?? []).entries()) {
+    if (!DAYS.includes(String((s as { dayOfWeek?: unknown })?.dayOfWeek))) {
+      problems.push(`adSchedules[${i}].dayOfWeek must be MONDAY..SUNDAY`);
+    }
+    for (const k of ["startHour", "endHour"] as const) {
+      const v = (s as unknown as Record<string, unknown>)?.[k];
+      if (typeof v !== "number" || !Number.isInteger(v) || v < 0 || v > 23) {
+        problems.push(`adSchedules[${i}].${k} must be an integer 0-23`);
+      }
+    }
+    for (const k of ["startMinute", "endMinute"] as const) {
+      const v = (s as unknown as Record<string, unknown>)?.[k];
+      if (typeof v !== "number" || !Number.isInteger(v) || v < 0 || v > 59) {
+        problems.push(`adSchedules[${i}].${k} must be an integer 0-59`);
+      }
+    }
+    const sv = s as { startHour: number; startMinute: number; endHour: number; endMinute: number };
+    if (
+      typeof sv.startHour === "number" && typeof sv.endHour === "number" &&
+      sv.endHour * 60 + sv.endMinute <= sv.startHour * 60 + sv.startMinute
+    ) {
+      problems.push(`adSchedules[${i}] end must be after start`);
     }
   }
   return problems;
@@ -158,6 +184,8 @@ function main() {
     return;
   }
   applyGeoTargets_(campaignRn, plan.campaign.geoTargets || []);
+  // P1-25：广告排期（campaign 级；空 = 全天投放，不写排期）。
+  applyAdSchedules_(campaignRn, plan.adSchedules || []);
   var createdGroups = 0;
   for (var i = 0; i < plan.adGroups.length; i++) {
     if (createAdGroup_(campaignRn, plan.adGroups[i])) {
@@ -224,6 +252,18 @@ function validatePlan_(plan) {
   }
   if (!plan.adGroups || plan.adGroups.length === 0) {
     problems.push("at least one ad group is required");
+  }
+  // P1-25：排期形状（TS 侧已校验；Script 内再防卫，非法直接中止）。
+  var DAYS = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"];
+  var schedules = plan.adSchedules || [];
+  for (var i = 0; i < schedules.length; i++) {
+    var s = schedules[i];
+    if (DAYS.indexOf(String(s.dayOfWeek)) < 0) {
+      problems.push("adSchedules[" + i + "].dayOfWeek must be MONDAY..SUNDAY");
+    }
+    if (s.endHour * 60 + s.endMinute <= s.startHour * 60 + s.startMinute) {
+      problems.push("adSchedules[" + i + "] end must be after start");
+    }
   }
   return problems;
 }
@@ -348,6 +388,25 @@ function applyGeoTargets_(campaignRn, geoTargets) {
     } } });
     if (!rn) {
       Logger.log("geo target failed " + code);
+    }
+  }
+}
+
+function applyAdSchedules_(campaignRn, schedules) {
+  for (var i = 0; i < schedules.length; i++) {
+    var s = schedules[i];
+    var rn = mutate_({ campaignCriterionOperation: { create: {
+      campaign: campaignRn,
+      adSchedule: {
+        dayOfWeek: String(s.dayOfWeek),
+        startHour: Number(s.startHour),
+        startMinute: Number(s.startMinute),
+        endHour: Number(s.endHour),
+        endMinute: Number(s.endMinute)
+      }
+    } } });
+    if (!rn) {
+      Logger.log("ad schedule failed " + s.dayOfWeek + " " + s.startHour + ":" + s.startMinute + "-" + s.endHour + ":" + s.endMinute);
     }
   }
 }

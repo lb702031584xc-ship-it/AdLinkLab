@@ -97,6 +97,22 @@ function makeFake(ctx: Ctx) {
     click: {
       count: async (args: any) =>
         ctx.clicks.filter((c) => matches(c, args?.where, ctx)).length,
+      findMany: async (args: any) => {
+        let rows = ctx.clicks.filter((c) => matches(c, args?.where, ctx));
+        if (args?.orderBy) {
+          const [key, dir] = Object.entries(args.orderBy)[0] as [string, string];
+          rows = [...rows].sort((a, b) =>
+            dir === "desc" ? (b[key] > a[key] ? 1 : -1) : (a[key] > b[key] ? 1 : -1)
+          );
+        }
+        if (typeof args?.take === "number") rows = rows.slice(0, args.take);
+        return rows.map((c) => ({
+          gclid: c.gclid ?? null,
+          ipAddress: c.ipAddress ?? null,
+          trackingLinkId: c.trackingLinkId,
+          occurredAt: c.occurredAt,
+        }));
+      },
     },
     profitModel: {
       findFirst: async (args: any) => first(ctx.profitModels, args),
@@ -440,6 +456,67 @@ describe("evaluateKillSwitch — test stop-loss （第七批）", () => {
       result.skipped.some((s) => s.startsWith("TEST_STOPLOSS"))
     ).toBe(true);
     expect(result.triggers).toHaveLength(0);
+  });
+});
+
+describe("evaluateKillSwitch — DUPLICATE_CLICKS (P1-24)", () => {
+  let ctx: Ctx;
+  beforeEach(() => {
+    ctx = baseCtx();
+  });
+
+  function seedClicks(offerId: string, n: number, gclid: string | null) {
+    const now = Date.now();
+    for (let i = 0; i < n; i++) {
+      ctx.clicks.push({
+        id: randomUUID(),
+        tenantId: TENANT,
+        offerId,
+        trackingLinkId: randomUUID(),
+        gclid,
+        ipAddress: "1.2.3.4",
+        occurredAt: new Date(now - i * 60 * 1000),
+        isTest: false,
+      });
+    }
+  }
+
+  it("fires when the duplicate rate exceeds 5% on a sufficient sample", async () => {
+    const offerId = seedOffer(ctx);
+    seedConfig(ctx, offerId);
+    // 60 clicks, all same gclid within 30-min windows → high duplicate rate.
+    seedClicks(offerId, 60, "gclid-dup");
+    const ev = await evaluateKillSwitch(makeFake(ctx), offerId);
+    expect(ev.triggers.map((t) => t.type)).toContain("DUPLICATE_CLICKS");
+  });
+
+  it("does not fire on a small sample (<50 clicks)", async () => {
+    const offerId = seedOffer(ctx);
+    seedConfig(ctx, offerId);
+    seedClicks(offerId, 10, "gclid-dup");
+    const ev = await evaluateKillSwitch(makeFake(ctx), offerId);
+    expect(ev.triggers.map((t) => t.type)).not.toContain("DUPLICATE_CLICKS");
+    expect(ev.skipped).toContain("DUPLICATE_CLICKS:thin-traffic");
+  });
+
+  it("does not fire when clicks are distinct", async () => {
+    const offerId = seedOffer(ctx);
+    seedConfig(ctx, offerId);
+    const now = Date.now();
+    for (let i = 0; i < 60; i++) {
+      ctx.clicks.push({
+        id: randomUUID(),
+        tenantId: TENANT,
+        offerId,
+        trackingLinkId: randomUUID(),
+        gclid: `gclid-${i}`,
+        ipAddress: `10.0.0.${i}`,
+        occurredAt: new Date(now - i * 60 * 1000),
+        isTest: false,
+      });
+    }
+    const ev = await evaluateKillSwitch(makeFake(ctx), offerId);
+    expect(ev.triggers.map((t) => t.type)).not.toContain("DUPLICATE_CLICKS");
   });
 });
 

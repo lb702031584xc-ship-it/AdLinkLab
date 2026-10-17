@@ -20,6 +20,7 @@ import {
   TrackingLinkResolver,
 } from "@adlinklab/tracking";
 import { TrafficEventService } from "./traffic-events.js";
+import { businessMetrics } from "../observability/index.js";
 
 export interface ClickAuditWriter {
   record(input: {
@@ -175,6 +176,7 @@ export class ClickIngestionService {
       });
 
       const replayed = click.id !== clickUuid;
+      if (!replayed) businessMetrics.clickRecorded(); // P2-3
       const result: ClickResult = {
         clickId: click.clickId,
         trackingLinkId: click.trackingLinkId,

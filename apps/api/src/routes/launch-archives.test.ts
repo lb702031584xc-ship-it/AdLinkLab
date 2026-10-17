@@ -92,6 +92,78 @@ describe("deriveArchiveMetrics", () => {
     });
     expect(out.diagnosis).toContain("提高出价");
   });
+
+  it("P1-29：展示 <100 时 CTR 为 null（样本不足，小样本不判）", () => {
+    const out = deriveArchiveMetrics({ impressions: 99, clicks: 9 });
+    expect(out.actualCtr).toBeNull();
+    expect(out.ctrSampleSufficient).toBe(false);
+    expect(out.ctrNote).toContain("样本不足");
+  });
+
+  it("P1-29：展示 ≥100 时统计 CTR（100 展示 8 点击 → 8%）", () => {
+    const out = deriveArchiveMetrics({ impressions: 100, clicks: 8 });
+    expect(out.actualCtr).toBeCloseTo(0.08, 10);
+    expect(out.ctrSampleSufficient).toBe(true);
+    expect(out.ctrNote).toBeNull();
+  });
+
+  it("P2-6：NO_IMPRESSIONS 仅已上线且展示为 0 时触发（未上线不判）", () => {
+    expect(
+      deriveArchiveMetrics({ impressions: 0, clicks: 0, launchedAt: new Date() })
+        .diagnosisCodes
+    ).toContain("NO_IMPRESSIONS");
+    expect(
+      deriveArchiveMetrics({ impressions: 0, clicks: 0 }).diagnosisCodes
+    ).not.toContain("NO_IMPRESSIONS");
+  });
+
+  it("P2-6：LOW_CTR 仅样本充足且 CTR <5% 时触发（小样本不判）", () => {
+    expect(
+      deriveArchiveMetrics({ impressions: 200, clicks: 8 }).diagnosisCodes
+    ).toContain("LOW_CTR");
+    expect(
+      deriveArchiveMetrics({ impressions: 99, clicks: 2 }).diagnosisCodes
+    ).not.toContain("LOW_CTR");
+    expect(
+      deriveArchiveMetrics({ impressions: 200, clicks: 20 }).diagnosisCodes
+    ).not.toContain("LOW_CTR");
+  });
+
+  it("P2-6：BUDGET_EXHAUSTED 需 spend ≥ testingPhase.totalBudget", () => {
+    expect(
+      deriveArchiveMetrics({
+        impressions: 100,
+        clicks: 10,
+        spend: 100,
+        testingPhase: { totalBudget: 100 },
+      }).diagnosisCodes
+    ).toContain("BUDGET_EXHAUSTED");
+    expect(
+      deriveArchiveMetrics({
+        impressions: 100,
+        clicks: 10,
+        spend: 50,
+        testingPhase: { totalBudget: 100 },
+      }).diagnosisCodes
+    ).not.toContain("BUDGET_EXHAUSTED");
+  });
+
+  it("P2-6：NO_CONVERSIONS 有点击且转化 0 时触发；无 QS 数据时绝不触发 LOW_QUALITY_SCORE", () => {
+    const out = deriveArchiveMetrics({
+      impressions: 100,
+      clicks: 10,
+      conversions: 0,
+    });
+    expect(out.diagnosisCodes).toContain("NO_CONVERSIONS");
+    expect(out.diagnosisCodes).not.toContain("LOW_QUALITY_SCORE");
+  });
+
+  it("P2-6：传入 qualityScore <5 时触发 LOW_QUALITY_SCORE", () => {
+    expect(
+      deriveArchiveMetrics({ impressions: 100, clicks: 10, qualityScore: 4 })
+        .diagnosisCodes
+    ).toContain("LOW_QUALITY_SCORE");
+  });
 });
 
 describe("buildAutoArchiveData", () => {

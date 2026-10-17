@@ -1444,6 +1444,45 @@ export function WorksheetClient({
 
   const toggleStep = (n: number) => setOpenStep((o) => (o === n ? 0 : n));
 
+  /* P0-1：流量门检测（第 ① 步内）。brand 取 Offer 名；domain 取 Offer URL 的
+     hostname；keywords 取需求验证里已填的 SEMrush 关键词（前 5 个）。 */
+  const runTrafficGateCheck = (extra?: {
+    brand?: string;
+    manualMonthlyVisits?: number;
+  }) => {
+    const seq = ++gateSeq.current;
+    setTrafficGateLoading(true);
+    setTrafficGateError(null);
+    const brand =
+      (extra?.brand ?? offer?.name ?? mName ?? "").trim() || undefined;
+    const domain = (() => {
+      try {
+        const u = offer?.destinationUrl || mUrl;
+        return u ? new URL(u).hostname.replace(/^www\./, "") : undefined;
+      } catch {
+        return undefined;
+      }
+    })();
+    const keywords = (demandGateState?.inputs?.judgments ?? [])
+      .map((j) => j.keyword)
+      .filter(Boolean)
+      .slice(0, 5);
+    void checkTrafficGateAction({
+      brand,
+      domain,
+      keywords,
+      manualMonthlyVisits: extra?.manualMonthlyVisits,
+    }).then((g) => {
+      if (seq !== gateSeq.current) return;
+      setTrafficGateLoading(false);
+      if (g.ok) {
+        setTrafficGate(g.data);
+      } else {
+        setTrafficGateError(`${w.trafficGate.checkFailed}：${g.error}`);
+      }
+    });
+  };
+
   return (
     <div className="space-y-5">
       <EntityPageHeader title={w.title} description={w.description} />
@@ -1458,10 +1497,11 @@ export function WorksheetClient({
         }
       />
 
-      {/* P0-1 一票否决汇总条 */}
+      {/* P0-1 一票否决汇总条；P2-2 口径：判定 = min(条款门禁, 盈利, 流量门)，三条腿中最弱的一条决定判定。 */}
       {vetoReasons.length > 0 ? (
         <div className="rounded-xl border border-red-300 bg-red-50 p-5" role="alert">
           <p className="text-base font-bold text-red-800">{w.vetoBanner.titleRed}</p>
+          <p className="mt-1 text-xs text-red-700">{w.vetoBanner.caliber}</p>
           <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-red-800">
             {vetoReasons.map((r, i) => (
               <li key={i}>{r}</li>
@@ -1471,6 +1511,7 @@ export function WorksheetClient({
       ) : vetoUnknowns.length > 0 ? (
         <div className="rounded-xl border border-amber-300 bg-amber-50 p-5">
           <p className="text-base font-bold text-amber-800">{w.vetoBanner.titleYellow}</p>
+          <p className="mt-1 text-xs text-amber-700">{w.vetoBanner.caliber}</p>
           <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-amber-800">
             {vetoUnknowns.map((r, i) => (
               <li key={i}>{r}</li>
@@ -1740,6 +1781,35 @@ export function WorksheetClient({
           isAmazon={offer?.source === "amazon"}
           key={offer?.id ?? "manual"}
         />
+
+        {/* P0-1：流量门检测（与需求验证同属第 ① 步“有没有量”，但判定口径不同：
+            流量门看官网/品牌/关键词热度三信号，unknown 不判 fail）。 */}
+        <div className="mt-5 border-t border-ink/10 pt-4">
+          {!trafficGate && !trafficGateLoading ? (
+            <div>
+              <button
+                type="button"
+                onClick={() => runTrafficGateCheck()}
+                className="rounded-lg bg-ink px-4 py-2 text-sm font-medium text-white hover:bg-ink/85"
+              >
+                {w.trafficGate.checkButton}
+              </button>
+              <p className="mt-1.5 text-xs text-ink/55">{w.trafficGate.checkHint}</p>
+            </div>
+          ) : null}
+          {trafficGateError ? (
+            <p className="mt-2 text-sm text-red-600">{trafficGateError}</p>
+          ) : null}
+          {trafficGate || trafficGateLoading ? (
+            <TrafficGateCard
+              gate={trafficGate}
+              loading={trafficGateLoading}
+              dict={w.trafficGate}
+              onRecheck={(input) => runTrafficGateCheck(input)}
+              recheckBusy={trafficGateLoading}
+            />
+          ) : null}
+        </div>
       </StepCard>
 
       {/* Step ② terms */}

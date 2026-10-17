@@ -232,6 +232,31 @@ export function AnalysisReport({ analysis }: { analysis: AiAnalysis }) {
           </ul>
         </section>
       ) : null}
+
+      {/* P1-9：评估扩展维度（可选；模型无依据时省略，不渲染编造的维度）。 */}
+      {r.dimensions && Object.keys(r.dimensions).length > 0 ? (
+        <section className="rounded-xl border border-ink/10 bg-white/70 p-6">
+          <h3 className="text-lg font-semibold text-ink">
+            {t.ai.analyze.report.dimensions}
+          </h3>
+          <dl className="mt-3 grid gap-3 sm:grid-cols-2">
+            {(
+              Object.keys(r.dimensions) as Array<keyof NonNullable<typeof r.dimensions>>
+            ).map((k) => {
+              const dim = r.dimensions![k];
+              if (!dim) return null;
+              return (
+                <div key={k} className="rounded-lg bg-ink/[0.03] p-3">
+                  <dt className="text-xs text-ink/55">
+                    {t.ai.analyze.report.dimensionLabels[k]} · {dim.score}/100
+                  </dt>
+                  <dd className="mt-1 text-sm text-ink/80">{dim.note}</dd>
+                </div>
+              );
+            })}
+          </dl>
+        </section>
+      ) : null}
     </div>
   );
 }

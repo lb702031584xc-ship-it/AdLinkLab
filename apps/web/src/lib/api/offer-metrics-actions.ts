@@ -15,6 +15,8 @@ export interface MetricsSummary {
   score: number | null;
   grade: string | null;
   fetchedAt: string;
+  /** P1-30：最近一次抓取的评论数（metrics.reviewCount），无数据时 null。 */
+  reviewCount: number | null;
 }
 
 export interface OfferMetricsData {

@@ -137,6 +137,9 @@ export interface MonitoringRule {
   minClicks: number;
   autoPause: boolean;
   enabled: boolean;
+  /** P1-22：通知渠道 + Webhook URL。 */
+  channels?: string[];
+  webhookUrl?: string | null;
 }
 
 export interface CreateRuleInput {
@@ -147,6 +150,9 @@ export interface CreateRuleInput {
   baselineHours?: number;
   minClicks?: number;
   autoPause?: boolean;
+  /** P1-22：通知渠道（in_app | webhook）。 */
+  channels?: string[];
+  webhookUrl?: string;
 }
 
 export interface UpdateRuleInput {
@@ -154,6 +160,9 @@ export interface UpdateRuleInput {
   enabled?: boolean;
   thresholdPct?: number;
   autoPause?: boolean;
+  /** P1-22：通知渠道 + Webhook URL。 */
+  channels?: string[];
+  webhookUrl?: string | null;
 }
 
 export interface MonitoringAlert {

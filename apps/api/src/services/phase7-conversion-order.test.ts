@@ -131,8 +131,7 @@ describe("Phase 7 — Order / Conversion attribution + upload", () => {
     ).rejects.toBeInstanceOf(ConflictError);
   });
 
-  it("8. create conversion from order sets Order.conversionId", async () => {
-    const { svc } = createHarness();
+  it("8. create conversion from order sets Order.conversionId", async () => {    const { svc } = createHarness();
     const { order } = await createFreshOrder(svc, "8");
     const result = await svc.createConversionFromOrder({
       tenantId: TenantA.id,
@@ -607,5 +606,33 @@ describe("Phase 7 — Order / Conversion attribution + upload", () => {
     const result = await svc.executeUpload(TenantA.id, TenantA.conversion1);
     expect(result.skipped).toBe(true);
     expect(result.conversion.googleUploadStatus).toBe("SKIPPED");
+  });
+
+  it("45. P1-11: click older than the 30-day attribution window → ValidationError", async () => {
+    const { svc, repos } = createHarness();
+    const click = await repos.clicks.create({
+      id: randomUUID(),
+      clickId: randomUUID(),
+      tenantId: TenantA.id,
+      trackingLinkId: TenantA.trackingA,
+      gclid: "gclid-old-window",
+      occurredAt: new Date(Date.now() - 40 * 86400 * 1000),
+    });
+    const { order } = await svc.createOrder({
+      tenantId: TenantA.id,
+      orderId: "ORDER-P7-OLD-WINDOW",
+      clickId: click.id,
+      value: "5.00",
+      currency: "USD",
+      idempotencyKey: "p7:old-window:order",
+    });
+    await expect(
+      svc.createConversionFromOrder({
+        tenantId: TenantA.id,
+        orderId: order.id,
+        conversionAction: "purchase",
+        idempotencyKey: "p7:old-window:conv",
+      })
+    ).rejects.toThrow(/Attribution window exceeded/);
   });
 });

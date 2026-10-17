@@ -12,6 +12,7 @@ import {
   authenticateSessionRequest,
   type SessionAuthInfo,
 } from "../auth/sessions.js";
+import { isAdminRole } from "../auth/rbac.js";
 import {
   assertAiSettingsPepperConfigured,
   decryptSecret,
@@ -25,7 +26,7 @@ import {
   ZERO_USAGE,
   type LlmUsage,
 } from "../ai/llm.js";
-import { estimateCostCents } from "../ai/pricing.js";
+import { estimateCostCents, MODEL_PRICING } from "../ai/pricing.js";
 import {
   enforceAiQuota,
   getAiUsageSummary,
@@ -119,7 +120,8 @@ async function requireAdmin(
   request: FastifyRequest
 ): Promise<SessionAuthInfo> {
   const info = await requireSession(deps, request);
-  if (info.role !== "admin") {
+  // P2-5：owner 是 admin 等价。
+  if (!isAdminRole(info.role)) {
     throw new ForbiddenError("Admin access required");
   }
   return info;
@@ -194,6 +196,40 @@ export async function registerAiRoutes(
   const { prisma } = deps;
   const fetchPageImpl = deps.fetchPageImpl ?? fetchPage;
 
+  // P1-19：每租户 AI 限流（20/min + 200/day，Redis 固定窗口；fail-open）。
+  // 只作用于 POST /api/v1/ai/*；GET（设置读取等）不限流。
+  app.addHook("onRequest", async (request, reply) => {
+    if (request.method !== "POST") return;
+    const path = request.url.split("?")[0];
+    if (!path.startsWith("/api/v1/ai/")) return;
+    const { checkAiRateLimit } = await import("../ai/rate-limit.js");
+    let tenantId: string | null = null;
+    if (request.sessionAuth?.tenantId) tenantId = request.sessionAuth.tenantId;
+    if (!tenantId) {
+      const h = request.headers["x-tenant-id"];
+      if (typeof h === "string" && h.trim()) tenantId = h.trim();
+    }
+    if (!tenantId) {
+      try {
+        const info = await authenticateSessionRequest(prisma, request);
+        tenantId = info?.tenantId ?? null;
+      } catch {
+        tenantId = null;
+      }
+    }
+    if (!tenantId) return;
+    const result = await checkAiRateLimit(tenantId);
+    if (!result.allowed) {
+      await reply
+        .code(429)
+        .header("Retry-After", String(result.retryAfterSeconds ?? 60))
+        .send({
+          error: "AI rate limit exceeded for this tenant (20/min, 200/day). Please retry later.",
+          retryAfterSeconds: result.retryAfterSeconds ?? 60,
+        });
+    }
+  });
+
   /**
    * P0-6 — AiAnalysis 记账字段。usage 缺失时记 0（LLM 没返回 usage 时
    * 不编造）；status 仅在成功落库时为 success。
@@ -265,6 +301,10 @@ export async function registerAiRoutes(
       ),
       /** Keepa API Key 是否已配置（只返回布尔值，永不返回明文）。 */
       hasKeepa: !!s.keepaApiKeyEnc,
+      /** P1-26：模型价格表（配置价，非实时官方价；与 P0-6 记账同一张表）。 */
+      modelPricing: MODEL_PRICING,
+      modelPricingNote:
+        "Prices are configured values (USD per 1M tokens), not live vendor prices. Billing follows the vendor console; new calls are metered at the displayed rate of the selected model.",
     };
   });
 
@@ -1156,13 +1196,20 @@ export async function registerAiRoutes(
       isOwnedDomain: boolean;
       affiliateParams: string[];
       verdict: "owned" | "affiliate_direct" | "suspicious" | "unknown";
+      /** P1-3：重定向跳数（0 = 无重定向；>3 跳前端黄警）。 */
+      redirectHops: number;
+      /** P1-3：重定向链（每跳 { url, status }）。 */
+      redirectChain: Array<{ url: string; status: number }>;
     }> = [];
     for (const inputUrl of urls) {
       let finalUrl = inputUrl;
       let ok = false;
+      let redirectChain: Array<{ url: string; status: number }> = [];
       try {
         const fetched = await fetchPageImpl(inputUrl);
         finalUrl = fetched.finalUrl;
+        // 注入替身可能不返回 redirectChain：用 finalUrl 是否变化兜底（≥1 跳记 1）。
+        redirectChain = fetched.redirectChain ?? [];
         ok = true;
       } catch {
         // SSRF-blocked or unreachable: report per-item unknown, never 400.
@@ -1202,6 +1249,9 @@ export async function registerAiRoutes(
               ownedDomains,
             })
           : "unknown",
+        redirectHops:
+          redirectChain.length > 0 ? redirectChain.length : redirected ? 1 : 0,
+        redirectChain,
       });
     }
     return { results, ownedDomains };
@@ -1245,6 +1295,55 @@ export async function registerAiRoutes(
               : String(r.createdAt),
         };
       }),
+    };
+  });
+
+  /**
+   * P2-1：同 URL 聚合 — 该 URL 已评估 N 次 + 最新分（省 AI 成本：
+   * 先看历史再决定是否重新分析）。
+   * inputRef 在 URL 模式下存抓取后的 finalUrl；用原 URL + 规范化 URL
+   * （去尾斜杠）双条件匹配，避免漏掉重定向前后的同一页面。
+   */
+  app.get<{
+    Querystring: { url?: string };
+  }>("/api/v1/ai/analyses/aggregate", async (request) => {
+    const info = await requireSession(deps, request);
+    const url = asTrimmedString(request.query.url);
+    if (!url) throw new ValidationError("url is required");
+    const normalized = url.replace(/\/+$/, "");
+    const rows = (await prisma.aiAnalysis.findMany({
+      where: {
+        tenantId: info.tenantId,
+        inputKind: "url",
+        inputRef: { in: [url, normalized] },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+      select: { id: true, result: true, createdAt: true, inputRef: true },
+    })) as Array<{
+      id: string;
+      result: unknown;
+      createdAt: Date;
+      inputRef: string;
+    }>;
+    const latest = rows[0] ?? null;
+    const latestResult = (latest?.result ?? {}) as {
+      overallRisk?: unknown;
+      riskLevel?: unknown;
+    };
+    return {
+      url,
+      count: rows.length,
+      latestId: latest?.id ?? null,
+      latestOverallRisk:
+        typeof latestResult.overallRisk === "number" ? latestResult.overallRisk : null,
+      latestRiskLevel:
+        typeof latestResult.riskLevel === "string" ? latestResult.riskLevel : null,
+      latestCreatedAt: latest
+        ? latest.createdAt instanceof Date
+          ? latest.createdAt.toISOString()
+          : String(latest.createdAt)
+        : null,
     };
   });
 

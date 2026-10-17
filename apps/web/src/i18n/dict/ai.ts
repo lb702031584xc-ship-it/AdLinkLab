@@ -52,6 +52,8 @@ export const zh = {
       needInput: "请提供 offer 链接或粘贴文本。",
       failed: "分析失败，请稍后重试。",
       notConfigured: "AI 功能尚未配置。",
+      alreadyEvaluated: "该 URL 已评估 {n} 次，最新分 {score}，可先看历史结果再决定是否重新分析。",
+      viewLatest: "查看最新",
     },
     report: {
       title: "分析报告",
@@ -75,6 +77,15 @@ export const zh = {
       missingData: "缺数据",
       keywords: "关键词推荐",
       adAngles: "广告角度",
+      /** P1-9：评估扩展维度（可选；模型无依据时省略）。 */
+      dimensions: "评估扩展维度",
+      dimensionLabels: {
+        seasonality: "季节性",
+        ltv: "用户终身价值",
+        competition: "竞争度",
+        conversionPath: "转化路径",
+        budget: "预算需求",
+      },
       reanalyze: "重新分析",
       noFindings: "未发现明显风险。",
       noSuggestions: "暂无建议。",
@@ -195,6 +206,7 @@ export const zh = {
     complianceToggle: "将合规结果计入最终决策",
     vetoBanner: {
       titleRed: "一票否决：不建议投放",
+      caliber: "判定口径：最终判定 = min(条款门禁, 盈利, 流量门)，三条腿中最弱的一条决定判定。",
       titleYellow: "存在未确认项，仅供参考",
       termsStop: "条款解析：结论为“别碰”（DO_NOT_RUN）",
       profitEpc: "盈利测算：EPC {epc} ≤ CPC {cpc}，每次点击都在亏钱",
@@ -537,6 +549,12 @@ export const zh = {
       "联盟经理封你之前看的就是这些指标：转化率突降、退款率飙升、地域异常。设好阈值，异常时自动告警，抢在被封之前自己先停。",
     rulesTitle: "监控规则",
     alertsTitle: "告警",
+    /** P1-5：测试节奏（与投放档案同一份 pace-checklist 规则；展示建议，不自动执行）。 */
+    paceTitle: "测试节奏（投放档案）",
+    paceEmpty: "暂无节奏建议（投放档案无符合时间规则的数据）。",
+    paceViewArchive: "查看档案",
+    dailyAlertsTitle: "每日预警",
+    dailyAlertsEmpty: "待生成，当前没有可读取的日数据。",
     enableDefaults: "启用默认规则",
     enabling: "启用中…",
     runNow: "立即检测",
@@ -558,6 +576,7 @@ export const zh = {
       autoPause: "自动暂停",
       enabled: "启用",
       actions: "操作",
+      notify: "通知",
     },
     metrics: {
       cvr_drop: "转化率下跌",
@@ -582,6 +601,12 @@ export const zh = {
     baselineLabel: "基线窗口（小时）",
     minClicksLabel: "最小点击数",
     autoPauseLabel: "触发时自动暂停",
+    /** P1-22：出站通知（Webhook 优先，邮件延后）。 */
+    webhookLabel: "触发时发 Webhook 通知",
+    webhookUrlLabel: "Webhook URL",
+    webhookUrlPlaceholder: "https://…（留空则不发）",
+    notifyInApp: "站内",
+    notifyWebhook: "Webhook",
     create: "创建",
     creating: "创建中…",
     noRules: "暂无规则，先启用默认规则或新建一条。",
@@ -1174,6 +1199,8 @@ export const en: typeof zh = {
       needInput: "Please provide an offer URL or paste text.",
       failed: "Analysis failed, please try again later.",
       notConfigured: "AI is not configured.",
+      alreadyEvaluated: "This URL has been evaluated {n} times; latest score {score}. Check history before re-analyzing.",
+      viewLatest: "View latest",
     },
     report: {
       title: "Analysis report",
@@ -1197,6 +1224,15 @@ export const en: typeof zh = {
       missingData: "Missing data",
       keywords: "Keyword recommendations",
       adAngles: "Ad angles",
+      /** P1-9：extended evaluation dimensions (optional; omitted when unsupported). */
+      dimensions: "Extended evaluation dimensions",
+      dimensionLabels: {
+        seasonality: "Seasonality",
+        ltv: "Lifetime value",
+        competition: "Competition",
+        conversionPath: "Conversion path",
+        budget: "Budget needs",
+      },
       reanalyze: "Analyze again",
       noFindings: "No significant risks found.",
       noSuggestions: "No suggestions yet.",
@@ -1317,6 +1353,7 @@ export const en: typeof zh = {
     complianceToggle: "Count compliance in the final decision",
     vetoBanner: {
       titleRed: "Veto: do not run",
+      caliber: "Verdict = min(terms gate, profit, traffic gate); the weakest leg decides.",
       titleYellow: "Unconfirmed items — for reference only",
       termsStop: "Terms screening: verdict is stop (DO_NOT_RUN)",
       profitEpc: "Profitability: EPC {epc} ≤ CPC {cpc} — losing money on every click",
@@ -1660,6 +1697,12 @@ export const en: typeof zh = {
       "These are the metrics an affiliate manager checks before banning you: CVR drops, refund spikes, geo anomalies. Set thresholds, get alerted, and pause yourself before they pause you.",
     rulesTitle: "Monitoring rules",
     alertsTitle: "Alerts",
+    /** P1-5：pace checklist (same rule source as launch archives; display-only). */
+    paceTitle: "Testing rhythm (launch archives)",
+    paceEmpty: "No rhythm suggestions yet (no archive matches the time rules).",
+    paceViewArchive: "View archive",
+    dailyAlertsTitle: "Daily alerts",
+    dailyAlertsEmpty: "Pending — no daily data available yet.",
     enableDefaults: "Enable default rules",
     enabling: "Enabling…",
     runNow: "Run check now",
@@ -1681,6 +1724,7 @@ export const en: typeof zh = {
       autoPause: "Auto-pause",
       enabled: "Enabled",
       actions: "Actions",
+      notify: "Notify",
     },
     metrics: {
       cvr_drop: "CVR drop",
@@ -1705,6 +1749,12 @@ export const en: typeof zh = {
     baselineLabel: "Baseline window (hours)",
     minClicksLabel: "Minimum clicks",
     autoPauseLabel: "Auto-pause on trigger",
+    /** P1-22：outbound notifications (Webhook first, email later). */
+    webhookLabel: "Send Webhook notification on trigger",
+    webhookUrlLabel: "Webhook URL",
+    webhookUrlPlaceholder: "https://… (empty = no webhook)",
+    notifyInApp: "In-app",
+    notifyWebhook: "Webhook",
     create: "Create",
     creating: "Creating…",
     noRules: "No rules yet — enable defaults or create one.",

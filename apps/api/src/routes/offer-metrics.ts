@@ -120,6 +120,8 @@ export interface MetricsSummary {
   score: number | null;
   grade: string | null;
   fetchedAt: string;
+  /** P1-30：最近一次抓取的评论数（metrics.reviewCount），无数据时 null。 */
+  reviewCount: number | null;
 }
 
 /**
@@ -134,18 +136,25 @@ export async function attachMetricsSummaries<T extends { id: string }>(
   if (items.length === 0) return [];
   const rows = await prisma.offerMetrics.findMany({
     where: { tenantId, offerId: { in: items.map((i) => i.id) } },
-    select: { offerId: true, score: true, grade: true, fetchedAt: true },
+    select: { offerId: true, score: true, grade: true, fetchedAt: true, metrics: true },
   });
-  const byOffer = new Map(
-    rows.map((r) => [
-      r.offerId,
-      {
-        score: r.score,
-        grade: r.grade,
-        fetchedAt: r.fetchedAt.toISOString(),
-      } as MetricsSummary,
-    ])
-  );
+  const byOffer = new Map<string, MetricsSummary>();
+  for (const r of rows) {
+    const prev = byOffer.get(r.offerId);
+    if (prev && new Date(prev.fetchedAt).getTime() >= r.fetchedAt.getTime()) continue;
+    // P1-30：从 metrics JSON 透传 reviewCount，供商品筛选预设使用。
+    const metrics = (r.metrics ?? {}) as Record<string, unknown>;
+    const reviewCount =
+      typeof metrics.reviewCount === "number" && Number.isFinite(metrics.reviewCount)
+        ? metrics.reviewCount
+        : null;
+    byOffer.set(r.offerId, {
+      score: r.score,
+      grade: r.grade,
+      fetchedAt: r.fetchedAt.toISOString(),
+      reviewCount,
+    });
+  }
   return items.map((i) => ({ ...i, metricsSummary: byOffer.get(i.id) ?? null }));
 }
 
@@ -219,6 +228,7 @@ export async function registerOfferMetricsRoutes(
         score: row.score,
         grade: row.grade,
         fetchedAt: row.fetchedAt.toISOString(),
+        reviewCount: metrics.reviewCount ?? null,
       } satisfies MetricsSummary,
     };
   });

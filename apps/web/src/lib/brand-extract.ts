@@ -60,13 +60,17 @@ export function extractBrandName(input: {
 }): BrandExtraction | null {
   const title = (input.title ?? "").trim();
   if (title) {
-    const firstSeg = title.split(TITLE_SEPARATORS)[0]?.trim() ?? "";
-    if (firstSeg && looksLikeBrand(firstSeg)) {
-      return {
-        brandName: firstSeg,
-        source: "auto_extracted",
-        confidence: 0.8,
-      };
+    // 0.8 仅当标题真有分隔符（第一段是品牌名）；无分隔符时不走这支，
+    // 否则 "Anker" 这类短标题会被误判为 0.8，0.7 分支永远不可达。
+    if (TITLE_SEPARATORS.test(title)) {
+      const firstSeg = title.split(TITLE_SEPARATORS)[0]?.trim() ?? "";
+      if (firstSeg && looksLikeBrand(firstSeg)) {
+        return {
+          brandName: firstSeg,
+          source: "auto_extracted",
+          confidence: 0.8,
+        };
+      }
     }
     if (!TITLE_SEPARATORS.test(title) && title.length <= 30 && looksLikeBrand(title)) {
       return { brandName: title, source: "auto_extracted", confidence: 0.7 };

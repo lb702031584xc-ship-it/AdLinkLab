@@ -11,8 +11,13 @@ import {
   getCopyPackText,
   getCreateCampaignScript,
   getRotationScript,
+  listBulkOperations,
   requestAdPlan,
+  rollbackBulkOperation,
+  runPreflight,
+  type AdPlanAdSchedule,
   type AutoCreateResult,
+  type PreflightResult,
   type ConfirmResult,
   type CreateCampaignScript,
 } from "./ads-auto";
@@ -47,12 +52,45 @@ export async function confirmAdPlanAction(
     dailyBudgetCurrency?: string;
     maxCpcCurrency?: string;
     geoTargets?: string[];
+    /** P1-25：确认时全量替换各组否词（[x]=精确，"x"=词组，裸词=词组）。 */
+    negativeKeywords?: string[];
+    /** P1-25：确认时全量替换排期。 */
+    adSchedules?: AdPlanAdSchedule[];
   }
 ): Promise<AdsAutoActionResult<ConfirmResult>> {
   try {
     return { ok: true, data: await confirmAdPlan(planId, maxCpc, overrides) };
   } catch (e) {
     return mapError(e, "创建 Script 任务失败，请稍后重试。");
+  }
+}
+
+export async function runPreflightAction(input: {
+  accountId: string;
+  landingUrl?: string;
+  dailyBudget?: number;
+}): Promise<AdsAutoActionResult<PreflightResult>> {
+  try {
+    return { ok: true, data: await runPreflight(input) };
+  } catch (e) {
+    return mapError(e, "Preflight 检查失败，请稍后重试。");
+  }
+}
+
+/** P1-16：批量审计 + 回滚。 */
+export async function listBulkOperationsAction(page = 1, pageSize = 20) {
+  try {
+    return { ok: true as const, data: await listBulkOperations(page, pageSize) };
+  } catch (e) {
+    return mapError(e, "加载批量审计日志失败，请稍后重试。");
+  }
+}
+
+export async function rollbackBulkOperationAction(auditLogId: string) {
+  try {
+    return { ok: true as const, data: await rollbackBulkOperation(auditLogId) };
+  } catch (e) {
+    return mapError(e, "回滚失败，请稍后重试。");
   }
 }
 

@@ -99,6 +99,141 @@ group: AdPlanAdGroup;
 rsa: AdPlanRsa;
 }
 
+/** P1-25：广告排期（campaign-level ad schedule，Google Ads adSchedule）。 */
+export interface AdPlanAdSchedule {
+  dayOfWeek: "MONDAY" | "TUESDAY" | "WEDNESDAY" | "THURSDAY" | "FRIDAY" | "SATURDAY" | "SUNDAY";
+  startHour: number;
+  startMinute: number;
+  endHour: number;
+  endMinute: number;
+}
+
+export const AD_SCHEDULE_DAYS = [
+  "MONDAY",
+  "TUESDAY",
+  "WEDNESDAY",
+  "THURSDAY",
+  "FRIDAY",
+  "SATURDAY",
+  "SUNDAY",
+] as const;
+
+/**
+ * P1-25：校验并规范化排期输入。非法条目直接抛错（排期错误必须显性失败，
+ * 绝不静默丢弃——否则用户以为排期生效而实际全天投放）。
+ */
+export function parseAdSchedules(input: unknown): AdPlanAdSchedule[] {
+  if (input === undefined || input === null) return [];
+  if (!Array.isArray(input)) {
+    throw new Error("adSchedules must be an array");
+  }
+  if (input.length > 7 * 4) {
+    throw new Error("adSchedules must contain at most 28 entries");
+  }
+  const out: AdPlanAdSchedule[] = [];
+  for (const [i, raw] of input.entries()) {
+    const s = raw as Record<string, unknown> | null;
+    if (!s || typeof s !== "object") {
+      throw new Error(`adSchedules[${i}] must be an object`);
+    }
+    const dayOfWeek = String(s.dayOfWeek ?? "").toUpperCase();
+    if (!(AD_SCHEDULE_DAYS as readonly string[]).includes(dayOfWeek)) {
+      throw new Error(`adSchedules[${i}].dayOfWeek must be MONDAY..SUNDAY`);
+    }
+    const hours = (k: string): number => {
+      const n = Number(s[k]);
+      if (!Number.isInteger(n) || n < 0 || n > 23) {
+        throw new Error(`adSchedules[${i}].${k} must be an integer 0-23`);
+      }
+      return n;
+    };
+    const minutes = (k: string): number => {
+      const n = Number(s[k]);
+      if (!Number.isInteger(n) || n < 0 || n > 59) {
+        throw new Error(`adSchedules[${i}].${k} must be an integer 0-59`);
+      }
+      return n;
+    };
+    const startHour = hours("startHour");
+    const startMinute = minutes("startMinute");
+    const endHour = hours("endHour");
+    const endMinute = minutes("endMinute");
+    if (endHour * 60 + endMinute <= startHour * 60 + startMinute) {
+      throw new Error(`adSchedules[${i}] end must be after start`);
+    }
+    out.push({ dayOfWeek: dayOfWeek as AdPlanAdSchedule["dayOfWeek"], startHour, startMinute, endHour, endMinute });
+  }
+  return out;
+}
+
+/**
+ * P1-25：解析用户否词输入（字符串数组或含 {text, matchType} 的对象数组）。
+ * 文本用 Google Ads 惯用记号：[x] = EXACT，"x" = PHRASE，裸词 = PHRASE。
+ * 去重 + 上限 1000（按组再截断）。
+ */
+export function parseNegativeKeywords(input: unknown): AdPlanKeyword[] {
+  if (input === undefined || input === null) return [];
+  if (!Array.isArray(input)) {
+    throw new Error("negativeKeywords must be an array");
+  }
+  if (input.length > 1000) {
+    throw new Error("negativeKeywords must contain at most 1000 entries");
+  }
+  const seen = new Set<string>();
+  const out: AdPlanKeyword[] = [];
+  for (const [i, raw] of input.entries()) {
+    let text = "";
+    let matchType: AdPlanKeyword["matchType"] = "PHRASE";
+    if (typeof raw === "string") {
+      text = raw.trim();
+      if (text.startsWith("[") && text.endsWith("]")) {
+        matchType = "EXACT";
+        text = text.slice(1, -1).trim();
+      } else if (text.startsWith('"') && text.endsWith('"')) {
+        matchType = "PHRASE";
+        text = text.slice(1, -1).trim();
+      }
+    } else if (raw && typeof raw === "object") {
+      const o = raw as Record<string, unknown>;
+      text = String(o.text ?? "").trim();
+      const mt = String(o.matchType ?? "PHRASE").toUpperCase();
+      if (mt === "EXACT" || mt === "PHRASE" || mt === "BROAD") matchType = mt as AdPlanKeyword["matchType"];
+      else throw new Error(`negativeKeywords[${i}].matchType must be EXACT, PHRASE or BROAD`);
+    } else {
+      throw new Error(`negativeKeywords[${i}] must be a string or {text, matchType}`);
+    }
+    if (!text) continue;
+    const key = `${matchType}:${text.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    // 用户手动输入的否词 = 已观测输入（OBSERVED），非 AI 生成（PREDICTED）。
+    out.push({ text, matchType, dataQuality: "OBSERVED" });
+  }
+  return out;
+}
+
+/**
+ * P1-25：把用户否词合并进每个广告组（排期是 campaign 级，否词是 ad-group 级；
+ * 用户否词是“全组通用”的补充，追加到各组 AI 否词之后，去重）。
+ */
+export function mergeUserNegatives(plan: AdPlan, negatives: AdPlanKeyword[]): void {
+  if (negatives.length === 0) return;
+  for (const block of plan.adGroups) {
+    const seen = new Set(
+      block.group.negativeKeywords.map((k) => `${k.matchType}:${k.text.toLowerCase()}`)
+    );
+    for (const neg of negatives) {
+      const key = `${neg.matchType}:${neg.text.toLowerCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      block.group.negativeKeywords.push({ ...neg });
+    }
+    if (block.group.negativeKeywords.length > 100) {
+      block.group.negativeKeywords = block.group.negativeKeywords.slice(0, 100);
+    }
+  }
+}
+
 export interface AdPlan {
 version: 1;
 planId: string;
@@ -112,6 +247,8 @@ currencyConversion?: { from: string; to: string; fxRate: number };
 /** 文案口吻：official=官方口吻（Official Site 结构），affiliate=联盟安全口吻，expert=专家营销口吻 */
 copyStyle: AdCopyStyle;
 campaign: AdPlanCampaign;
+/** P1-25：广告排期（campaign 级；空 = 全天投放）。 */
+adSchedules?: AdPlanAdSchedule[];
 /** One ad group (+ its own RSA) per input URL. */
 adGroups: AdPlanAdGroupBlock[];
 createdAt: string;

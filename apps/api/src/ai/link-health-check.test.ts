@@ -144,7 +144,8 @@ describe("checkLinkHealth", () => {
       })
     );
     const r = await checkLinkHealth("https://merchant.example/deal", NO_DNS);
-    expect(seen).toEqual(["HEAD", "GET"]);
+    // HEAD 405 → GET 落回；内容校验再做一次 GET（c2af8b7 内容门）。
+    expect(seen).toEqual(["HEAD", "GET", "GET"]);
     expect(r.isAlive).toBe(true);
     expect(r.statusCode).toBe(200);
   });

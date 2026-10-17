@@ -32,7 +32,7 @@ export {
   resolveRequestId,
   sanitizeRequestId,
 } from "./request-id.js";
-export { httpMetrics, normalizeRoute } from "./metrics.js";
+export { businessMetrics, httpMetrics, normalizeRoute } from "./metrics.js";
 export { evaluateReadiness } from "./readiness.js";
 export type { ReadinessResult, ReadinessCheck, DependencyStatus } from "./readiness.js";
 export {

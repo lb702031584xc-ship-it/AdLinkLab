@@ -21,6 +21,7 @@ import { OfferStatusSwitcher } from "@/components/entities/offer-status-switcher
 import { OfferIntelTabs } from "@/components/offers/offer-intel-tabs";
 import { TestStopLossSection } from "@/components/offers/test-stop-loss";
 import { ClickProfitCard } from "@/components/offers/click-profit-card";
+import { OfferAutoStatusSection } from "@/components/offers/offer-auto-status-section";
 import { getLang } from "@/i18n/lang";
 import { getDictionary } from "@/i18n/dictionaries";
 
@@ -134,6 +135,9 @@ export default async function OfferDetailPage({
       <OfferIntelTabs offerId={offer.id} />
       {/* 测试止损（第七批）：kill-switch 扩展阈值 */}
       <TestStopLossSection offerId={offer.id} />
+      {/* P1-6：自动状态联动（默认关闭；开启后零表现自动暂停，ROAS 下滑只建议）。 */}
+      <SectionTitle>{t.entities.offers.autoStatus.title}</SectionTitle>
+      <OfferAutoStatusSection offerId={offer.id} dict={t.entities.offers.autoStatus} />
       {/* 每次点击盈亏（第十一批） */}
       <SectionTitle>{t.entities.offers.clickProfit.sectionTitle}</SectionTitle>
       <ClickProfitCard dict={t.entities.offers.clickProfit} />

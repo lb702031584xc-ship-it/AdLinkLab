@@ -143,3 +143,60 @@ function escapeLabel(value: string): string {
 }
 
 export const httpMetrics = new InMemoryHttpMetrics();
+
+/**
+ * P2-3 — 业务计数器（与 HTTP 指标同进程内存，重启清零）。
+ * 渲染进同一个 /metrics 端点；Traefik 只转发 /api 与 /health 到 API，
+ * /metrics 不对外暴露（见 docs/monitoring-alerts.md）。
+ */
+class BusinessMetrics {
+  private clicks = 0;
+  private conversions = 0;
+  private killSwitchFired = 0;
+  private duplicateClickRate: number | null = null;
+
+  clickRecorded(): void {
+    this.clicks += 1;
+  }
+
+  conversionCreated(): void {
+    this.conversions += 1;
+  }
+
+  killSwitchFiredOnce(): void {
+    this.killSwitchFired += 1;
+  }
+
+  /** 最新一次重复点击评估的重复率（kill-switch P1-24 条件 (6) 写入）。 */
+  setDuplicateClickRate(rate: number): void {
+    this.duplicateClickRate = Math.min(Math.max(rate, 0), 1);
+  }
+
+  reset(): void {
+    this.clicks = 0;
+    this.conversions = 0;
+    this.killSwitchFired = 0;
+    this.duplicateClickRate = null;
+  }
+
+  renderPrometheus(): string {
+    const lines: string[] = [];
+    lines.push("# HELP adlinklab_clicks_total Total recorded clicks");
+    lines.push("# TYPE adlinklab_clicks_total counter");
+    lines.push(`adlinklab_clicks_total ${this.clicks}`);
+    lines.push("# HELP adlinklab_conversions_total Total created conversions");
+    lines.push("# TYPE adlinklab_conversions_total counter");
+    lines.push(`adlinklab_conversions_total ${this.conversions}`);
+    lines.push("# HELP adlinklab_killswitch_fired_total Total kill-switch firings");
+    lines.push("# TYPE adlinklab_killswitch_fired_total counter");
+    lines.push(`adlinklab_killswitch_fired_total ${this.killSwitchFired}`);
+    lines.push("# HELP adlinklab_duplicate_click_rate Latest duplicate-click rate (0..1)");
+    lines.push("# TYPE adlinklab_duplicate_click_rate gauge");
+    lines.push(
+      `adlinklab_duplicate_click_rate ${this.duplicateClickRate ?? 0}`
+    );
+    return `${lines.join("\n")}\n`;
+  }
+}
+
+export const businessMetrics = new BusinessMetrics();

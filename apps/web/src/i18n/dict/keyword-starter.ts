@@ -59,6 +59,21 @@ export interface KeywordStarterDict {
   aiNoScoreHint: string;
   sourceCapture: string;
   sourceAi: string;
+  /* P1-10：规则生成关键词（无 LLM，无假搜索量） */
+  ruleTitle: string;
+  ruleHint: string;
+  ruleSeeds: string;
+  ruleBrand: string;
+  ruleDomain: string;
+  ruleGenerate: string;
+  ruleGenerating: string;
+  ruleImportAll: string;
+  ruleImportOne: string;
+  ruleFailed: string;
+  ruleCoverageWarn: string;
+  ruleNoVolume: string;
+  ruleKindLabels: Record<"brand-suffix" | "seed-combo" | "token-suffix", string>;
+  ruleSourceLabel: string;
   captureKwFrom: string;
   captureKwPage: string;
   captureKwVolume: string;
@@ -165,6 +180,21 @@ export const zh: KeywordStarterDict = {
   aiNoScoreHint: "💡 以下为 AI 选词思路（未打分）。导入后去 SEMRUSH/规划师查真实数据填入下方，系统按真实数据算分。",
   sourceCapture: "抓取",
   sourceAi: "AI",
+  /* P1-10：规则生成关键词（无 LLM，无假搜索量） */
+  ruleTitle: "规则生成关键词",
+  ruleHint: "种子词 × 意图后缀 / 品牌词 × 后缀 / 种子两两组合，规则分与 AI 无关；搜索量/竞争度未连接 Keyword Planner 时显示 —，不编造。",
+  ruleSeeds: "种子词（逗号分隔）",
+  ruleBrand: "品牌词（逗号分隔，可空）",
+  ruleDomain: "域名（用于规则分加成，可空）",
+  ruleGenerate: "规则生成",
+  ruleGenerating: "生成中…",
+  ruleImportAll: "全部导入",
+  ruleImportOne: "导入",
+  ruleFailed: "规则生成失败，请稍后重试",
+  ruleCoverageWarn: "品牌覆盖低",
+  ruleNoVolume: "未连接 Keyword Planner，搜索量/竞争度为 —",
+  ruleKindLabels: { "brand-suffix": "品牌+后缀", "seed-combo": "种子组合", "token-suffix": "词+后缀" },
+  ruleSourceLabel: "规则生成",
   captureKwFrom: "抓取自",
   captureKwPage: "抓取页",
   captureKwVolume: "月搜索量",
@@ -272,6 +302,21 @@ export const en: KeywordStarterDict = {
   aiNoScoreHint: "💡 Keyword ideas from AI (not scored). Import them, fill in real SEMRUSH/Planner data below, and the system scores from real data.",
   sourceCapture: "Captured",
   sourceAi: "AI",
+  /* P1-10：rule-generated keywords (no LLM, no invented volumes) */
+  ruleTitle: "Rule-generated keywords",
+  ruleHint: "Seeds × intent suffixes / brand × suffix / seed pairs. Rule score is independent of AI; volume/competition show — when Keyword Planner is not connected, never invented.",
+  ruleSeeds: "Seeds (comma-separated)",
+  ruleBrand: "Brand terms (comma-separated, optional)",
+  ruleDomain: "Domain (rule-score bonus, optional)",
+  ruleGenerate: "Generate by rules",
+  ruleGenerating: "Generating…",
+  ruleImportAll: "Import all",
+  ruleImportOne: "Import",
+  ruleFailed: "Rule generation failed, please try again",
+  ruleCoverageWarn: "Low brand coverage",
+  ruleNoVolume: "Keyword Planner not connected — volume/competition shown as —",
+  ruleKindLabels: { "brand-suffix": "Brand+suffix", "seed-combo": "Seed combo", "token-suffix": "Token+suffix" },
+  ruleSourceLabel: "Rule-generated",
   captureKwFrom: "Captured from",
   captureKwPage: "captured page",
   captureKwVolume: "Volume",

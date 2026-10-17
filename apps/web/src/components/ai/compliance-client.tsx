@@ -217,6 +217,7 @@ export function ComplianceClient({
                   <th className="px-3 py-2">{d.columns.input}</th>
                   <th className="px-3 py-2">{d.columns.finalDomain}</th>
                   <th className="px-3 py-2">{d.columns.affiliateParams}</th>
+                  <th className="px-3 py-2">重定向跳数</th>
                   <th className="px-3 py-2">{d.columns.verdict}</th>
                 </tr>
               </thead>
@@ -257,6 +258,20 @@ export function ComplianceClient({
                         <span className="text-ink/40">{d.noParams}</span>
                       )}
                     </td>
+                    {/* P1-3：跳数 >3 黄色警告（可能影响转化率）；affiliate 参数检测保留。 */}
+                    <td className="px-3 py-2">
+                      {typeof r.redirectHops === "number" ? (
+                        r.redirectHops > 3 ? (
+                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800" title="重定向超过 3 跳，可能影响转化率">
+                            {r.redirectHops} 跳 ⚠️
+                          </span>
+                        ) : (
+                          <span className="text-ink/70">{r.redirectHops} 跳</span>
+                        )
+                      ) : (
+                        <span className="text-ink/40">—</span>
+                      )}
+                    </td>
                     <td className="px-3 py-2">
                       <span
                         className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${verdictBadge(r.verdict)}`}
@@ -268,7 +283,7 @@ export function ComplianceClient({
                 ))}
                 {results.length === 0 ? (
                   <tr>
-                    <td className="px-3 py-6 text-ink/50" colSpan={4}>
+                    <td className="px-3 py-6 text-ink/50" colSpan={5}>
                       {d.empty}
                     </td>
                   </tr>

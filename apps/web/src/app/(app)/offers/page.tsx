@@ -32,6 +32,7 @@ import {
 } from "@/components/offers/quick-calc-button";
 import { listCashbackOffersAction } from "@/lib/api/cashback-actions";
 import type { CashbackOffer } from "@/lib/api/cashback";
+import { OfferPresetFilterBar } from "@/components/offers/offer-preset-filter";
 
 export const dynamic = "force-dynamic";
 
@@ -52,6 +53,57 @@ function parsePositiveInt(
   const raw = Array.isArray(value) ? value[0] : value;
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+
+/** P1-30：解析可选数值筛选参数（空/非法 → null = 不筛选）。 */
+function parseFilterNum(value: string | string[] | undefined): number | null {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (raw == null || raw.trim() === "") return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+interface OfferPresetFilter {
+  minReviews: number | null;
+  minCommission: number | null;
+  minRate: number | null;
+  minPrice: number | null;
+  maxPrice: number | null;
+  minScore: number | null;
+}
+
+/** P1-30：派生佣金金额/比例（电商：均价×比例；固定：佣金值；缺数据 → null）。 */
+function derivedCommission(o: Offer): { amount: number | null; rate: number | null } {
+  const cv = o.commissionValue == null ? null : Number(o.commissionValue);
+  const price = o.avgPrice == null ? null : Number(o.avgPrice);
+  if (o.commissionType === "percentage") {
+    return {
+      amount: cv != null && price != null ? (price * cv) / 100 : null,
+      rate: cv,
+    };
+  }
+  if (o.commissionType === "fixed") {
+    return { amount: cv, rate: null };
+  }
+  return { amount: null, rate: null };
+}
+
+/**
+ * P1-30：预设筛选（缺数据的 Offer 不通过已设置的该项条件——无法验证即不计入）。
+ * 默认阈值来自默认预设（讲师经验），不在此处硬编码。
+ */
+function passesPresetFilter(o: Offer, f: OfferPresetFilter): boolean {
+  const { amount, rate } = derivedCommission(o);
+  if (f.minCommission != null && (amount == null || amount < f.minCommission)) return false;
+  if (f.minRate != null && (rate == null || rate < f.minRate)) return false;
+  const price = o.avgPrice == null ? null : Number(o.avgPrice);
+  if (f.minPrice != null && (price == null || price < f.minPrice)) return false;
+  if (f.maxPrice != null && (price == null || price > f.maxPrice)) return false;
+  const reviews = o.metricsSummary?.reviewCount ?? null;
+  if (f.minReviews != null && (reviews == null || reviews < f.minReviews)) return false;
+  const score = o.metricsSummary?.score ?? null;
+  if (f.minScore != null && (score == null || score < f.minScore)) return false;
+  return true;
 }
 
 function sourceBadgeClass(source: string): string {
@@ -84,6 +136,20 @@ export default async function OffersPage({
   const tab = parseTab(sp.tab);
   const page = parsePositiveInt(sp.page, 1);
   const pageSize = parsePositiveInt(sp.pageSize, 20);
+  // P1-30：筛选预设参数（preset=1 时用默认预设；显式参数优先）。
+  const presetDefaults =
+    sp.preset === "1"
+      ? { minCommission: 10, minRate: 10, minPrice: 80, maxPrice: 150 }
+      : {};
+  const presetFilter: OfferPresetFilter = {
+    minReviews: parseFilterNum(sp.minReviews),
+    minCommission: parseFilterNum(sp.minCommission) ?? presetDefaults.minCommission ?? null,
+    minRate: parseFilterNum(sp.minRate) ?? presetDefaults.minRate ?? null,
+    minPrice: parseFilterNum(sp.minPrice) ?? presetDefaults.minPrice ?? null,
+    maxPrice: parseFilterNum(sp.maxPrice) ?? presetDefaults.maxPrice ?? null,
+    minScore: parseFilterNum(sp.minScore),
+  };
+  const filterActive = Object.values(presetFilter).some((v) => v != null);
   const lang = await getLang();
   const t = getDictionary(lang);
   const tabsDict = t.entities.offers.tabs;
@@ -359,7 +425,23 @@ export default async function OffersPage({
   let data: Awaited<ReturnType<typeof entityApi.offers.list>> | null = null;
   let error: string | null = null;
   try {
-    data = await entityApi.offers.list(page, pageSize, tab);
+    if (filterActive) {
+      // P1-30：筛选应用于全部 Offer（分页拉取，至多 2000 条），非仅当前页。
+      const all: Offer[] = [];
+      let p = 1;
+      let total = Infinity;
+      while (all.length < total && p <= 20) {
+        const chunk = await entityApi.offers.list(p, 100, tab);
+        all.push(...chunk.items);
+        total = chunk.total;
+        if (chunk.items.length === 0) break;
+        p += 1;
+      }
+      const filtered = all.filter((o) => passesPresetFilter(o, presetFilter));
+      data = { items: filtered, page: 1, pageSize: Math.max(filtered.length, 1), total: filtered.length };
+    } else {
+      data = await entityApi.offers.list(page, pageSize, tab);
+    }
   } catch (e) {
     error = mapEntityErrorMessage(e, lang);
   }
@@ -390,6 +472,39 @@ export default async function OffersPage({
         }
       />
       {tabsUi}
+      {/* P1-30：商品筛选预设栏（返利 Tab 已在上方提前 return，此处只剩联盟/亚马逊 Tab）。 */}
+      <OfferPresetFilterBar
+          dict={t.entities.offers.presetFilter}
+          tab={tab}
+          values={{
+            minReviews: sp.minReviews != null && !Array.isArray(sp.minReviews) ? sp.minReviews : "",
+            minCommission:
+              sp.minCommission != null && !Array.isArray(sp.minCommission)
+                ? sp.minCommission
+                : sp.preset === "1"
+                  ? "10"
+                  : "",
+            minRate:
+              sp.minRate != null && !Array.isArray(sp.minRate)
+                ? sp.minRate
+                : sp.preset === "1"
+                  ? "10"
+                  : "",
+            minPrice:
+              sp.minPrice != null && !Array.isArray(sp.minPrice)
+                ? sp.minPrice
+                : sp.preset === "1"
+                  ? "80"
+                  : "",
+            maxPrice:
+              sp.maxPrice != null && !Array.isArray(sp.maxPrice)
+                ? sp.maxPrice
+                : sp.preset === "1"
+                  ? "150"
+                  : "",
+            minScore: sp.minScore != null && !Array.isArray(sp.minScore) ? sp.minScore : "",
+          }}
+        />
       {error || !data ? (
         <ErrorState
           message={error ?? t.entities.offers.loadError}
@@ -414,14 +529,21 @@ export default async function OffersPage({
               emptyText={t.entities.offers.empty}
             />
           </OfferSelectionProvider>
-          <Pagination
-            page={data.page}
-            pageSize={data.pageSize}
-            total={data.total}
-            basePath="/offers"
-            extraParams={{ tab }}
-            labels={paginationLabels(t)}
-          />
+          {filterActive ? null : (
+            <Pagination
+              page={data.page}
+              pageSize={data.pageSize}
+              total={data.total}
+              basePath="/offers"
+              extraParams={{ tab }}
+              labels={paginationLabels(t)}
+            />
+          )}
+          {filterActive ? (
+            <p className="mt-2 text-xs text-ink/60">
+              {t.entities.offers.presetFilter.filteredCount.replace("{n}", String(data.total))}
+            </p>
+          ) : null}
         </div>
       )}
     </div>

@@ -11,6 +11,9 @@ export default function NewGoogleAccountPage() {
   const [customerId, setCustomerId] = useState("");
   const [currency, setCurrency] = useState("USD");
   const [timezone, setTimezone] = useState("America/Los_Angeles");
+  /** P1-7：账号类型必填，创建后不可变更。 */
+  const [accountType, setAccountType] = useState<"MCC" | "PERSONAL">("MCC");
+  const [managerCustomerId, setManagerCustomerId] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,6 +58,8 @@ export default function NewGoogleAccountPage() {
         customerId: customerId.trim(),
         currency: currency.trim() || "USD",
         timezone: timezone.trim() || "America/Los_Angeles",
+        accountType,
+        managerCustomerId: managerCustomerId.trim() || undefined,
       });
       if (result.ok) {
         router.push("/google-accounts");
@@ -100,6 +105,30 @@ export default function NewGoogleAccountPage() {
             value={customerId}
             onChange={(e) => setCustomerId(e.target.value)}
             placeholder="如：1234567890（谷歌广告后台右上角，不带横杠）"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-sm font-medium text-ink/80">
+            账号类型 *（创建后不可变更，变更需删除后重建）
+          </label>
+          <select
+            className={inputClass}
+            value={accountType}
+            onChange={(e) => setAccountType(e.target.value as "MCC" | "PERSONAL")}
+          >
+            <option value="MCC">MCC（经理账号，可管理多个子账号）</option>
+            <option value="PERSONAL">个人（单个广告账号，仅支持单账号操作）</option>
+          </select>
+        </div>
+        <div>
+          <label className="mb-1 block text-sm font-medium text-ink/80">
+            上级 MCC 客户 ID（可选，子账号填）
+          </label>
+          <input
+            className={inputClass}
+            value={managerCustomerId}
+            onChange={(e) => setManagerCustomerId(e.target.value)}
+            placeholder="如：1234567890（不带横杠；MCC 本身留空）"
           />
         </div>
         <div className="grid grid-cols-2 gap-4">

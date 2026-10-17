@@ -147,6 +147,13 @@ function toGoogleAccount(row: {
   timezone: string;
   oauthCredentialRef: string | null;
   status: string;
+  /** P1-7/P1-8：Prisma 返回的新字段（旧行由 DB 默认值填充）。 */
+  accountType?: string;
+  healthStatus?: string;
+  suspensionReason?: string | null;
+  appealStatus?: string;
+  appealNote?: string | null;
+  suspendedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
   archivedAt: Date | null;
@@ -167,6 +174,16 @@ function toGoogleAccount(row: {
     timeZone: row.timezone,
     oauthCredentialRef: row.oauthCredentialRef ?? undefined,
     status: row.status as GoogleAccount["status"],
+    accountType: (row.accountType === "PERSONAL" ? "PERSONAL" : "MCC") as GoogleAccount["accountType"],
+    healthStatus: (["active", "suspended", "limited"].includes(row.healthStatus ?? "")
+      ? row.healthStatus
+      : "active") as GoogleAccount["healthStatus"],
+    suspensionReason: row.suspensionReason ?? undefined,
+    appealStatus: (["none", "pending", "approved", "rejected"].includes(row.appealStatus ?? "")
+      ? row.appealStatus
+      : "none") as GoogleAccount["appealStatus"],
+    appealNote: row.appealNote ?? undefined,
+    suspendedAt: row.suspendedAt ?? undefined,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     archivedAt: row.archivedAt ?? undefined,
@@ -188,6 +205,12 @@ function googleAccountCreateData(
     timezone: data.timezone ?? data.timeZone,
     oauthCredentialRef: data.oauthCredentialRef ?? null,
     status: data.status,
+    accountType: data.accountType ?? "MCC",
+    healthStatus: data.healthStatus ?? "active",
+    suspensionReason: data.suspensionReason ?? null,
+    appealStatus: data.appealStatus ?? "none",
+    appealNote: data.appealNote ?? null,
+    suspendedAt: data.suspendedAt ?? null,
     archivedAt: data.archivedAt ?? null,
     deletedAt: data.deletedAt ?? null,
   };
@@ -878,9 +901,11 @@ export class PrismaGoogleAccountRepository implements GoogleAccountRepository {
   async findByCustomerId(customerId: string) {
     return this.findByGoogleCustomerId(customerId);
   }
-  async list(input?: PaginationInput & { tenantId?: string }) {
+  async list(input?: PaginationInput & { tenantId?: string; accountType?: string; healthStatus?: string }) {
     const { page, pageSize, skip } = normalizePagination(input);
-    const where = input?.tenantId ? { tenantId: input.tenantId } : {};
+    const where: Record<string, unknown> = input?.tenantId ? { tenantId: input.tenantId } : {};
+    if (input?.accountType) where.accountType = input.accountType;
+    if (input?.healthStatus) where.healthStatus = input.healthStatus;
     const [items, total] = await Promise.all([
       this.db.googleAccount.findMany({
         where,
@@ -891,6 +916,13 @@ export class PrismaGoogleAccountRepository implements GoogleAccountRepository {
       this.db.googleAccount.count({ where }),
     ]);
     return createPaginatedResult(items.map(toGoogleAccount), total, page, pageSize);
+  }
+  async findByManagerCustomerId(tenantId: string, managerCustomerId: string) {
+    const rows = await this.db.googleAccount.findMany({
+      where: { tenantId, managerCustomerId },
+      orderBy: { createdAt: "desc" },
+    });
+    return rows.map(toGoogleAccount);
   }
   async create(data: Omit<GoogleAccount, "createdAt" | "updatedAt">) {
     return toGoogleAccount(

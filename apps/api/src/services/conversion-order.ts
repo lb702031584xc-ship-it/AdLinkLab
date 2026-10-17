@@ -30,6 +30,11 @@ import {
   ValidationError,
 } from "@adlinklab/shared";
 import { processIdempotentJob } from "../queue/jobs.js";
+import { businessMetrics } from "../observability/index.js";
+import {
+  DEFAULT_ATTRIBUTION_SETTINGS,
+  type AttributionSettings,
+} from "./attribution-settings.js";
 import {
   mutationLockKey,
   withMutationLock,
@@ -73,8 +78,61 @@ export class OrderConversionService {
      * Phase 2 — traffic event journal (optional). Best-effort only:
      * event writes never change the Conversion result or throw into it.
      */
-    private readonly trafficEvents?: TrafficEventService
+    private readonly trafficEvents?: TrafficEventService,
+    /**
+     * P1-11 — attribution policy (optional; absent = defaults, no dedupe lookup).
+     * attributionSettings: per-tenant settings reader (fallback = defaults).
+     * findDuplicateClick: true when an earlier click with the same gclid exists
+     * within the dedupe window (Prisma-backed in app.ts; absent = dedupe skipped).
+     */
+    private readonly attributionSettings?: (
+      tenantId: string
+    ) => Promise<AttributionSettings>,
+    private readonly findDuplicateClick?: (
+      tenantId: string,
+      gclid: string,
+      occurredAt: Date,
+      windowMinutes: number
+    ) => Promise<boolean>
   ) {}
+
+  /**
+   * P1-11：归因策略执行（归因窗口 + 重复点击去重）。
+   * - 点击 → 参考时间超出 attributionWindowDays → 拒绝归因。
+   * - duplicateClicksCountAsConversion=false 且同 gclid 在去重窗口内已出现过 → 拒绝计为转化。
+   */
+  private async enforceAttributionPolicy(
+    tenantId: string,
+    click: { gclid?: string | null; occurredAt: Date },
+    referenceTime: Date
+  ): Promise<void> {
+    const settings = this.attributionSettings
+      ? await this.attributionSettings(tenantId)
+      : { ...DEFAULT_ATTRIBUTION_SETTINGS };
+    const ageMs = referenceTime.getTime() - click.occurredAt.getTime();
+    if (ageMs > settings.attributionWindowDays * 86_400_000) {
+      throw new ValidationError(
+        `Attribution window exceeded: click is ${Math.floor(ageMs / 86_400_000)} days old (window ${settings.attributionWindowDays} days)`
+      );
+    }
+    if (
+      !settings.duplicateClicksCountAsConversion &&
+      click.gclid &&
+      this.findDuplicateClick
+    ) {
+      const dup = await this.findDuplicateClick(
+        tenantId,
+        click.gclid,
+        click.occurredAt,
+        settings.gclidDedupeMinutes
+      );
+      if (dup) {
+        throw new ValidationError(
+          `Duplicate click within dedupe window (${settings.gclidDedupeMinutes} min, same gclid); not counted as conversion per attribution settings`
+        );
+      }
+    }
+  }
 
   listOrders(tenantId: string, page?: number, pageSize?: number) {
     return this.orders.list({ tenantId, page, pageSize });
@@ -238,6 +296,9 @@ export class OrderConversionService {
     );
     if (!click) throw new NotFoundError("Click", order.clickId);
 
+    // P1-11：归因窗口 + 重复点击去重（参考时间 = 订单创建时间）。
+    await this.enforceAttributionPolicy(input.tenantId, click, order.createdAt);
+
     const action = input.conversionAction.trim();
     if (!action) throw new ValidationError("conversionAction is required");
 
@@ -311,6 +372,7 @@ export class OrderConversionService {
     });
 
     const created = { ...result, created: true };
+    businessMetrics.conversionCreated(); // P2-3
     if (this.trafficEvents) {
       // Phase 2 — traffic event journal. Best-effort: failures are logged
       // inside the service and never affect the conversion result above.
@@ -376,6 +438,14 @@ export class OrderConversionService {
     );
     if (existing) return { conversion: existing, created: false };
 
+    // P1-11：归因窗口 + 重复点击去重（参考时间 = 转化时间或现在）。
+    // 放在幂等检查之后：重试同一转化不因窗口过期而失败。
+    await this.enforceAttributionPolicy(
+      input.tenantId,
+      click,
+      input.conversionTime ?? new Date()
+    );
+
     const identity = resolveGoogleClickIdentity(click);
     const value = input.value ? assertMoneyDecimal(input.value) : undefined;
     const currency = input.currency
@@ -418,6 +488,7 @@ export class OrderConversionService {
     });
 
     const out = { conversion, created: true };
+    businessMetrics.conversionCreated(); // P2-3
     if (this.trafficEvents) {
       // Phase 2 — traffic event journal. Best-effort: failures are logged
       // inside the service and never affect the conversion result above.

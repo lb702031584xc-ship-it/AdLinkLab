@@ -62,9 +62,33 @@ export interface GoogleAccount extends Timestamps, SoftDeleteFields {
   timezone: string;
   /** @deprecated Prefer timezone */
   timeZone: string;
+  /** P1-7：账号类型：MCC（经理账号）| PERSONAL（个人账号）。创建时必填，创建后不可变更。 */
+  accountType: "MCC" | "PERSONAL";
+  /** P1-8：健康状态：active | suspended | limited。 */
+  healthStatus: "active" | "suspended" | "limited";
+  /** P1-8：封停原因（平台通知原文摘要）。 */
+  suspensionReason?: string;
+  /** P1-8：申诉状态：none | pending | approved | rejected。 */
+  appealStatus: "none" | "pending" | "approved" | "rejected";
+  /** P1-8：申诉备注（平台侧申诉时间/结果只做记录，不自动申诉）。 */
+  appealNote?: string;
+  /** P1-8：封停时间。 */
+  suspendedAt?: Date;
   /** Opaque vault/KMS reference — never plaintext OAuth secret */
   oauthCredentialRef?: string;
   status: AccountStatus;
+}
+
+/** P1-8：账号申诉记录（只记录平台侧申诉时间/结果，不自动申诉）。 */
+export interface GoogleAccountAppeal extends Timestamps {
+  id: string;
+  tenantId: string;
+  googleAccountId: string;
+  /** MCC | SUBACCOUNT | PERSONAL */
+  level: string;
+  /** draft | submitted | approved | rejected */
+  status: string;
+  note?: string;
 }
 
 export interface Campaign extends Timestamps, SoftDeleteFields {

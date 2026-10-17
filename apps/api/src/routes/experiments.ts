@@ -10,6 +10,10 @@ import {
   authenticateSessionRequest,
   type SessionAuthInfo,
 } from "../auth/sessions.js";
+import {
+  MIN_CREATIVE_DIFFERENCE,
+  creativeDifference,
+} from "../services/creative-difference.js";
 
 /**
  * Phase 3 — A/B Experiment API (one tenant per user; session auth only).
@@ -29,13 +33,20 @@ export interface ExperimentRouteDeps {
 }
 
 export type ExperimentStatus = "DRAFT" | "RUNNING" | "COMPLETED" | "CANCELLED";
-export type ExperimentVariantType = "LANDING_PAGE" | "DIRECT_LINK";
+export type ExperimentVariantType = "LANDING_PAGE" | "DIRECT_LINK" | "AD_GROUP";
 export type ExperimentWinner = "A" | "B" | "TIE";
+/** P1-12：实验类型（LANDING_PAGE | DIRECT_LINK | AD_GROUP）+ 毕业动作。 */
+export type ExperimentType = "LANDING_PAGE" | "DIRECT_LINK" | "AD_GROUP";
+export type GraduationAction = "none" | "pause_loser";
 
 export interface ExperimentVariant {
   type: ExperimentVariantType;
-  trackingLinkId: string;
+  /** LANDING_PAGE/DIRECT_LINK 用；AD_GROUP 用 headlines/descriptions。 */
+  trackingLinkId: string | null;
   label: string;
+  /** P1-12：AD_GROUP 变体文案（headlines + descriptions）。 */
+  headlines?: string[];
+  descriptions?: string[];
 }
 
 /** Numeric metrics snapshot for one variant. All fields optional; missing
@@ -99,6 +110,10 @@ export interface ExperimentRow {
   deletedAt: string | Date | null;
   createdAt: string | Date;
   updatedAt: string | Date;
+  /** P1-12：实验类型 / 种子广告组 / 毕业动作（旧行缺失时按默认值处理）。 */
+  experimentType?: string | null;
+  seedAdGroupId?: string | null;
+  graduationAction?: string | null;
 }
 
 /** Minimal delegate for `prisma.experiment` (schema owned by Worker 1). */
@@ -141,10 +156,31 @@ function asFiniteNumber(v: unknown): number | undefined {
 function parseVariant(raw: unknown, side: "A" | "B"): ExperimentVariant {
   const r = (raw ?? {}) as Record<string, unknown>;
   const typeRaw = typeof r.type === "string" ? r.type.trim().toUpperCase() : "";
-  if (typeRaw !== "LANDING_PAGE" && typeRaw !== "DIRECT_LINK") {
+  if (typeRaw !== "LANDING_PAGE" && typeRaw !== "DIRECT_LINK" && typeRaw !== "AD_GROUP") {
     throw new ValidationError(
-      `variant${side}.type must be LANDING_PAGE or DIRECT_LINK`
+      `variant${side}.type must be LANDING_PAGE, DIRECT_LINK or AD_GROUP`
     );
+  }
+  // P1-12：AD_GROUP 变体携带文案（headlines/descriptions），不绑定追踪链接。
+  if (typeRaw === "AD_GROUP") {
+    const strArr = (v: unknown, field: string): string[] => {
+      if (!Array.isArray(v) || v.length === 0) {
+        throw new ValidationError(`variant${side}.${field} must be a non-empty string array`);
+      }
+      return v.map((x) => {
+        if (typeof x !== "string" || !x.trim()) {
+          throw new ValidationError(`variant${side}.${field} must be a non-empty string array`);
+        }
+        return x.trim();
+      });
+    };
+    return {
+      type: "AD_GROUP",
+      trackingLinkId: null,
+      label: asTrimmedString(r.label) ?? `Variant ${side}`,
+      headlines: strArr(r.headlines, "headlines"),
+      descriptions: strArr(r.descriptions, "descriptions"),
+    };
   }
   const trackingLinkId =
     typeof r.trackingLinkId === "string" ? r.trackingLinkId.trim() : "";
@@ -158,6 +194,17 @@ function parseVariant(raw: unknown, side: "A" | "B"): ExperimentVariant {
     trackingLinkId,
     label: asTrimmedString(r.label) ?? `Variant ${side}`,
   };
+}
+
+/** P1-12：AD_GROUP 变体文案差异度（非 AD_GROUP → null）。 */
+export function variantCreativeDifference(
+  variantA: ExperimentVariant,
+  variantB: ExperimentVariant
+): number | null {
+  if (variantA.type !== "AD_GROUP" || variantB.type !== "AD_GROUP") return null;
+  const textA = [...(variantA.headlines ?? []), ...(variantA.descriptions ?? [])].join(" ");
+  const textB = [...(variantB.headlines ?? []), ...(variantB.descriptions ?? [])].join(" ");
+  return creativeDifference(textA, textB);
 }
 
 function parseMetricsSnapshot(raw: unknown): ExperimentMetrics {
@@ -318,6 +365,17 @@ export function determineWinner(
 function toDto(row: ExperimentRow): Record<string, unknown> {
   const iso = (d: string | Date | null | undefined) =>
     d == null ? null : d instanceof Date ? d.toISOString() : d;
+  // P1-12：AD_GROUP 实验返回文案差异度 + 是否足够（<50% 为警告，不拦截）。
+  let creativeDifferenceValue: number | null = null;
+  try {
+    const va = row.variantA as ExperimentVariant;
+    const vb = row.variantB as ExperimentVariant;
+    if (va?.type === "AD_GROUP" && vb?.type === "AD_GROUP") {
+      creativeDifferenceValue = variantCreativeDifference(va, vb);
+    }
+  } catch {
+    creativeDifferenceValue = null;
+  }
   return {
     id: row.id,
     tenantId: row.tenantId,
@@ -337,6 +395,19 @@ function toDto(row: ExperimentRow): Record<string, unknown> {
     endedAt: iso(row.endedAt),
     createdAt: iso(row.createdAt),
     updatedAt: iso(row.updatedAt),
+    experimentType: row.experimentType ?? "LANDING_PAGE",
+    seedAdGroupId: row.seedAdGroupId ?? null,
+    graduationAction: row.graduationAction ?? "none",
+    creativeDifference: creativeDifferenceValue,
+    creativeDifferenceSufficient:
+      creativeDifferenceValue == null
+        ? null
+        : creativeDifferenceValue >= MIN_CREATIVE_DIFFERENCE,
+    creativeDifferenceWarning:
+      creativeDifferenceValue != null &&
+      creativeDifferenceValue < MIN_CREATIVE_DIFFERENCE
+        ? "创意差异度不足 50%，建议重新生成（警告，不拦截）"
+        : null,
   };
 }
 
@@ -391,6 +462,9 @@ export async function registerExperimentRoutes(
       variantA?: unknown;
       variantB?: unknown;
       trafficSplitA?: unknown;
+      experimentType?: unknown;
+      seedAdGroupId?: unknown;
+      graduationAction?: unknown;
     };
   }>("/api/v1/experiments", async (request) => {
     const info = await requireSession(deps, request);
@@ -403,8 +477,50 @@ export async function registerExperimentRoutes(
     }
     const name = asTrimmedString(body.name);
     if (!name) throw new ValidationError("name is required");
+    // P1-12：实验类型（默认 LANDING_PAGE；AD_GROUP = 文案 A/B）。
+    const experimentTypeRaw =
+      typeof body.experimentType === "string"
+        ? body.experimentType.trim().toUpperCase()
+        : "LANDING_PAGE";
+    const experimentType: ExperimentType =
+      experimentTypeRaw === "AD_GROUP"
+        ? "AD_GROUP"
+        : experimentTypeRaw === "DIRECT_LINK"
+          ? "DIRECT_LINK"
+          : experimentTypeRaw === "LANDING_PAGE"
+            ? "LANDING_PAGE"
+            : (() => {
+                throw new ValidationError(
+                  "experimentType must be LANDING_PAGE, DIRECT_LINK or AD_GROUP"
+                );
+              })();
+    const seedAdGroupId =
+      typeof body.seedAdGroupId === "string" && UUID_RE.test(body.seedAdGroupId.trim())
+        ? body.seedAdGroupId.trim()
+        : null;
+    if (body.seedAdGroupId !== undefined && body.seedAdGroupId !== null && !seedAdGroupId) {
+      throw new ValidationError("seedAdGroupId must be a valid UUID");
+    }
+    const graduationActionRaw =
+      typeof body.graduationAction === "string"
+        ? body.graduationAction.trim().toLowerCase()
+        : "none";
+    const graduationAction: GraduationAction =
+      graduationActionRaw === "pause_loser" ? "pause_loser" : graduationActionRaw === "none" ? "none" : (() => {
+        throw new ValidationError("graduationAction must be none or pause_loser");
+      })();
     const variantA = parseVariant(body.variantA, "A");
     const variantB = parseVariant(body.variantB, "B");
+    // P1-12：AD_GROUP 变体类型必须与实验类型一致；LANDING_PAGE/DIRECT_LINK 实验仍用链接变体。
+    if (experimentType === "AD_GROUP") {
+      if (variantA.type !== "AD_GROUP" || variantB.type !== "AD_GROUP") {
+        throw new ValidationError("AD_GROUP experiments require AD_GROUP variants");
+      }
+    } else if (variantA.type === "AD_GROUP" || variantB.type === "AD_GROUP") {
+      throw new ValidationError("AD_GROUP variants require experimentType AD_GROUP");
+    }
+    // P1-12：AD_GROUP 创意差异度（<50% 警告，不拦截）。
+    const creativeDiff = variantCreativeDifference(variantA, variantB);
     let trafficSplitA = 50;
     if (body.trafficSplitA !== undefined && body.trafficSplitA !== null) {
       const n = asFiniteNumber(body.trafficSplitA);
@@ -422,18 +538,26 @@ export async function registerExperimentRoutes(
     if (!offer) throw new NotFoundError("Offer not found");
 
     // Every variant's tracking link must be bound to this offer.
-    for (const v of [variantA, variantB]) {
-      const binding = await prisma.trackingLinkOffer.findFirst({
-        where: {
-          tenantId: info.tenantId,
-          offerId,
-          trackingLinkId: v.trackingLinkId,
-        },
-      });
-      if (!binding) {
-        throw new ValidationError(
-          `variant ${v.label}: tracking link ${v.trackingLinkId} is not bound to this offer`
-        );
+    // P1-12：AD_GROUP 变体无追踪链接，跳过绑定检查。
+    if (experimentType !== "AD_GROUP") {
+      for (const v of [variantA, variantB]) {
+        if (!v.trackingLinkId) {
+          throw new ValidationError(
+            `variant ${v.label}: tracking link is required for ${experimentType} experiments`
+          );
+        }
+        const binding = await prisma.trackingLinkOffer.findFirst({
+          where: {
+            tenantId: info.tenantId,
+            offerId,
+            trackingLinkId: v.trackingLinkId,
+          },
+        });
+        if (!binding) {
+          throw new ValidationError(
+            `variant ${v.label}: tracking link ${v.trackingLinkId} is not bound to this offer`
+          );
+        }
       }
     }
 
@@ -453,6 +577,9 @@ export async function registerExperimentRoutes(
         winner: null,
         confidence: null,
         preconditionCheck: null,
+        experimentType,
+        seedAdGroupId,
+        graduationAction,
       },
     });
 
@@ -462,7 +589,7 @@ export async function registerExperimentRoutes(
       row.id,
       "experiment.created",
       `创建实验 ${name}`,
-      { name, offerId, trafficSplitA }
+      { name, offerId, trafficSplitA, experimentType, seedAdGroupId, graduationAction, creativeDifference: creativeDiff }
     );
     return toDto(row);
   });
@@ -591,8 +718,17 @@ export async function registerExperimentRoutes(
               `variant ${side}（${v.label}）为落地页，但该 offer 没有可用的 LandingPage 绑定，不能启动实验`
             );
           }
+          const variantLinkId = v.trackingLinkId;
+          if (!variantLinkId) {
+            fail(
+              "landing_page_binding",
+              `variant ${side}（${v.label}）为落地页，但未绑定 tracking link，不能启动实验`
+            );
+            // fail() 抛错，上句永不返回；写 throw 让 TS 收窄 variantLinkId 为 string。
+            throw new Error("unreachable");
+          }
           const link = await prisma.trackingLink.findFirst({
-            where: { id: v.trackingLinkId, tenantId: info.tenantId },
+            where: { id: variantLinkId, tenantId: info.tenantId },
           });
           const linkLpId = (link as unknown as { landingPageId?: string | null } | null)
             ?.landingPageId;
@@ -610,6 +746,10 @@ export async function registerExperimentRoutes(
         }
 
         // 4. Tracking link itself must be active.
+        // P1-12：AD_GROUP 变体无追踪链接，跳过本检查。
+        if (!v.trackingLinkId) {
+          continue;
+        }
         const linkRow = await prisma.trackingLink.findFirst({
           where: {
             id: v.trackingLinkId,
@@ -728,6 +868,51 @@ export async function registerExperimentRoutes(
         { winner: verdict.winner, confidence: verdict.confidence, detail: verdict.detail }
       );
       return { ...toDto(updated), winnerDetail: verdict.detail };
+    }
+  );
+
+  /**
+   * P1-12：毕业（仅 COMPLETED 且已分出胜负）。
+   * graduationAction=pause_loser 时：不直接暂停任何广告，只记录
+   * EXPERIMENT_GRADUATION_REQUESTED 审计 + 返回 Script 渠道操作指引；
+   * 实际暂停走 Script 渠道 + 人工确认。TIE 时不毕业。
+   */
+  app.post<{ Params: { id: string } }>(
+    "/api/v1/experiments/:id/graduate",
+    async (request) => {
+      const info = await requireSession(deps, request);
+      const row = await loadExperiment(prisma, info.tenantId, request.params.id);
+      if (row.status !== "COMPLETED") {
+        throw new ValidationError("Only COMPLETED experiments can graduate");
+      }
+      if (row.winner !== "A" && row.winner !== "B") {
+        throw new ValidationError("TIE experiments cannot graduate (no winner)");
+      }
+      const loser = row.winner === "A" ? "B" : "A";
+      const graduationAction = row.graduationAction ?? "none";
+      await writeExperimentAudit(
+        prisma,
+        info,
+        row.id,
+        "experiment.graduation_requested",
+        `毕业实验 ${row.name}，winner=${row.winner}，graduationAction=${graduationAction}`,
+        { winner: row.winner, loser, graduationAction }
+      );
+      return {
+        ...toDto(row),
+        graduation: {
+          winner: row.winner,
+          loser,
+          action: graduationAction,
+          requiresManualConfirmation: graduationAction === "pause_loser",
+          scriptInstructions:
+            graduationAction === "pause_loser"
+              ? `请在 Google Ads 中手动确认后，通过 Script 渠道暂停失败变体 ${loser} 对应的广告/广告组（本系统不直接操作广告状态）。`
+              : "毕业动作 = none，无需操作。",
+          abuseNote:
+            "同一广告反复投放同一 ADS 属于滥用（禁止）；3 创意 A/B 需每对差异度 ≥ 50%。",
+        },
+      };
     }
   );
 

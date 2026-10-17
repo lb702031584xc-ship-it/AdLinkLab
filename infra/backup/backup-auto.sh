@@ -27,7 +27,21 @@ fail() {
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
-PNPM="${PNPM:-pnpm}"
+# P0-7 加固：systemd 下 PATH 通常不含 nvm/corepack 路径；pnpm 不在 PATH 时
+# 依次尝试 corepack pnpm / npx pnpm，仍找不到才报错（不静默跳过备份）。
+if [ -n "${PNPM:-}" ]; then
+  PNPM_BIN="${PNPM}"
+elif command -v pnpm >/dev/null 2>&1; then
+  PNPM_BIN="pnpm"
+elif command -v corepack >/dev/null 2>&1; then
+  PNPM_BIN="corepack pnpm"
+elif command -v npx >/dev/null 2>&1; then
+  PNPM_BIN="npx --yes pnpm"
+else
+  PNPM_BIN=""
+fi
+[ -n "${PNPM_BIN}" ] || fail "pnpm not found (tried pnpm / corepack pnpm / npx pnpm). Set PNPM env or install pnpm, e.g. corepack enable && corepack prepare pnpm@latest --activate"
+PNPM="${PNPM_BIN}"
 
 # 备份目录口径与 packages/database/src/backup/paths.ts 一致：
 # ADLINKLAB_BACKUP_DIR 优先，否则为 packages/database/backups。

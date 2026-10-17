@@ -161,4 +161,23 @@ describe("buildCreateCampaignScript", () => {
     plan.campaign.dailyBudget.amount = -5;
     expect(() => buildCreateCampaignScript(plan)).toThrow(/dailyBudget/);
   });
+
+  it("P1-25: writes ad schedules when the plan has them", () => {
+    const plan = samplePlan();
+    plan.adSchedules = [
+      { dayOfWeek: "MONDAY", startHour: 9, startMinute: 0, endHour: 21, endMinute: 0 },
+    ];
+    const src = buildCreateCampaignScript(plan);
+    expect(src).toContain("applyAdSchedules_");
+    expect(src).toContain("adSchedule");
+    expect(src).toContain("campaignCriterionOperation");
+  });
+
+  it("P1-25: refuses to build with an invalid schedule", () => {
+    const plan = samplePlan();
+    plan.adSchedules = [
+      { dayOfWeek: "MONDAY", startHour: 21, startMinute: 0, endHour: 9, endMinute: 0 },
+    ];
+    expect(() => buildCreateCampaignScript(plan)).toThrow(/adSchedules/);
+  });
 });

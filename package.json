@@ -21,7 +21,8 @@
     "backup:create": "pnpm --filter @adlinklab/database backup:create",
     "backup:verify": "pnpm --filter @adlinklab/database backup:verify",
     "backup:restore-test": "pnpm --filter @adlinklab/database backup:restore-test",
-    "backup:cleanup": "pnpm --filter @adlinklab/database backup:cleanup"
+    "backup:cleanup": "pnpm --filter @adlinklab/database backup:cleanup",
+    "openapi:check": "bash scripts/openapi/ci-check.sh"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

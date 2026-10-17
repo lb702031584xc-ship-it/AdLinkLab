@@ -45,8 +45,35 @@ export async function createGoogleAccountAction(input: {
   customerId: string;
   currency?: string;
   timezone?: string;
+  accountType: "MCC" | "PERSONAL";
+  managerCustomerId?: string;
 }) {
   return attempt(() => entityApi.googleAccounts.create(input), [
+    "/google-accounts",
+  ]);
+}
+
+/** P1-7 / P1-8：子账号 / 封停 / 申诉记录。 */
+export async function listSubAccountsAction(accountId: string) {
+  return attempt(() => entityApi.googleAccounts.listSubAccounts(accountId), []);
+}
+
+export async function recordSuspensionAction(accountId: string, suspensionReason: string) {
+  return attempt(
+    () => entityApi.googleAccounts.recordSuspension(accountId, suspensionReason),
+    ["/google-accounts"]
+  );
+}
+
+export async function listAppealsAction(accountId: string) {
+  return attempt(() => entityApi.googleAccounts.listAppeals(accountId), []);
+}
+
+export async function recordAppealAction(
+  accountId: string,
+  input: { level: string; status: string; note?: string }
+) {
+  return attempt(() => entityApi.googleAccounts.recordAppeal(accountId, input), [
     "/google-accounts",
   ]);
 }

@@ -161,6 +161,12 @@ function normalizeGoogleAccount(
     timeZone: timezone,
     oauthCredentialRef: data.oauthCredentialRef,
     status: data.status!,
+    accountType: data.accountType ?? "MCC",
+    healthStatus: data.healthStatus ?? "active",
+    suspensionReason: data.suspensionReason,
+    appealStatus: data.appealStatus ?? "none",
+    appealNote: data.appealNote,
+    suspendedAt: data.suspendedAt,
     archivedAt: data.archivedAt,
     deletedAt: data.deletedAt,
   };
@@ -288,8 +294,18 @@ export class InMemoryGoogleAccountRepository implements GoogleAccountRepository 
   async findByCustomerId(customerId: string) {
     return this.findByGoogleCustomerId(customerId);
   }
-  async list(input?: PaginationInput & { tenantId?: string }) {
-    return paginateArray(filterByTenantId([...this.store.values()], input?.tenantId), input);
+  async list(input?: PaginationInput & { tenantId?: string; accountType?: string; healthStatus?: string }) {
+    const rows = filterByTenantId([...this.store.values()], input?.tenantId).filter(
+      (a) =>
+        (!input?.accountType || a.accountType === input.accountType) &&
+        (!input?.healthStatus || a.healthStatus === input.healthStatus)
+    );
+    return paginateArray(rows, input);
+  }
+  async findByManagerCustomerId(tenantId: string, managerCustomerId: string) {
+    return filterByTenantId([...this.store.values()], tenantId).filter(
+      (a) => a.managerCustomerId === managerCustomerId
+    );
   }
   async create(data: Omit<GoogleAccount, "createdAt" | "updatedAt">) {
     const normalized = normalizeGoogleAccount(data);
@@ -1297,6 +1313,17 @@ export function createSeededMemoryRepositories(): MemoryRepositories {
   const toMap = <T extends { id: string }>(items: T[]) =>
     new Map(items.map((item) => [item.id, item]));
 
+  // P1-11：归因窗口执法用真实 now 对比点击时间；种子点击是 2026-01-01 的
+  // 固定历史日期，直接用会全部超 30 天窗口。把全部种子点击平移同一差值
+  // （now - FIXTURE_NOW），保持相对间隔不变，仅让点击落在窗口内。
+  // 执法规则本身不变；超窗口的拒绝由 phase7 的显式旧点击测试覆盖。
+  const clickShiftMs = Date.now() - new Date("2026-01-01T00:00:00.000Z").getTime();
+  const shiftedClicks = ds.clicks.map((c) => ({
+    ...c,
+    occurredAt: new Date(c.occurredAt.getTime() + clickShiftMs),
+    createdAt: new Date(c.createdAt.getTime() + clickShiftMs),
+  }));
+
   const tenants = toMap(ds.tenants);
   const users = toMap(ds.users);
   const googleAccounts = toMap(ds.googleAccounts);
@@ -1308,7 +1335,7 @@ export function createSeededMemoryRepositories(): MemoryRepositories {
   const landingPages = toMap(ds.landingPages);
   const trackingLinkOffers = toMap(ds.trackingLinkOffers);
   const trackingLinks = toMap(ds.trackingLinks);
-  const clicks = toMap(ds.clicks);
+  const clicks = toMap(shiftedClicks);
   const conversions = toMap(ds.conversions);
   const orders = toMap(ds.orders);
   const urlVersions = toMap(ds.urlVersions);

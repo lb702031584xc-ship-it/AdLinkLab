@@ -8,7 +8,8 @@ import { AiError } from "./llm.js";
  * P0-6 — Prompt 模板版本。Prompt 文案改动时同步 bump，
  * AiAnalysis.promptVersion 记录每次调用实际使用的版本，便于回溯成本/效果。
  */
-export const PROMPT_VERSION = "v1";
+/** P1-9：提示词改动（新增 dimensions 可选维度）→ 版本 bump（P0-6 规则：改文案同步 bump）。 */
+export const PROMPT_VERSION = "v2";
 
 export type AnalysisLanguage = "zh" | "en";
 
@@ -27,6 +28,17 @@ export interface AnalysisShape {
   suggestions: string[];
   keywords: string[];
   adAngles: string[];
+  /**
+   * P1-9：评估扩展维度（可选；LLM 未返回时为 undefined，调用方不硬依赖）。
+   * 每个维度为 0–100 分 + 一句话说明；缺失/无依据时模型应省略该维度而非编造。
+   */
+  dimensions?: {
+    seasonality?: { score: number; note: string };
+    ltv?: { score: number; note: string };
+    competition?: { score: number; note: string };
+    conversionPath?: { score: number; note: string };
+    budget?: { score: number; note: string };
+  };
 }
 
 export interface PromptInput {
@@ -221,8 +233,15 @@ const JSON_SPEC = `{
   ],
   "suggestions": ["<actionable fix or next step>", ...],
   "keywords": ["<8-15 keyword ideas>"],
-  "adAngles": ["<3-5 ad angle ideas>"]
+  "adAngles": ["<3-5 ad angle ideas>"],
+  "dimensions": { "<seasonality|ltv|competition|conversionPath|budget>": { "score": "<0-100>", "note": "<one sentence>" } }
 }`;
+const DIMENSIONS_SPEC = `dimensions (optional — include ONLY dimensions you can support with evidence from the page text or user-provided metadata; OMIT any dimension you cannot support, never invent numbers):
+- seasonality: does demand for this offer vary by season/festival? (score = fit for the current season; note names the evidence)
+- ltv: does this offer plausibly drive repeat purchases / lifetime value, or one-off only?
+- competition: how crowded is this offer's niche from the page's own signals (brand strength, differentiation)?
+- conversionPath: how short/clear is the path from click to conversion (direct checkout vs multi-step funnel)?
+- budget: how much budget does this offer plausibly need to test (high payout / competitive niche = more)?`;
 
 function riskBands(): string {
   return "riskLevel MUST be consistent with overallRisk: low for <35, medium for 35-69, high for >=70.";
@@ -257,6 +276,7 @@ export function buildAnalysisPrompt(input: PromptInput): {
     "suggestions: concrete, actionable fixes or verification steps, ordered by impact.",
     "keywords: 8-15 keyword ideas a Google Ads advertiser could target for this offer (include a mix of generic and intent-rich phrases).",
     "adAngles: 3-5 distinct ad creative angles.",
+    DIMENSIONS_SPEC,
     "Be calibrated: a normal legitimate e-commerce offer should score low. Reserve high scores for genuinely risky patterns.",
   ].join("\n");
 
@@ -359,6 +379,28 @@ export function validateAnalysisShape(obj: unknown): AnalysisShape {
   const keywords = strArray(o.keywords, 1, 30, "keywords");
   const adAngles = strArray(o.adAngles, 1, 10, "adAngles");
 
+  // P1-9：dimensions 可选；只接受 shape 正确的维度，非法维度整体丢弃（不让脏数据进库）。
+  let dimensions: AnalysisShape["dimensions"];
+  if (isRecord(o.dimensions)) {
+    const dimOut: NonNullable<AnalysisShape["dimensions"]> = {};
+    let dimOk = true;
+    for (const key of ["seasonality", "ltv", "competition", "conversionPath", "budget"] as const) {
+      const d = (o.dimensions as Record<string, unknown>)[key];
+      if (d === undefined) continue;
+      if (!isRecord(d)) { dimOk = false; break; }
+      try {
+        dimOut[key] = {
+          score: normNum(d.score, 0, 100, `dimensions.${key}.score`),
+          note: normStr(d.note, `dimensions.${key}.note`, true),
+        };
+      } catch {
+        dimOk = false;
+        break;
+      }
+    }
+    if (dimOk && Object.keys(dimOut).length > 0) dimensions = dimOut;
+  }
+
   return {
     overallRisk,
     riskLevel,
@@ -367,5 +409,6 @@ export function validateAnalysisShape(obj: unknown): AnalysisShape {
     suggestions,
     keywords,
     adAngles,
+    dimensions,
   };
 }

@@ -207,7 +207,7 @@ describe("Phase 9.1 migration command availability", () => {
     expect(compose).not.toMatch(/prisma db push/);
   });
 
-  it("15. migration count is 42 (… + launch archives + P0 security/observability: api_keys/ip_bans/token_revocations/ai_usage_daily/error_reports); no other new schema migration)", () => {
+  it("15. migration count is 44 (… + launch archives + P0 security/observability: api_keys/ip_bans/token_revocations/ai_usage_daily/error_reports + P1 batch 1 offer fields + P1/P2 batches 2–6)", () => {
     const migrationsDir = join(
       REPO_ROOT,
       "packages/database/prisma/migrations"
@@ -216,7 +216,9 @@ describe("Phase 9.1 migration command availability", () => {
     const names = readdirSync(migrationsDir).filter((n) =>
       existsSync(join(migrationsDir, n, "migration.sql"))
     );
-    expect(names.length).toBe(42);
+    expect(names.length).toBe(44);
+    expect(names).toContain("20261017120000_p1_batch1_offer_fields");
+    expect(names).toContain("20261017130000_p1p2_batches_2_6");
     expect(names).toContain("20261003130000_auth_users_sessions");
     expect(names).toContain("20261003140000_ai_offer_analysis");
     expect(names).toContain("20261004040000_p1_monitoring");

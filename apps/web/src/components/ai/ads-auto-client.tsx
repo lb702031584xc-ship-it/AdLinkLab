@@ -33,11 +33,15 @@ import {
   getCreateCampaignScriptAction,
   getRotationScriptAction,
   requestAdPlanAction,
+  runPreflightAction,
 } from "@/lib/api/ads-auto-actions";
 import type {
   AdPlan,
+  AdPlanAdSchedule,
   AdPlanKeyword,
   ConfirmResult,
+  CreativeSelfCheckResult,
+  PreflightResult,
 } from "@/lib/api/ads-auto";
 
 const inputClass =
@@ -93,6 +97,11 @@ function PlanPreview({
   keywordCheck,
   onCheckKeywords,
   onRemoveFlagged,
+  negativesText,
+  onNegativesChange,
+  schedules,
+  onSchedulesChange,
+  creativeCheck,
 }: {
   plan: AdPlan;
   d: AdsAutoDict;
@@ -107,6 +116,13 @@ function PlanPreview({
   keywordCheck: KeywordCheckState;
   onCheckKeywords: () => void;
   onRemoveFlagged: () => void;
+  /** P1-25：否词管理（文本，每行一个）+ 排期编辑（campaign 级）。 */
+  negativesText: string;
+  onNegativesChange: (v: string) => void;
+  schedules: AdPlanAdSchedule[];
+  onSchedulesChange: (v: AdPlanAdSchedule[]) => void;
+  /** P1-9：创意 7 维自检（启发式自检，非 AI 评分；fail 仅提醒，不拦截确认）。 */
+  creativeCheck?: CreativeSelfCheckResult | null;
 }) {
   const c = plan.campaign;
   const firstBlock = plan.adGroups[0];
@@ -297,6 +313,138 @@ function PlanPreview({
           </div>
         </div>
       ))}
+      {/* P1-25：否词管理 + 排期编辑（确认时生效；排期留空 = 全天投放）。 */}
+      <div className={cardClass}>
+        <h3 className="text-sm font-semibold text-ink">{d.preview.negativesManagerTitle}</h3>
+        <p className="mt-1 text-xs text-ink/60">{d.preview.negativesManagerHint}</p>
+        <textarea
+          className={`${inputClass} mt-2 font-mono`}
+          rows={4}
+          value={negativesText}
+          onChange={(e) => onNegativesChange(e.target.value)}
+          placeholder={"[free]\n\"how to install\"\ndemo"}
+        />
+        <div className="mt-2 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            className="rounded-lg border border-ink/15 bg-white px-3 py-1.5 text-xs font-medium text-ink hover:bg-ink/5"
+            onClick={() =>
+              onNegativesChange(
+                ["怎么安装", "怎么维修", "demo", "试用", "免费下载"].join("\n")
+              )
+            }
+          >
+            {d.preview.negativesExampleFill}
+          </button>
+          <span className="text-xs text-ink/50">{d.preview.negativesExampleNote}</span>
+        </div>
+        <h3 className="mt-4 text-sm font-semibold text-ink">{d.preview.schedulesTitle}</h3>
+        <p className="mt-1 text-xs text-ink/60">{d.preview.schedulesHint}</p>
+        <div className="mt-2 space-y-2">
+          {schedules.map((s, i) => (
+            <div key={i} className="flex flex-wrap items-center gap-2">
+              <select
+                className="rounded-lg border border-ink/15 bg-white px-2 py-1.5 text-sm text-ink"
+                value={s.dayOfWeek}
+                onChange={(e) =>
+                  onSchedulesChange(
+                    schedules.map((x, j) =>
+                      j === i
+                        ? { ...x, dayOfWeek: e.target.value as AdPlanAdSchedule["dayOfWeek"] }
+                        : x
+                    )
+                  )
+                }
+              >
+                {(Object.keys(d.preview.schedulesDayOptions) as AdPlanAdSchedule["dayOfWeek"][]).map(
+                  (day) => (
+                    <option key={day} value={day}>
+                      {d.preview.schedulesDayOptions[day]}
+                    </option>
+                  )
+                )}
+              </select>
+              <label className="text-xs text-ink/60">{d.preview.schedulesStart}</label>
+              <input
+                type="time"
+                className="rounded-lg border border-ink/15 bg-white px-2 py-1.5 text-sm text-ink"
+                value={`${String(s.startHour).padStart(2, "0")}:${String(s.startMinute).padStart(2, "0")}`}
+                onChange={(e) => {
+                  const [h, m] = e.target.value.split(":").map(Number);
+                  if (Number.isInteger(h) && Number.isInteger(m)) {
+                    onSchedulesChange(
+                      schedules.map((x, j) =>
+                        j === i ? { ...x, startHour: h, startMinute: m } : x
+                      )
+                    );
+                  }
+                }}
+              />
+              <label className="text-xs text-ink/60">{d.preview.schedulesEnd}</label>
+              <input
+                type="time"
+                className="rounded-lg border border-ink/15 bg-white px-2 py-1.5 text-sm text-ink"
+                value={`${String(s.endHour).padStart(2, "0")}:${String(s.endMinute).padStart(2, "0")}`}
+                onChange={(e) => {
+                  const [h, m] = e.target.value.split(":").map(Number);
+                  if (Number.isInteger(h) && Number.isInteger(m)) {
+                    onSchedulesChange(
+                      schedules.map((x, j) =>
+                        j === i ? { ...x, endHour: h, endMinute: m } : x
+                      )
+                    );
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className="rounded-lg border border-ink/15 bg-white px-2 py-1 text-xs text-ink hover:bg-ink/5"
+                onClick={() => onSchedulesChange(schedules.filter((_, j) => j !== i))}
+              >
+                {d.preview.schedulesRemove}
+              </button>
+            </div>
+          ))}
+        </div>
+        <button
+          type="button"
+          className="mt-2 rounded-lg border border-ink/15 bg-white px-3 py-1.5 text-xs font-medium text-ink hover:bg-ink/5"
+          onClick={() =>
+            onSchedulesChange([
+              ...schedules,
+              { dayOfWeek: "MONDAY", startHour: 9, startMinute: 0, endHour: 21, endMinute: 0 },
+            ])
+          }
+        >
+          {d.preview.schedulesAdd}
+        </button>
+      </div>
+      {/* P1-9：创意 7 维自检（启发式规则，非 AI 评分；fail 仅提醒，不拦截确认）。 */}
+      {creativeCheck ? (
+        <div className={cardClass}>
+          <h3 className="text-sm font-semibold text-ink">{d.preview.creativeCheckTitle}</h3>
+          <p className="mt-1 text-sm">
+            {d.preview.creativeCheckOverall}：{(creativeCheck.overall * 100).toFixed(0)}% ·{" "}
+            {creativeCheck.verdict === "pass" ? "✅" : "❌"}
+          </p>
+          {creativeCheck.verdict === "fail" ? (
+            <p className="mt-1 text-sm text-red-700">{d.preview.creativeCheckFail}</p>
+          ) : null}
+          <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-sm md:grid-cols-4">
+            {(
+              Object.keys(creativeCheck.dimensions) as Array<keyof typeof creativeCheck.dimensions>
+            ).map((k) => (
+              <div key={k}>
+                <dt className="text-ink/55">{d.preview.creativeCheckDims[k]}</dt>
+                <dd title={creativeCheck.dimensions[k].note}>
+                  {(creativeCheck.dimensions[k].score * 100).toFixed(0)}%
+                </dd>
+              </div>
+            ))}
+          </dl>
+          <p className="mt-2 text-xs text-ink/55">{d.preview.creativeCheckBrandVolume}</p>
+        </div>
+      ) : null}
       {/* 关键词 AI 检查：投流前必查，无关/风险词标红，移除后重新生成计划 */}
       <div className={cardClass}>
         <h3 className="text-sm font-semibold text-ink">{d.preview.keywordCheckTitle}</h3>
@@ -424,6 +572,8 @@ export function AdsAutoClient({
     { id: string; name: string; customerId: string; currency?: string }[]
   >([]);
   const [plan, setPlan] = useState<AdPlan | null>(null);
+  /** P1-9：创意 7 维自检（随计划返回；启发式自检，非 AI 评分）。 */
+  const [creativeCheck, setCreativeCheck] = useState<CreativeSelfCheckResult | null>(null);
   // 关键词 AI 检查：结果驱动移除流程（移除 = 带过滤后关键词重新生成计划；
   // 确认建广告只传 planId、用服务端存储的计划，本地只改展示则被移除词仍会建出来）。
   const [keywordCheck, setKeywordCheck] = useState<KeywordCheckState>({
@@ -435,6 +585,11 @@ export function AdsAutoClient({
   // 货币只有一个状态 bidCurrency（计划货币），预算货币下拉与出价区货币下拉共用它。
   const [editedBudget, setEditedBudget] = useState("");
   const [editedGeo, setEditedGeo] = useState<string[]>([]);
+  /** P1-25：否词文本（每行一个）+ 排期（campaign 级），确认时生效。 */
+  const [editedNegativesText, setEditedNegativesText] = useState("");
+  const [editedSchedules, setEditedSchedules] = useState<AdPlanAdSchedule[]>([]);
+  /** P1-14：生成前 Preflight 结果（blocked 真正拦截生成）。 */
+  const [preflightResult, setPreflightResult] = useState<PreflightResult | null>(null);
   const [confirm, setConfirm] = useState<ConfirmResult | null>(null);
   const [scriptSource, setScriptSource] = useState<string | null>(null);
   const [showScript, setShowScript] = useState(false);
@@ -804,6 +959,25 @@ export function AdsAutoClient({
     setConfirm(null);
     setScriptSource(null);
     setKeywordCheck({ status: "idle", results: [], error: null });
+    // P1-14：生成前 Preflight 门禁（已选账号时）：error 真正拦截生成；
+    // warn/degraded 只展示，不拦截。未选账号时跳过（服务端生成不依赖账号）。
+    if (googleAccountId.trim()) {
+      const pf = await runPreflightAction({
+        accountId: googleAccountId.trim(),
+        landingUrl: urls[0],
+      });
+      if (pf.ok) {
+        setPreflightResult(pf.data);
+        if (pf.data.verdict === "blocked") {
+          setError(d.preflight.blockedGenerate);
+          setGenerating(false);
+          return;
+        }
+      } else {
+        // Preflight 本身失败 → 不硬拦生成（服务端确认时仍有封停拦截），只记录。
+        setPreflightResult(null);
+      }
+    }
     try {
       // 只有一个 URL 且用户粘贴了页面文字时，用手动文字跳过抓取（Amazon 等反爬站点）
       const manual = manualText.trim();
@@ -830,6 +1004,7 @@ export function AdsAutoClient({
       });
       if (res.ok) {
         setPlan(res.data.plan);
+        setCreativeCheck(res.data.creativeCheck ?? null);
         setEditedBudget(String(res.data.plan.campaign.dailyBudget.amount));
         // 计划货币为准：已填的出价从旧货币换算到计划货币（预算刚从计划填入，已是计划货币，不换）。
         const planCur = res.data.plan.campaign.dailyBudget.currency || "USD";
@@ -839,6 +1014,15 @@ export function AdsAutoClient({
           ensureFxRateFor(planCur);
         }
         setEditedGeo(res.data.plan.campaign.geoTargets);
+        // P1-25：否词/排期编辑器初始值 = 计划生成值（否词取首组；排期取计划级）。
+        setEditedNegativesText(
+          (res.data.plan.adGroups[0]?.group.negativeKeywords ?? [])
+            .map((k) =>
+              k.matchType === "EXACT" ? `[${k.text}]` : k.matchType === "PHRASE" && /\s/.test(k.text) ? `"${k.text}"` : k.text
+            )
+            .join("\n")
+        );
+        setEditedSchedules(res.data.plan.adSchedules ?? []);
         setCoachConfirmed(false);
         void runPlanCoachCheck(res.data.plan, brandTermsText);
       } else {
@@ -945,6 +1129,12 @@ export function AdsAutoClient({
         dailyBudgetCurrency: bidCurrency || undefined,
         maxCpcCurrency: maxCpc !== undefined ? bidCurrency : undefined,
         geoTargets: editedGeo.length ? editedGeo : undefined,
+        // P1-25：否词（非空行）+ 排期（确认时全量替换）。
+        negativeKeywords: editedNegativesText
+          .split("\n")
+          .map((l) => l.trim())
+          .filter(Boolean),
+        adSchedules: editedSchedules,
       });
       if (res.ok) {
         setConfirm(res.data);
@@ -1623,6 +1813,28 @@ export function AdsAutoClient({
         </div>
       ) : null}
 
+      {preflightResult && (
+        <div className="mt-4 rounded-lg border border-ink/10 bg-white px-3 py-2 text-sm">
+          <p className="font-medium text-ink">
+            {preflightResult.verdict === "ready"
+              ? d.preflight.verdictReady
+              : preflightResult.verdict === "degraded"
+                ? d.preflight.verdictDegraded
+                : d.preflight.verdictBlocked}
+          </p>
+          <ul className="mt-1 space-y-0.5 text-ink/70">
+            {preflightResult.checks
+              .filter((c) => c.status === "warn" || c.status === "error")
+              .map((c) => (
+                <li key={c.key}>
+                  [{c.status}] {(d.preflight.checkLabels as Record<string, string>)[c.key] ?? c.key}：
+                  {c.message}
+                </li>
+              ))}
+          </ul>
+        </div>
+      )}
+
       {plan ? (
         <>
           <h2 className="mt-6 text-base font-semibold text-ink">{d.preview.title}</h2>
@@ -1639,6 +1851,11 @@ export function AdsAutoClient({
             keywordCheck={keywordCheck}
             onCheckKeywords={() => void runKeywordCheck()}
             onRemoveFlagged={() => void removeFlaggedKeywords()}
+            creativeCheck={creativeCheck}
+            negativesText={editedNegativesText}
+            onNegativesChange={setEditedNegativesText}
+            schedules={editedSchedules}
+            onSchedulesChange={setEditedSchedules}
           />
 
           {/* Bid strategy selection */}

@@ -95,6 +95,7 @@ import { registerResearchRoutes } from "./research.js";
 import { registerStrategyRoutes } from "./strategy.js";
 import { registerLanderIntelRoutes } from "./lander-intel.js";
 import {
+  businessMetrics,
   evaluateReadiness,
   httpMetrics,
 } from "../observability/index.js";
@@ -196,7 +197,7 @@ export async function registerRoutes(
   app.get("/metrics", async (_request, reply) => {
     return reply
       .type("text/plain; version=0.0.4; charset=utf-8")
-      .send(httpMetrics.renderPrometheus());
+      .send(httpMetrics.renderPrometheus() + businessMetrics.renderPrometheus());
   });
 
   /** Phase 10 — login sessions ride alongside API-key auth (no-op without prisma). */
@@ -207,7 +208,20 @@ export async function registerRoutes(
   }
   registerSessionAuthHook(app, services.prisma);
   registerDbApiKeyAuthHook(app, services.prisma);
+  // P1-20：CSRF（Origin + 会话 Cookie 跨域 → 403），在所有路由注册前挂钩。
+  const { registerCsrfHook } = await import("../csrf.js");
+  registerCsrfHook(app);
   if (services.prisma) {
+    // P1-18：提示词 DB 化 — 启动时播种默认提示词（best-effort，不阻断启动）。
+    const { syncDefaultPrompts } = await import("../ai/prompts-store.js");
+    await syncDefaultPrompts(services.prisma);
+    // P1-18：提示词管理 API（admin/owner）
+    const { registerAiPromptsAdminRoutes } = await import("./ai-prompts-admin.js");
+    await registerAiPromptsAdminRoutes(app, { prisma: services.prisma });
+    // P1-17：幂等键（Idempotency-Key 头）— 必须在三条写路由注册之前挂钩
+    // （Fastify onRequest 只对之后注册的路由生效）。
+    const { registerIdempotencyHooks } = await import("../idempotency.js");
+    registerIdempotencyHooks(app, services.prisma);
     // Phase 4 iron rule: researcher isolation hook must be registered BEFORE
     // all other routes (onRequest only applies to subsequently registered routes).
     registerResearcherIsolation(app, { prisma: services.prisma });
@@ -231,6 +245,51 @@ export async function registerRoutes(
     await registerAdsAutoRoutes(app, { prisma: services.prisma });
     await registerLaunchArchiveRoutes(app, { prisma: services.prisma });
     await registerKeywordCheckRoutes(app, { prisma: services.prisma });
+    // P1-6：Offer 自动状态联动（偏好 + 手动检查 + 批量执行）
+    const { registerOfferPreferenceRoutes } = await import("./offer-preferences.js");
+    await registerOfferPreferenceRoutes(app, { prisma: services.prisma });
+    // P1-10：规则生成关键词 ideas（无 LLM，无假搜索量）
+    const { registerKeywordIdeasRoutes } = await import("./keywords-ideas.js");
+    await registerKeywordIdeasRoutes(app, { prisma: services.prisma });
+    // P1-11：归因透明化 + 冲突处理
+    const { registerAttributionRoutes } = await import("./attribution.js");
+    await registerAttributionRoutes(app, { prisma: services.prisma });
+    // P1-7 / P1-8：Google 账号双类型 + 健康 + 申诉
+    const { registerGoogleAccountsExtraRoutes } = await import(
+      "./google-accounts-extra.js"
+    );
+    await registerGoogleAccountsExtraRoutes(app, {
+      prisma: services.prisma,
+      googleAccounts: services.googleAccounts,
+    });
+    // P1-14：Preflight 双类型上线前检查
+    const { registerPreflightRoutes } = await import("./preflight.js");
+    await registerPreflightRoutes(app, { prisma: services.prisma });
+    // P1-16：批量审计 + 回滚
+    const { registerAdsOperationsRoutes } = await import("./ads-operations.js");
+    await registerAdsOperationsRoutes(app, { prisma: services.prisma });
+    // P1-27：导出脱敏 + 受保护 Token
+    const { registerDataExchangeRoutes } = await import("./data-exchange.js");
+    await registerDataExchangeRoutes(app, {
+      prisma: services.prisma,
+      offers: services.offers,
+    });
+    // P1-28：预算总览 + 盈亏平衡点
+    const { registerBudgetOverviewRoutes } = await import("./budget-overview.js");
+    await registerBudgetOverviewRoutes(app, { prisma: services.prisma });
+    // §5：管理员授权机制（申请/审批/吊销/审计）
+    const { registerAdminGrantRoutes } = await import("./admin-grants.js");
+    await registerAdminGrantRoutes(app, { prisma: services.prisma });
+    // P2-7：只读解析（B2 强制执行：自有域名 或 有效授权白名单）
+    const { registerTrackingLinkResolveRoutes } = await import(
+      "./tracking-links-resolve.js"
+    );
+    await registerTrackingLinkResolveRoutes(app, {
+      prisma: services.prisma,
+    });
+    // P1-21：死信队列（DLQ）
+    const { registerDeadLetterRoutes } = await import("./dead-letter.js");
+    await registerDeadLetterRoutes(app, { prisma: services.prisma });
     await registerWorkStateRoutes(app, { prisma: services.prisma });
     await registerCashbackRoutes(app, { prisma: services.prisma });
     await registerTestClickRoutes(app, { prisma: services.prisma });
@@ -1032,13 +1091,25 @@ export async function registerRoutes(
 
   app.get<{
     Headers: { "x-tenant-id"?: string };
-    Querystring: { page?: string; pageSize?: string };
+    Querystring: { page?: string; pageSize?: string; accountType?: string; healthStatus?: string };
   }>("/api/v1/google-accounts", async (request) => {
     const tenantId = tenantOf(request);
+    const accountType = request.query.accountType;
+    const healthStatus = request.query.healthStatus;
+    if (accountType !== undefined && accountType !== "MCC" && accountType !== "PERSONAL") {
+      throw new ValidationError("accountType must be MCC or PERSONAL");
+    }
+    if (
+      healthStatus !== undefined &&
+      !["active", "suspended", "limited"].includes(healthStatus)
+    ) {
+      throw new ValidationError("healthStatus must be active, suspended or limited");
+    }
     return services.googleAccounts.list(
       tenantId,
       request.query.page ? Number(request.query.page) : undefined,
-      request.query.pageSize ? Number(request.query.pageSize) : undefined
+      request.query.pageSize ? Number(request.query.pageSize) : undefined,
+      { accountType, healthStatus }
     );
   });
 
@@ -1049,6 +1120,9 @@ export async function registerRoutes(
       customerId?: unknown;
       currency?: unknown;
       timezone?: unknown;
+      /** P1-7：必填，创建后不可变更。 */
+      accountType?: unknown;
+      managerCustomerId?: unknown;
     };
   }>("/api/v1/google-accounts", async (request) => {
     const tenantId = tenantOf(request);
@@ -1063,6 +1137,16 @@ export async function registerRoutes(
         : "";
     if (!name) throw new ValidationError("name is required");
     if (!customerId) throw new ValidationError("customerId is required");
+    // P1-7：accountType 必填（MCC | PERSONAL），创建后不可变更。
+    const accountType =
+      typeof body.accountType === "string" ? body.accountType.trim().toUpperCase() : "";
+    if (accountType !== "MCC" && accountType !== "PERSONAL") {
+      throw new ValidationError("accountType is required and must be MCC or PERSONAL");
+    }
+    const managerCustomerId =
+      typeof body.managerCustomerId === "string" && body.managerCustomerId.trim()
+        ? body.managerCustomerId.replace(/-/g, "").trim()
+        : undefined;
     const currency =
       typeof body.currency === "string" && body.currency.trim()
         ? body.currency.trim().toUpperCase()
@@ -1078,15 +1162,23 @@ export async function registerRoutes(
       customerId,
       currency,
       timezone,
+      accountType,
+      managerCustomerId,
     });
   });
 
   app.patch<{
     Params: { id: string };
     Headers: { "x-tenant-id"?: string };
-    Body: { currency?: unknown };
+    Body: { currency?: unknown; accountType?: unknown };
   }>("/api/v1/google-accounts/:id", async (request) => {
     const tenantId = tenantOf(request);
+    // P1-7：accountType 创建后不可变更（变更 = 删除 + 重建）。
+    if (request.body?.accountType !== undefined && request.body?.accountType !== null) {
+      throw new ValidationError(
+        "accountType is immutable after creation: delete and recreate the account to change its type"
+      );
+    }
     const currency =
       typeof request.body?.currency === "string"
         ? request.body.currency.trim().toUpperCase()

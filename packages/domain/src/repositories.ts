@@ -52,7 +52,9 @@ export interface GoogleAccountRepository {
   findByIdForTenant(tenantId: string, id: string): Promise<GoogleAccount | null>;
   findByGoogleCustomerId(googleCustomerId: string): Promise<GoogleAccount | null>;
   findByCustomerId(customerId: string): Promise<GoogleAccount | null>;
-  list(input?: PaginationInput & { tenantId?: string }): Promise<PaginatedResult<GoogleAccount>>;
+  list(input?: PaginationInput & { tenantId?: string; accountType?: string; healthStatus?: string }): Promise<PaginatedResult<GoogleAccount>>;
+  /** P1-7：按 managerCustomerId 找子账号（MCC 展开用，租户隔离）。 */
+  findByManagerCustomerId(tenantId: string, managerCustomerId: string): Promise<GoogleAccount[]>;
   create(data: Omit<GoogleAccount, "createdAt" | "updatedAt">): Promise<GoogleAccount>;
   update(
     id: string,

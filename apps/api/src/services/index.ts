@@ -36,11 +36,28 @@ export class GoogleAccountService {
     private readonly googleAccounts: GoogleAccountRepository,
     private readonly providerKind: "mock" | "api" = "mock"
   ) {}
-  list(tenantId: string, page?: number, pageSize?: number) {
-    return this.googleAccounts.list({ tenantId, page, pageSize });
+  list(
+    tenantId: string,
+    page?: number,
+    pageSize?: number,
+    filter?: { accountType?: string; healthStatus?: string }
+  ) {
+    return this.googleAccounts.list({ tenantId, page, pageSize, ...filter });
   }
   getById(id: string) {
     return this.googleAccounts.findById(id);
+  }
+  /**
+   * P1-7：MCC 展开子账号。个人账户无子账号 → 显性 400（不是空列表，
+   * 避免前端把“个人账户”误当成“无子账号的 MCC”）。
+   */
+  async listSubAccounts(tenantId: string, id: string) {
+    const account = await this.googleAccounts.findByIdForTenant(tenantId, id);
+    if (!account) throw new NotFoundError("GoogleAccount", id);
+    if (account.accountType !== "MCC") {
+      throw new ValidationError("个人账户没有子账号：如需批量管理请用 MCC 账户");
+    }
+    return this.googleAccounts.findByManagerCustomerId(tenantId, account.customerId);
   }
   async create(input: {
     tenantId: string;
@@ -49,7 +66,13 @@ export class GoogleAccountService {
     customerId: string;
     currency: string;
     timezone: string;
+    /** P1-7：必填，创建后不可变更（变更 = 删除 + 重建）。 */
+    accountType: string;
+    managerCustomerId?: string;
   }) {
+    if (input.accountType !== "MCC" && input.accountType !== "PERSONAL") {
+      throw new ValidationError("accountType must be MCC or PERSONAL");
+    }
     const { randomUUID } = await import("node:crypto");
     return this.googleAccounts.create({
       id: randomUUID(),
@@ -59,11 +82,15 @@ export class GoogleAccountService {
       descriptiveName: input.name,
       customerId: input.customerId,
       googleCustomerId: input.customerId,
+      managerCustomerId: input.managerCustomerId,
       currency: input.currency,
       currencyCode: input.currency,
       timezone: input.timezone,
       timeZone: input.timezone,
       status: "ACTIVE",
+      accountType: input.accountType,
+      healthStatus: "active",
+      appealStatus: "none",
     });
   }
 

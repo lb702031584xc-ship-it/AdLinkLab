@@ -61,6 +61,8 @@ import {
   type BlueprintResult,
   fetchOfferMeta,
   type OfferMetaResult,
+  getAnalysesAggregate,
+  type AnalysesAggregate,
 } from "./ai";
 import type {
   ProfitAnalysisInput,
@@ -117,8 +119,7 @@ export async function listAnalysesAction(): Promise<
 
 export async function getAnalysisAction(
   id: string
-): Promise<AiActionResult<AiAnalysis>> {
-  const lang = await getLang();
+): Promise<AiActionResult<AiAnalysis>> {  const lang = await getLang();
   const t = getDictionary(lang);
   try {
     return { ok: true, data: await getAnalysis(id) };
@@ -129,6 +130,20 @@ export async function getAnalysisAction(
         e instanceof Error && e.message
           ? e.message
           : t.ai.detail.loadError,
+    };
+  }
+}
+
+/** P2-1：同 URL 聚合（已评估次数 + 最新分）。 */
+export async function getAnalysesAggregateAction(
+  url: string
+): Promise<AiActionResult<AnalysesAggregate>> {
+  try {
+    return { ok: true, data: await getAnalysesAggregate(url) };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof Error && e.message ? e.message : "聚合查询失败",
     };
   }
 }

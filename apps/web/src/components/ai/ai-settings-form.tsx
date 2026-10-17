@@ -257,6 +257,37 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
               }}
               className={inputClass}
             />
+            {/* P1-26：模型价格透明展示（配置价，非实时官方价；与 P0-6 记账同一张表）。 */}
+            {(() => {
+              const key = model.trim();
+              const pricing = key ? initial.modelPricing?.[key] : undefined;
+              return (
+                <div className="mt-2 rounded-lg border border-ink/10 bg-ink/[0.03] p-3 text-xs text-ink/70">
+                  {pricing ? (
+                    <p>
+                      当前模型单价：输入 ${pricing.inputPerMillionUsd}/1M tokens · 输出 $
+                      {pricing.outputPerMillionUsd}/1M tokens
+                    </p>
+                  ) : (
+                    <p>
+                      当前模型不在价格表中，记账时按 DeepSeek Chat 价格兜底（见下方说明）。
+                    </p>
+                  )}
+                  <p className="mt-1">
+                    切换模型后，新调用按新模型的单价记账。价格为配置价，非实时官方价；实际账单以服务商控制台为准。
+                  </p>
+                  {initial.modelPricing && Object.keys(initial.modelPricing).length > 0 ? (
+                    <ul className="mt-2 space-y-0.5">
+                      {Object.entries(initial.modelPricing).map(([m, p]) => (
+                        <li key={m} className="font-mono">
+                          {m}：输入 ${p.inputPerMillionUsd}/1M · 输出 ${p.outputPerMillionUsd}/1M
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              );
+            })()}
           </div>
           <div>
             <label className={labelClass} htmlFor="ai-key">

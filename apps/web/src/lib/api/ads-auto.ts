@@ -46,6 +46,14 @@ export interface AdPlanAdGroupBlock {
   };
 }
 
+export interface AdPlanAdSchedule {
+  dayOfWeek: "MONDAY" | "TUESDAY" | "WEDNESDAY" | "THURSDAY" | "FRIDAY" | "SATURDAY" | "SUNDAY";
+  startHour: number;
+  startMinute: number;
+  endHour: number;
+  endMinute: number;
+}
+
 export interface AdPlan {
   version: 1;
   planId: string;
@@ -64,14 +72,30 @@ export interface AdPlan {
     status: string;
     dataQuality: AdPlanDataQuality;
   };
+  /** P1-25：广告排期（campaign 级；空/缺失 = 全天投放）。 */
+  adSchedules?: AdPlanAdSchedule[];
   adGroups: AdPlanAdGroupBlock[];
   createdAt: string;
   dataQuality: AdPlanDataQuality;
 }
 
+export interface CreativeSelfCheckResult {
+  dimensions: Record<
+    "relevance" | "quality" | "attractiveness" | "diversity" | "clarity" | "brand" | "sensitivity",
+    { score: number; note: string }
+  >;
+  overall: number;
+  verdict: "pass" | "fail";
+  brandSearchVolume: "unknown";
+  sensitiveHits: string[];
+  source: "heuristic-self-check";
+}
+
 export interface AutoCreateResult {
   planId: string;
   plan: AdPlan;
+  /** P1-9：创意 7 维自检（启发式规则，非 AI 评分）。 */
+  creativeCheck?: CreativeSelfCheckResult;
   expiresInSeconds: number;
 }
 
@@ -177,6 +201,10 @@ export async function confirmAdPlan(
     dailyBudgetCurrency?: string;
     maxCpcCurrency?: string;
     geoTargets?: string[];
+    /** P1-25：确认时全量替换各组否词。 */
+    negativeKeywords?: string[];
+    /** P1-25：确认时全量替换排期。 */
+    adSchedules?: AdPlanAdSchedule[];
   }
 ): Promise<ConfirmResult> {
   return apiFetch<ConfirmResult>("/api/v1/ads/auto-create/confirm", {
@@ -188,7 +216,65 @@ export async function confirmAdPlan(
       dailyBudgetCurrency: overrides?.dailyBudgetCurrency,
       maxCpcCurrency: overrides?.maxCpcCurrency,
       geoTargets: overrides?.geoTargets,
+      negativeKeywords: overrides?.negativeKeywords,
+      adSchedules: overrides?.adSchedules,
     }),
+  });
+}
+
+export interface PreflightCheck {
+  key: string;
+  status: "ok" | "warn" | "error" | "skip";
+  message: string;
+}
+
+export interface PreflightResult {
+  verdict: "ready" | "degraded" | "blocked";
+  accountType: "MCC" | "PERSONAL";
+  healthStatus: string;
+  checks: PreflightCheck[];
+}
+
+export async function runPreflight(input: {
+  accountId: string;
+  landingUrl?: string;
+  dailyBudget?: number;
+}): Promise<PreflightResult> {
+  return apiFetch<PreflightResult>("/api/v1/ads/preflight", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+/** P1-16：批量审计日志 + 回滚。 */
+export interface BulkOperationLog {
+  id: string;
+  action: string;
+  entityType: string;
+  entityId: string;
+  before: unknown;
+  after: unknown;
+  createdAt: string;
+}
+
+export async function listBulkOperations(page = 1, pageSize = 20): Promise<{
+  items: BulkOperationLog[];
+  total: number;
+  page: number;
+  pageSize: number;
+}> {
+  return apiFetch(`/api/v1/ads/operations?page=${page}&pageSize=${pageSize}`);
+}
+
+export async function rollbackBulkOperation(auditLogId: string): Promise<{
+  applied: boolean;
+  pendingTargetDeleted: boolean;
+  campaignName: string | null;
+  manualSteps: string[];
+}> {
+  return apiFetch("/api/v1/ads/operations/rollback", {
+    method: "POST",
+    body: JSON.stringify({ auditLogId, confirm: true }),
   });
 }
 

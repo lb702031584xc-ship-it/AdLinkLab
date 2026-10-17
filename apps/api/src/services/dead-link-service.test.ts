@@ -79,6 +79,9 @@ function mkStore(rows: Row[]) {
         updatedAt: new Date(),
         deletedAt: null,
         checkedAt: new Date(),
+        // Production Prisma always returns the `healthChecks` relation select
+        // (possibly empty); the service reads link.healthChecks[0].
+        healthChecks: [],
         ...data,
       };
       rows.push(row);

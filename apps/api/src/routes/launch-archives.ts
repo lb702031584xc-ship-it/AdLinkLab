@@ -23,6 +23,7 @@ import {
   UnauthorizedError,
   ValidationError,
 } from "@adlinklab/shared";
+import { parseScalingPhase, parseTestingPhase } from "../services/staged-budget.js";
 import {
   authenticateSessionRequest,
   type SessionAuthInfo,
@@ -149,6 +150,12 @@ export interface ArchiveDerivedInput {
   revenue?: number | null;
   myBid?: number | null;
   officialBid?: number | null;
+  /** P2-6：预算耗尽判定用（testingPhase.totalBudget；未设置则不判）。 */
+  testingPhase?: unknown;
+  /** P2-6：质量得分（1–10）。LaunchArchive 目前无此列 → 不传则绝不触发，绝不编造。 */
+  qualityScore?: number | null;
+  /** P2-6：NO_IMPRESSIONS 仅对已上线（launchedAt 已设）且展示为 0 的档案触发。 */
+  launchedAt?: Date | string | null;
 }
 
 export interface ArchiveDerived {
@@ -157,6 +164,68 @@ export interface ArchiveDerived {
   actualRoi: number | null;
   profit: number | null;
   diagnosis: string;
+  /**
+   * P1-29：CTR（点击率 = clicks / impressions）。仅当累计展示 ≥100 时统计；
+   * 展示 <100 时为 null（样本不足，暂不统计 CTR，小样本不判）。
+   */
+  actualCtr: number | null;
+  /** P1-29：展示是否达到 CTR 统计门槛（≥100 次）。 */
+  ctrSampleSufficient: boolean;
+  /** P1-29：CTR 样本不足时的说明（展示 <100 时非 null）。 */
+  ctrNote: string | null;
+  /**
+   * P2-6：诊断码（统一阈值，见 DIAGNOSIS_THRESHOLDS；仅真实数据触发，绝不编造）。
+   * 与 diagnosis 文案并存：文案给人读，码给筛选/聚合用。
+   */
+  diagnosisCodes: DiagnosisCode[];
+}
+
+/**
+ * P2-6：诊断码 + 统一阈值（唯一口径；不照搬培训站不一致的 0.5 vs 0.8 / QS 5 vs 6）。
+ * - LOW_CTR：CTR < 5%（讲师经验）且样本充足（展示 ≥100，与 P1-29 同门槛）。
+ * - LOW_QUALITY_SCORE：质量得分 < 5（1–10 分制）。档案无 QS 列 → 无数据时绝不触发。
+ * - BUDGET_EXHAUSTED：spend ≥ testingPhase.totalBudget（未设 totalBudget 则不判）。
+ * - NO_CONVERSIONS：clicks > 0 且 conversions === 0。
+ * - NO_IMPRESSIONS：已上线（launchedAt 已设）且 impressions === 0。
+ */
+export type DiagnosisCode =
+  | "NO_IMPRESSIONS"
+  | "LOW_CTR"
+  | "LOW_QUALITY_SCORE"
+  | "BUDGET_EXHAUSTED"
+  | "NO_CONVERSIONS";
+
+export const DIAGNOSIS_THRESHOLDS = {
+  lowCtr: 0.05, // 与 CTR_BENCHMARKS.poor 同值（此处用字面量，避免 TDZ：CTR_BENCHMARKS 在下方定义）
+  lowQualityScore: 5,
+} as const;
+
+export const DIAGNOSIS_CODE_LABELS: Record<DiagnosisCode, string> = {
+  NO_IMPRESSIONS: "无展示",
+  LOW_CTR: "CTR 偏低（<5%，讲师经验）",
+  LOW_QUALITY_SCORE: "质量得分偏低（<5）",
+  BUDGET_EXHAUSTED: "预算耗尽",
+  NO_CONVERSIONS: "有点击无转化",
+};
+
+/** P1-29：CTR 统计最低累计展示次数（新站实测 + 视频经验口径）。 */
+export const CTR_MIN_IMPRESSIONS = 100;
+
+/** P1-29：CTR 诊断基准（讲师经验，非平台官方标准）。 */
+export const CTR_BENCHMARKS = {
+  poor: 0.05,
+  good: 0.1,
+} as const;
+
+/**
+ * P1-29：CTR 基准文案（讲师经验：<5% 差 / 5%–10% 一般 / ≥10% 舒服）。
+ * 仅在样本充足时调用；样本不足时返回 null。
+ */
+export function ctrBenchmarkLabel(ctr: number | null): string | null {
+  if (ctr === null || !Number.isFinite(ctr)) return null;
+  if (ctr < CTR_BENCHMARKS.poor) return "CTR 低于 5%（偏低，讲师经验）";
+  if (ctr < CTR_BENCHMARKS.good) return "CTR 5%–10%（一般，讲师经验）";
+  return "CTR ≥ 10%（舒服，讲师经验）";
 }
 
 /**
@@ -181,6 +250,15 @@ export function deriveArchiveMetrics(input: ArchiveDerivedInput): ArchiveDerived
   const profit =
     spend !== null && revenue !== null ? revenue - spend : null;
 
+  // P1-29：CTR 只对累计展示 ≥100 的档案统计；小样本不判。
+  const ctrSampleSufficient = impressions >= CTR_MIN_IMPRESSIONS;
+  const actualCtr =
+    ctrSampleSufficient && impressions > 0 ? clicks / impressions : null;
+  const ctrNote =
+    impressions > 0 && !ctrSampleSufficient
+      ? `样本不足（展示 ${impressions} < ${CTR_MIN_IMPRESSIONS}），暂不统计 CTR`
+      : null;
+
   let diagnosis: string;
   if (
     impressions === 0 &&
@@ -201,7 +279,70 @@ export function deriveArchiveMetrics(input: ArchiveDerivedInput): ArchiveDerived
     diagnosis = "数据不足，暂无诊断";
   }
 
-  return { actualCpc, actualCvr, actualRoi, profit, diagnosis };
+  return {
+    actualCpc,
+    actualCvr,
+    actualRoi,
+    profit,
+    diagnosis,
+    actualCtr,
+    ctrSampleSufficient,
+    ctrNote,
+    diagnosisCodes: deriveDiagnosisCodes(input, {
+      impressions,
+      clicks,
+      conversions,
+      actualCtr,
+      ctrSampleSufficient,
+      spend,
+    }),
+  };
+}
+
+/** P2-6：诊断码计算（纯函数，仅真实数据触发）。 */
+function deriveDiagnosisCodes(
+  input: ArchiveDerivedInput,
+  m: {
+    impressions: number;
+    clicks: number;
+    conversions: number | null;
+    actualCtr: number | null;
+    ctrSampleSufficient: boolean;
+    spend: number | null;
+  }
+): DiagnosisCode[] {
+  const codes: DiagnosisCode[] = [];
+  if (input.launchedAt && m.impressions === 0) codes.push("NO_IMPRESSIONS");
+  if (
+    m.ctrSampleSufficient &&
+    m.actualCtr !== null &&
+    m.actualCtr < DIAGNOSIS_THRESHOLDS.lowCtr
+  ) {
+    codes.push("LOW_CTR");
+  }
+  if (
+    typeof input.qualityScore === "number" &&
+    Number.isFinite(input.qualityScore) &&
+    input.qualityScore < DIAGNOSIS_THRESHOLDS.lowQualityScore
+  ) {
+    codes.push("LOW_QUALITY_SCORE");
+  }
+  const testingPhase =
+    input.testingPhase && typeof input.testingPhase === "object"
+      ? (input.testingPhase as Record<string, unknown>)
+      : null;
+  const totalBudget =
+    typeof testingPhase?.totalBudget === "number" ? testingPhase.totalBudget : null;
+  if (
+    m.spend !== null &&
+    totalBudget !== null &&
+    totalBudget > 0 &&
+    m.spend >= totalBudget
+  ) {
+    codes.push("BUDGET_EXHAUSTED");
+  }
+  if (m.clicks > 0 && m.conversions === 0) codes.push("NO_CONVERSIONS");
+  return codes;
 }
 
 type LaunchArchiveRow = {
@@ -227,6 +368,9 @@ type LaunchArchiveRow = {
   budgetCurrency: string;
   keywords: unknown;
   adCopy: unknown;
+  /** P1-4：分阶段预算（JSONB，null = 未设置）。 */
+  testingPhase?: unknown;
+  scalingPhase?: unknown;
   impressions: number | null;
   clicks: number | null;
   spend: number | null;
@@ -265,6 +409,8 @@ function serializeArchive(row: LaunchArchiveRow) {
     budgetCurrency: row.budgetCurrency,
     keywords: row.keywords,
     adCopy: row.adCopy,
+    testingPhase: row.testingPhase ?? null,
+    scalingPhase: row.scalingPhase ?? null,
     impressions: row.impressions,
     clicks: row.clicks,
     spend: row.spend,
@@ -359,6 +505,7 @@ const CSV_COLUMNS = [
   "actualCpc",
   "actualCvrPct",
   "actualRoiPct",
+  "actualCtrPct",
   "profit",
   "diagnosis",
   "status",
@@ -407,6 +554,7 @@ function archiveToCsvRow(a: ReturnType<typeof serializeArchive>): string[] {
     num(a.actualCpc),
     pct(a.actualCvr),
     pct(a.actualRoi),
+    pct(a.actualCtr),
     num(a.profit),
     a.diagnosis,
     a.status,
@@ -608,6 +756,29 @@ export async function registerLaunchArchiveRoutes(
       }
       const status = asEnum(body.status, STATUSES, "status");
       if (status !== undefined) data.status = status;
+      // P1-4：分阶段预算（校验后存 JSON；null = 清空）。
+      if (body.testingPhase !== undefined) {
+        if (body.testingPhase === null) {
+          data.testingPhase = null;
+        } else {
+          try {
+            data.testingPhase = parseTestingPhase(body.testingPhase);
+          } catch (e) {
+            throw new ValidationError((e as Error).message);
+          }
+        }
+      }
+      if (body.scalingPhase !== undefined) {
+        if (body.scalingPhase === null) {
+          data.scalingPhase = null;
+        } else {
+          try {
+            data.scalingPhase = parseScalingPhase(body.scalingPhase);
+          } catch (e) {
+            throw new ValidationError((e as Error).message);
+          }
+        }
+      }
       setIf("notes", asTrimmedString(body.notes) ?? null);
       if (body.launchedAt !== undefined) {
         data.launchedAt = asOptionalDate(body.launchedAt, "launchedAt") ?? null;

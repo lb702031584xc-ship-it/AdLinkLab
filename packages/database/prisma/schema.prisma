@@ -295,6 +295,14 @@ model GoogleAccount {
   timezone           String
   /// Opaque reference to encrypted OAuth credential storage (never plaintext secret)
   oauthCredentialRef String?       @map("oauth_credential_ref")
+  /// P1-7: account type MCC | PERSONAL (existing rows default MCC)
+  accountType        String        @default("MCC") @map("account_type")
+  /// P1-8: health + appeal (shared by both types; appeal is record-only, never auto-filed)
+  healthStatus       String        @default("active") @map("health_status")
+  suspensionReason   String?       @map("suspension_reason")
+  appealStatus       String        @default("none") @map("appeal_status")
+  appealNote         String?       @map("appeal_note")
+  suspendedAt        DateTime?     @map("suspended_at") @db.Timestamptz(3)
   status             AccountStatus @default(ACTIVE)
   createdAt          DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt          DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -310,6 +318,23 @@ model GoogleAccount {
   @@index([tenantId])
   @@index([userId])
   @@map("google_accounts")
+}
+
+/// P1-8: appeal records (platform-side outcomes only, never auto-filed).
+model GoogleAccountAppeal {
+  id              String   @id @db.Uuid
+  tenantId        String   @map("tenant_id") @db.Uuid
+  googleAccountId String   @map("google_account_id") @db.Uuid
+  /// MCC | SUBACCOUNT | PERSONAL
+  level           String
+  /// draft | submitted | approved | rejected
+  status          String
+  note            String?
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([tenantId])
+  @@index([googleAccountId])
+  @@map("google_account_appeals")
 }
 
 model Campaign {
@@ -969,6 +994,9 @@ model AlertRule {
   baselineHours Int      @default(168) @map("baseline_hours")
   minClicks     Int      @default(50) @map("min_clicks")
   autoPause     Boolean  @default(false) @map("auto_pause")
+  /// P1-22: notification channels in_app | webhook | email (email reserved, webhook first)
+  channels      String[] @default(["in_app"])
+  webhookUrl    String?  @map("webhook_url")
   enabled       Boolean  @default(true)
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -1255,6 +1283,11 @@ model Experiment {
   offerId           String           @map("offer_id") @db.Uuid
   name              String
   status            ExperimentStatus @default(DRAFT)
+  /// P1-12: LANDING_PAGE | DIRECT_LINK | AD_GROUP
+  experimentType    String           @default("LANDING_PAGE") @map("experiment_type")
+  seedAdGroupId     String?          @map("seed_ad_group_id")
+  /// P1-12: graduation action none | pause_loser (pause via Script + manual confirmation)
+  graduationAction  String           @default("none") @map("graduation_action")
   /// { type: "LANDING_PAGE"|"DIRECT_LINK", trackingLinkId: string, label: string }
   variantA          Json             @map("variant_a") @db.JsonB
   variantB          Json             @map("variant_b") @db.JsonB
@@ -2042,6 +2075,10 @@ model LaunchArchive {
   keywords           Json      @default("[]")
   /// RSA 文案 { headlines: string[], descriptions: string[] }。
   adCopy             Json      @default("{}")
+  /// P1-4: testing phase { dailyBudget, totalBudget, expectedClicks, expectedConversions, durationDays }
+  testingPhase       Json?     @map("testing_phase") @db.JsonB
+  /// P1-4: scaling phase { triggerRoas, dailyBudget, maxDailyBudget }
+  scalingPhase       Json?     @map("scaling_phase") @db.JsonB
   impressions        Int?
   clicks             Int?
   spend              Float?
@@ -2164,4 +2201,165 @@ model ErrorReport {
   @@index([lastSeenAt])
   @@index([tenantId, lastSeenAt])
   @@map("error_reports")
+}
+
+/// P1-6: per-offer auto-status preferences (default OFF — suggestions only).
+model OfferPreference {
+  id               String   @id @db.Uuid
+  tenantId         String   @map("tenant_id") @db.Uuid
+  offerId          String   @map("offer_id") @db.Uuid
+  autoStatusEnabled Boolean @default(false) @map("auto_status_enabled")
+  zeroPerfDays     Int      @default(5) @map("zero_perf_days")
+  roscDeclineDays  Int      @default(7) @map("rosc_decline_days")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([offerId])
+  @@index([tenantId])
+  @@map("offer_preferences")
+}
+
+/// P1-11: per-tenant attribution settings (defaults mirror K10/K9).
+model AttributionSettings {
+  id                                  String   @id @db.Uuid
+  tenantId                            String   @map("tenant_id") @db.Uuid
+  attributionWindowDays               Int      @default(30) @map("attribution_window_days")
+  gclidDedupeMinutes                  Int      @default(30) @map("gclid_dedupe_minutes")
+  duplicateClicksCountAsConversion    Boolean  @default(false) @map("duplicate_clicks_count_as_conversion")
+  createdAt                           DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                           DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([tenantId])
+  @@map("attribution_settings")
+}
+
+/// P1-11: attribution conflicts — one order matching multiple offers; human resolves.
+model AttributionConflict {
+  id              String    @id @db.Uuid
+  tenantId        String    @map("tenant_id") @db.Uuid
+  orderId         String    @map("order_id") @db.Uuid
+  mainOfferId     String?   @map("main_offer_id") @db.Uuid
+  conflictOfferIds Json     @map("conflict_offer_ids") @db.JsonB
+  reason          String?
+  status          String    @default("open")
+  resolvedOfferId String?   @map("resolved_offer_id") @db.Uuid
+  resolvedBy      String?   @map("resolved_by") @db.Uuid
+  resolvedAt      DateTime? @map("resolved_at") @db.Timestamptz(3)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([tenantId])
+  @@index([orderId])
+  @@map("attribution_conflicts")
+}
+
+/// P1-17: generic idempotency keys (header Idempotency-Key; 24h expiry).
+model IdempotencyKey {
+  id         String   @id @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  key        String
+  scope      String
+  targetId   String?  @map("target_id")
+  response   Json?    @db.JsonB
+  statusCode Int?     @map("status_code")
+  expiresAt  DateTime @map("expires_at") @db.Timestamptz(3)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([tenantId, key, scope])
+  @@index([expiresAt])
+  @@map("idempotency_keys")
+}
+
+/// P1-18: AI prompts DB + versioning (code prompts.ts stays the default seed).
+model AiPrompt {
+  id          String   @id @db.Uuid
+  key         String
+  version     String
+  model       String?
+  temperature Float?
+  content     String
+  isActive    Boolean  @default(false) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([key, version])
+  @@index([key, isActive])
+  @@map("ai_prompts")
+}
+
+/// P1-21: dead-letter jobs (failed queue work; retry/discard from /jobs).
+model DeadLetterJob {
+  id         String    @id @db.Uuid
+  tenantId   String    @map("tenant_id") @db.Uuid
+  jobName    String    @map("job_name")
+  payload    Json?     @db.JsonB
+  error      String?
+  retryCount Int       @default(0) @map("retry_count")
+  status     String    @default("queued")
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  resolvedAt DateTime? @map("resolved_at") @db.Timestamptz(3)
+
+  @@index([tenantId])
+  @@index([status])
+  @@map("dead_letter_jobs")
+}
+
+/// §5: B-level capability grant applications (one capability per application).
+model AdminGrantApplication {
+  id            String    @id @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  capability    String
+  applicantId   String    @map("applicant_id") @db.Uuid
+  purpose       String
+  whitelist     Json      @default("[]") @db.JsonB
+  requestedDays Int       @default(30) @map("requested_days")
+  evidence      Json      @default("[]") @db.JsonB
+  status        String    @default("pending")
+  decisionNote  String?   @map("decision_note")
+  decidedBy     String?   @map("decided_by") @db.Uuid
+  decidedAt     DateTime? @map("decided_at") @db.Timestamptz(3)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([tenantId])
+  @@map("admin_grant_applications")
+}
+
+/// §5: active B-level grants (whitelist + limits + expiry; never a bypass).
+model AdminGrant {
+  id            String   @id @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  capability    String
+  applicationId String?  @map("application_id") @db.Uuid
+  applicantId   String   @map("applicant_id") @db.Uuid
+  approverId    String   @map("approver_id") @db.Uuid
+  whitelist     Json     @default("[]") @db.JsonB
+  usageLimit    Json     @default("{}") @db.JsonB
+  usageCount    Int      @default(0) @map("usage_count")
+  status        String   @default("active")
+  startsAt      DateTime @default(now()) @map("starts_at") @db.Timestamptz(3)
+  endsAt        DateTime @map("ends_at") @db.Timestamptz(3)
+  revokedReason String?  @map("revoked_reason")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([tenantId])
+  @@index([status])
+  @@map("admin_grants")
+}
+
+/// §5: grant audit log (append-only; never deletable by members).
+model AdminGrantAudit {
+  id        String   @id @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  grantId   String?  @map("grant_id") @db.Uuid
+  actorId   String   @map("actor_id") @db.Uuid
+  action    String
+  detail    Json     @default("{}") @db.JsonB
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([tenantId])
+  @@index([grantId])
+  @@map("admin_grant_audits")
 }

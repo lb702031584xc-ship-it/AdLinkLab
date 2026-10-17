@@ -38,6 +38,10 @@ sudo systemctl start adlinklab-backup.service
 sudo systemctl status adlinklab-backup.service
 sudo journalctl -u adlinklab-backup.service -n 100
 sudo systemctl list-timers adlinklab-backup.timer
+
+# 4) 验证首跑成功：日志应含 step=create ok / step=verify ok / step=cleanup ok，
+#    且备份目录出现新的 VERIFIED 备份（状态可用 backup:list 查看）：
+#    pnpm --filter @adlinklab/database backup:list
 ```
 
 > 注意：`DATABASE_URL` 由 `backup.env` 提供，与仓库现有 backup CLI（`packages/database/scripts/backup.mts`）的读取方式一致。备份目录口径与 `packages/database/src/backup/paths.ts` 一致：`ADLINKLAB_BACKUP_DIR` 优先，否则为 `packages/database/backups`。

@@ -6,6 +6,7 @@ import {
   cancelExperimentAction,
   completeExperimentAction,
   getExperimentAction,
+  graduateExperimentAction,
   startExperimentAction,
   submitMetricsAction,
 } from "@/lib/api/experiments-actions";
@@ -61,6 +62,8 @@ export function ExperimentDetailClient({
 
   const [metricsVariant, setMetricsVariant] = useState<"A" | "B">("A");
   const [metricValues, setMetricValues] = useState<Record<string, string>>({});
+  /** P1-12：毕业提示（pause_loser 的 Script 指引）。 */
+  const [graduateMsg, setGraduateMsg] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -115,6 +118,9 @@ export function ExperimentDetailClient({
   const canRecord = e.status === "RUNNING";
   const canComplete = e.status === "RUNNING";
   const canCancel = e.status === "DRAFT" || e.status === "RUNNING";
+  /** P1-12：毕业（COMPLETED + 已分胜负；pause_loser 只返回 Script 指引）。 */
+  const canGraduate =
+    e.status === "COMPLETED" && (e.winner === "A" || e.winner === "B");
 
   return (
     <div className="space-y-6">
@@ -132,6 +138,11 @@ export function ExperimentDetailClient({
       {actionError && (
         <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
           {actionError}
+        </p>
+      )}
+      {graduateMsg && (
+        <p className="rounded-lg border border-ink/10 bg-ink/[0.03] px-4 py-2 text-sm text-ink/80">
+          {graduateMsg}
         </p>
       )}
 
@@ -163,6 +174,14 @@ export function ExperimentDetailClient({
             </>
           )}
         </p>
+        {/* P1-12：AD_GROUP 创意差异度 + 滥用边界说明。 */}
+        {e.creativeDifference != null ? (
+          <p className="mt-2 text-sm text-ink/70">
+            {dict.detail.creativeDifference}：{(e.creativeDifference * 100).toFixed(1)}%
+            {e.creativeDifferenceWarning ? ` — ⚠️ ${e.creativeDifferenceWarning}` : ""}
+          </p>
+        ) : null}
+        <p className="mt-1 text-xs text-ink/50">{dict.detail.abuseNote}</p>
       </section>
 
       <PreconditionList experiment={e} dict={dict} />
@@ -247,6 +266,27 @@ export function ExperimentDetailClient({
             onClick={() => run(() => completeExperimentAction(e.id), (d) => d)}
           >
             {busy ? dict.detail.completing : dict.detail.complete}
+          </button>
+        )}
+        {canGraduate && (
+          <button
+            className={primaryClass}
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              setActionError(null);
+              const res = await graduateExperimentAction(e.id);
+              setBusy(false);
+              if (res.ok) {
+                const g = res.data.graduation as { scriptInstructions?: string } | undefined;
+                setGraduateMsg(g?.scriptInstructions ?? dict.detail.graduated);
+                void load();
+              } else {
+                setActionError(res.error);
+              }
+            }}
+          >
+            {busy ? dict.detail.graduating : dict.detail.graduate}
           </button>
         )}
         {canCancel && (

@@ -42,6 +42,19 @@ export interface LaunchArchive {
   budgetCurrency: string | null;
   keywords: string[];
   adCopy: LaunchArchiveAdCopy | null;
+  /** P1-4：分阶段预算（null = 未设置）。 */
+  testingPhase: {
+    dailyBudget: number;
+    totalBudget: number;
+    expectedClicks: number;
+    expectedConversions: number;
+    durationDays: number;
+  } | null;
+  scalingPhase: {
+    triggerRoas: number;
+    dailyBudget: number;
+    maxDailyBudget: number;
+  } | null;
   impressions: number | null;
   clicks: number | null;
   spend: number | null;
@@ -59,6 +72,12 @@ export interface LaunchArchive {
   actualRoi: number | null;
   profit: number | null;
   diagnosis: string | null;
+  /** P1-29：CTR（展示 ≥100 时统计，否则 null）+ 门槛/说明。 */
+  actualCtr: number | null;
+  ctrSampleSufficient: boolean;
+  ctrNote: string | null;
+  /** P2-6：诊断码（统一阈值，仅真实数据触发）。 */
+  diagnosisCodes: string[];
 }
 
 export interface LaunchArchiveListFilters {
@@ -126,6 +145,8 @@ export type LaunchArchivePatchInput = Partial<
     | "notes"
     | "launchedAt"
     | "endedAt"
+    | "testingPhase"
+    | "scalingPhase"
   >
 >;
 
@@ -226,6 +247,65 @@ export async function deleteLaunchArchiveAction(id: string) {
     () => apiFetch<unknown>(`/api/v1/launch-archives/${encodeURIComponent(id)}`, { method: "DELETE" }),
     ["/reports/launch"]
   );
+}
+
+/** P1-28：预算总览 + 盈亏平衡点（聚合 LaunchArchive；无数据 → null）。 */
+export interface BudgetOverview {
+  totals: {
+    totalBudget: number | null;
+    totalSpend: number;
+    totalDailyBudget: number;
+    utilization: number | null;
+    remaining: number | null;
+    dailyAvg: number | null;
+    projected30d: number | null;
+    remainingDays: number | null;
+    activeCampaignCount: number;
+    archiveCount: number;
+  };
+  perOffer: Array<{
+    offerName: string;
+    budget: number;
+    spent: number;
+    conversions: number;
+    commission: number;
+    revenue: number;
+    roas: number | null;
+  }>;
+  top10: Array<{
+    id: string;
+    offerName: string;
+    dailyBudget: number | null;
+    spend: number | null;
+    conversions: number | null;
+    roas: number | null;
+  }>;
+  breakeven: {
+    requiredConversions: number | null;
+    avgBreakevenCpa: number | null;
+    totalRoas: number | null;
+    totalCommission: number;
+    conversionEfficiency: number | null;
+    commissionRate: number | null;
+    commissionPerConversion: number | null;
+  };
+  detail: Array<{
+    id: string;
+    offerName: string;
+    network: string;
+    dailyBudget: number | null;
+    spend: number | null;
+    clicks: number | null;
+    conversions: number | null;
+    revenue: number | null;
+    roas: number | null;
+    launchedAt: string | null;
+    endedAt: string | null;
+  }>;
+}
+
+export async function getBudgetOverviewAction() {
+  return attempt(() => apiFetch<BudgetOverview>("/api/v1/reports/budget-overview"), []);
 }
 
 /** Export the current filter as CSV text (client turns it into a Blob download). */
