@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useDict } from "@/i18n/use-dict";
 import { EntityPageHeader } from "@/components/entities/ui";
 import { calcProfit } from "@/lib/profit-calc";
-import { getLastOfferId, setLastOfferId } from "@/lib/current-offer";
+import { getLastOfferId, setLastOfferId, setManualOffer } from "@/lib/current-offer";
 import {
   listWorkStateHistoryAction,
   loadWorkStateAction,
@@ -516,6 +516,34 @@ export function WorksheetClient({
     });
     setManualOpen(false);
   };
+
+  /** 手动 Offer 跟随：手动（输入中或已应用，id 为空）与库里 Offer 互斥，当前只有一个。
+      库里 Offer 有效（id 非空）时清除手动 Offer；手动有效时存手动 Offer 并清库里记忆。 */
+  useEffect(() => {
+    if (offer && offer.id) {
+      setManualOffer(null);
+      return;
+    }
+    if (offer && !offer.id) {
+      // 已应用的手动 Offer：以 offer 里的已应用值为准
+      setManualOffer({
+        name: offer.name,
+        network: offer.network ?? "",
+        url: offer.destinationUrl ?? "",
+      });
+      setLastOfferId(null);
+      return;
+    }
+    if (mName.trim()) {
+      // 输入中的手动 Offer：以输入框为准
+      setManualOffer({
+        name: mName.trim(),
+        network: mNetwork.trim(),
+        url: mUrl.trim(),
+      });
+      setLastOfferId(null);
+    }
+  }, [offer, mName, mNetwork, mUrl]);
 
   const [termsVerdict, setTermsVerdict] = useState<"go" | "caution" | "stop" | null>(null);
   const [complianceResults, setComplianceResults] = useState<AiUrlCheckResult[] | null>(null);

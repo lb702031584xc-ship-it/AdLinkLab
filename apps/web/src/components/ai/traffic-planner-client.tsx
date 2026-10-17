@@ -22,7 +22,7 @@ import {
 import { loadWorkStateAction } from "@/lib/api/work-state-actions";
 import { checkKeywordsAction, type KeywordCheckResult } from "@/lib/api/keyword-check-actions";
 import { calcProfit } from "@/lib/profit-calc";
-import { getLastOfferId, setLastOfferId } from "@/lib/current-offer";
+import { getLastOfferId, setLastOfferId, getManualOffer, setManualOffer } from "@/lib/current-offer";
 import { useWorkState } from "@/lib/use-work-state";
 import type {
   TrafficPlanKeywordInput,
@@ -576,6 +576,8 @@ export function TrafficPlannerClient({
     resetWorkingFields();
     fillFromOffer(o);
     setLastOfferId(o.id);
+    // 库里 Offer 生效 → 清除手动 Offer（手动与库里互斥）
+    setManualOffer(null);
     try {
       const res = await loadWorkStateAction("traffic-planner", o.id);
       if (res.ok && res.data.state && snapshotMeaningful(res.data.state)) {
@@ -587,14 +589,45 @@ export function TrafficPlannerClient({
   };
 
   /** 全局当前 offer：没带 ?offerId=、工作表也没传 offer 时，用上次选的 offer
-      （选一次，到处带）。嵌入版没传 offers 列表时不做回落，由工作表自己回落。 */
+      （选一次，到处带）。嵌入版没传 offers 列表时不做回落，由工作表自己回落。
+      库里记忆为空时再读手动 Offer（工作表手动输入的），手动 Offer 也跟随。 */
   const lastOfferFallbackRef = useRef(false);
   useEffect(() => {
     if (initialOffer || lastOfferFallbackRef.current) return;
     lastOfferFallbackRef.current = true;
     const last = getLastOfferId();
     const found = last ? (offers ?? []).find((x) => x.id === last) : undefined;
-    if (found) void onSelectOffer(found.id);
+    if (found) {
+      void onSelectOffer(found.id);
+      return;
+    }
+    // 手动 Offer 回落：不走 onSelectOffer（它按 id 查库里列表，手动 Offer 不在列表里）
+    const manual = getManualOffer();
+    if (!manual) return;
+    resetWorkingFields();
+    fillFromOffer({ id: "", name: manual.name, network: manual.network });
+    // 手动 Offer 的 ③ 值：读工作表手动快照（offerId null），只补空不覆盖手改值
+    void (async () => {
+      try {
+        const res = await loadWorkStateAction("ai-worksheet", null);
+        if (!res.ok || !res.data.state) return;
+        const ps = res.data.state.profitState as
+          | { inputs?: { avgPrice?: unknown; commissionRate?: unknown } }
+          | undefined;
+        const ap = ps?.inputs?.avgPrice;
+        const cr = ps?.inputs?.commissionRate;
+        if (ap != null && String(ap).trim()) {
+          const v = String(ap).trim();
+          setAvgPrice((prev) => (prev.trim() ? prev : v));
+        }
+        if (cr != null && String(cr).trim()) {
+          const v = String(cr).trim();
+          setCommissionRate((prev) => (prev.trim() ? prev : v));
+        }
+      } catch {
+        /* 读失败静默，不打断 */
+      }
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
