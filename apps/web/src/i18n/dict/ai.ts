@@ -127,6 +127,8 @@ export const zh = {
     loadFailed: "抓取记录加载失败",
     loadTimeout: "加载超时，请重试",
     retry: "重试",
+    refresh: "刷新",
+    recordsUnit: "条",
   },
   brandBidding: {
     title: "品牌词投流检查",
@@ -1149,6 +1151,8 @@ export const en: typeof zh = {
     loadFailed: "Failed to load captures",
     loadTimeout: "Loading timed out, please retry",
     retry: "Retry",
+    refresh: "Refresh",
+    recordsUnit: "records",
   },
   brandBidding: {
     title: "Brand keyword ad check",

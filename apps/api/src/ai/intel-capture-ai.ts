@@ -18,7 +18,7 @@ function taskLine(kind: IntelKind, language: AnalysisLanguage): string {
   if (language === "en") {
     switch (kind) {
       case "spyfu":
-        return "Extract from the captured SpyFu page: the competitor keywords the domain bids on (up to 20, with CPC/search volume when shown), the competitor domain, and any budget/scale signals.";
+        return "Extract from the captured SpyFu page the competitor keywords (up to 20, with CPC/search volume when shown). For a Domain Overview / PPC Research page: the keywords the domain bids on, the competitor domain, and budget/scale signals. For a Keyword Overview page: the target keyword with its monthly volume, the similar/related keywords list (with volumes), and question keywords.";
       case "transparency":
         return "Extract from the captured Google Ads Transparency page: the advertiser name, ad copy key points, how long the ads have been running / start dates, and ad count / regions covered.";
       case "similarweb":
@@ -29,7 +29,7 @@ function taskLine(kind: IntelKind, language: AnalysisLanguage): string {
   }
   switch (kind) {
     case "spyfu":
-      return "从抓取的 SpyFu 页面正文提取：对手在投的关键词（最多 20 个，带 CPC/搜索量如果有）、对手域名、预算/投放规模信号。";
+      return "从抓取的 SpyFu 页面正文提取对手在投的关键词（最多 20 个，带 CPC/搜索量如果有）。域名概览 / PPC 研究页：提取该域名在投的关键词、对手域名、预算/投放规模信号；关键词概览页：提取目标关键词及其月搜索量、相似/相关关键词列表（带搜索量）、问题类关键词。";
     case "transparency":
       return "从抓取的 Google 广告透明度页面正文提取：广告主名称、广告文案要点、广告投放时长/开始时间、广告数量/覆盖地区。";
     case "similarweb":

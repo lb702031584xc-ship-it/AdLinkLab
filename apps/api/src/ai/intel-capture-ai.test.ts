@@ -5,8 +5,16 @@ import {
 } from "./intel-capture-ai.js";
 
 describe("intel-capture-ai", () => {
+  it("SpyFu 覆盖两种页面：域名概览（在投关键词+预算）与关键词概览（相似关键词）", () => {
+    const zh = buildIntelExtractPrompt("x", "spyfu", "zh").user;
+    expect(zh).toContain("对手在投的关键词");
+    expect(zh).toContain("关键词概览页");
+    expect(zh).toContain("相似/相关关键词");
+    const en = buildIntelExtractPrompt("x", "spyfu", "en").user;
+    expect(en).toContain("Keyword Overview");
+    expect(en).toContain("similar/related keywords");
+  });
   it("四种任务各有提取目标", () => {
-    expect(buildIntelExtractPrompt("x", "spyfu", "zh").user).toContain("对手在投的关键词");
     expect(buildIntelExtractPrompt("x", "transparency", "zh").user).toContain("广告主名称");
     expect(buildIntelExtractPrompt("x", "similarweb", "zh").user).toContain("流量结构");
     expect(buildIntelExtractPrompt("x", "negatives", "zh").user).toContain("否定关键词候选");

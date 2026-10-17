@@ -10,6 +10,7 @@ import type { OfferCaptureItem } from "@/lib/api/ai";
  * 展开后列出最近 10 条插件抓取，点"选用"把整条记录交给调用方处理。
  * （各页面自己决定用哪几个字段：条款页用正文、合规页用 URL、投流页用标题……）
  * 加载带 20 秒超时 + 失败提示 + 重试：任何情况下都不永久卡在"加载中"。
+ * 每次展开都重新拉列表 + 面板内可手动刷新：插件新抓的记录不用整页刷新就能出现。
  */
 export function CapturePicker({
   onPick,
@@ -27,7 +28,6 @@ export function CapturePicker({
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<OfferCaptureItem[]>([]);
   const [loading, setLoading] = useState(false);
-  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const reqRef = useRef(0);
 
@@ -52,7 +52,6 @@ export function CapturePicker({
     } finally {
       if (req === reqRef.current) {
         setLoading(false);
-        setLoaded(true);
       }
     }
   }
@@ -62,8 +61,9 @@ export function CapturePicker({
       <button
         type="button"
         onClick={() => {
-          setOpen((v) => !v);
-          if (!loaded) load();
+          // 每次展开都重拉：插件刚抓的新记录不用整页刷新就能出现
+          if (!open) load();
+          setOpen(!open);
         }}
         className="text-xs text-ink/60 hover:text-ink"
       >
@@ -71,6 +71,19 @@ export function CapturePicker({
       </button>
       {open ? (
         <div className="mt-2 space-y-1.5 rounded-lg border border-ink/10 bg-ink/[0.02] p-2">
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-ink/50">
+              {items.length > 0 ? `${items.length} ${d.recordsUnit}` : ""}
+            </p>
+            <button
+              type="button"
+              onClick={load}
+              disabled={loading}
+              className="text-xs text-ink/60 hover:text-ink disabled:opacity-50"
+            >
+              🔄 {d.refresh}
+            </button>
+          </div>
           {loading ? (
             <p className="text-xs text-ink/50">{d.loading}</p>
           ) : error ? (
@@ -86,7 +99,7 @@ export function CapturePicker({
             items.map((c) => (
               <div
                 key={c.id}
-                className="flex items-center justify-between gap-2 rounded-md bg-white/60 px-2 py-1.5"
+                className="flex items-start justify-between gap-2 rounded-md bg-white/60 px-2 py-1.5"
               >
                 <div className="min-w-0 text-xs">
                   <p className="truncate font-medium text-ink">{c.title || c.finalUrl}</p>
@@ -94,6 +107,11 @@ export function CapturePicker({
                     {c.price != null ? `${c.price} ${c.currency ?? ""} · ` : ""}
                     {new Date(c.createdAt).toLocaleString()}
                   </p>
+                  {c.text ? (
+                    <p className="mt-0.5 line-clamp-2 text-ink/60" title={c.text}>
+                      {c.text}
+                    </p>
+                  ) : null}
                 </div>
                 <button
                   type="button"
