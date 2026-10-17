@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useDict } from "@/i18n/use-dict";
 import { EntityPageHeader } from "@/components/entities/ui";
 import { calcProfit } from "@/lib/profit-calc";
-import { getLastOfferId, setLastOfferId, setManualOffer } from "@/lib/current-offer";
+import { getLastOfferId, getManualOffer, setLastOfferId, setManualOffer } from "@/lib/current-offer";
 import {
   listWorkStateHistoryAction,
   loadWorkStateAction,
@@ -596,8 +596,9 @@ export function WorksheetClient({
     trafficResult,
   });
 
+  // 只有 Offer、没有分析结果的快照不算有意义：避免切到新 Offer 时自动保存把旧 Offer 的带结果快照覆盖掉。
+  // Offer 本身由 lastOfferId / manualOffer 记忆恢复，不需要靠快照。
   const snapshotMeaningful = (s: Record<string, unknown>): boolean =>
-    s.offer != null ||
     s.termsVerdict != null ||
     s.complianceResults != null ||
     s.profitState != null ||
@@ -645,6 +646,28 @@ export function WorksheetClient({
           if (found) {
             oid = found.id;
             setOffer(found);
+          } else {
+            // 手动 Offer 回落：读手动记忆 + 载手动快照（offerId=null）。
+            // 只当快照里的 Offer 名与手动记忆一致时才恢复结果，防止换了新手动 Offer 却载回旧结果。
+            const manual = getManualOffer();
+            if (manual) {
+              setOffer({
+                id: "",
+                name: manual.name,
+                network: manual.network,
+                destinationUrl: manual.url,
+              });
+              const res = await loadWorkStateAction("ai-worksheet", null);
+              if (!cancelled && res.ok && res.data.state && snapshotMeaningful(res.data.state)) {
+                const snapOffer = (res.data.state as { offer?: { name?: string } | null }).offer;
+                if (!snapOffer?.name || snapOffer.name === manual.name) {
+                  applySnapshot(res.data.state);
+                  setRestoredAt(res.data.updatedAt);
+                  lastSavedRef.current = JSON.stringify(res.data.state);
+                }
+              }
+            }
+            return;
           }
         }
         if (!oid) return;
