@@ -1761,6 +1761,13 @@ export function TrafficPlannerClient({
             <div className="rounded-xl border border-ink/10 bg-ink/[0.02] p-4">
               {renderMarkdown(result.report)}
             </div>
+            {/* 下一步：自动化广告。库里 Offer 带 offerId；手动 Offer 不带，靠手动 Offer 记忆跟随。 */}
+            <a
+              href={selectedOfferId ? `/ads/auto-create?offerId=${encodeURIComponent(selectedOfferId)}` : "/ads/auto-create"}
+              className={`${btnPrimary} mt-4 inline-flex`}
+            >
+              {d.nextToAdsAuto}
+            </a>
           </div>
         )}
       </section>

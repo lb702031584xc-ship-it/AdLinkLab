@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { loadWorkStateAction } from "@/lib/api/work-state-actions";
-import { getLastOfferId, setLastOfferId } from "@/lib/current-offer";
+import { getLastOfferId, setLastOfferId, getManualOffer } from "@/lib/current-offer";
 import { useWorkState } from "@/lib/use-work-state";
 import { coachCheckAction, type CoachFinding } from "@/lib/api/coach-actions";
 import { CoachGate, hasCoachBlock } from "@/components/coach/coach-gate";
@@ -662,16 +662,30 @@ export function AdsAutoClient({
       return;
     }
     const last = getLastOfferId();
-    if (!last) return;
-    setOfferId(last);
-    void (async () => {
-      try {
-        const res = await loadWorkStateAction("ads-auto", last);
-        if (res.ok && res.data.state) applyAdsAutoSnapshot(res.data.state);
-      } catch {
-        /* 恢复失败不打断 */
-      }
-    })();
+    if (last) {
+      setOfferId(last);
+      void (async () => {
+        try {
+          const res = await loadWorkStateAction("ads-auto", last);
+          if (res.ok && res.data.state) applyAdsAutoSnapshot(res.data.state);
+        } catch {
+          /* 恢复失败不打断 */
+        }
+      })();
+      return;
+    }
+    // 手动 Offer：库里记忆为空时跟随手动 Offer（工作表存的 adlinklab:manualOffer）。
+    // 手动 Offer 没有 id，不调 getOfferAction、不写库里记忆。
+    const manual = getManualOffer();
+    if (!manual) return;
+    setOfferNameFromOffer(manual.name);
+    // URL 只补空不覆盖：?urls= 参数优先；同时把 urlUrlsRef 置为手动 URL，
+    // 防止之后完成的快照恢复用旧快照 URL 覆盖新鲜的手动 URL（快照恢复跳过有 URL 参数的情况）。
+    const mUrl = manual.url.trim();
+    if (!searchParams.get("urls") && mUrl && !urlsText.trim()) {
+      setUrlsText(mUrl);
+      urlUrlsRef.current = mUrl;
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1086,10 +1100,10 @@ export function AdsAutoClient({
   const [plannerCvrPct, setPlannerCvrPct] = useState<string | null>(null);
   const [targetRoiPct, setTargetRoiPct] = useState("100");
   useEffect(() => {
-    if (!offerId) return;
     let cancelled = false;
     void (async () => {
       try {
+        // 库里 Offer 按 offerId 读快照；手动 Offer（offerId 为空）读手动快照（offerId null）。
         const res = await loadWorkStateAction("traffic-planner", offerId);
         if (cancelled || !res.ok || !res.data.state) return;
         const snap = res.data.state as Record<string, unknown>;
@@ -1097,8 +1111,14 @@ export function AdsAutoClient({
           typeof v === "string" ? v.trim() : typeof v === "number" ? String(v) : "";
         const p = str(snap.payout);
         const cvr = str(snap.networkCvr);
-        if (p) setPlannerPayout(p);
-        if (cvr) setPlannerCvrPct(cvr);
+        if (offerId) {
+          if (p) setPlannerPayout(p);
+          if (cvr) setPlannerCvrPct(cvr);
+        } else {
+          // 手动快照只补空不覆盖已有值（快照是异步到的，别覆盖已算出的值）。
+          if (p) setPlannerPayout((prev) => (prev != null && prev !== "" ? prev : p));
+          if (cvr) setPlannerCvrPct((prev) => (prev != null && prev !== "" ? prev : cvr));
+        }
       } catch {
         /* 取不到就显示空状态 */
       }
