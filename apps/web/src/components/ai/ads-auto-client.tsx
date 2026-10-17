@@ -1881,6 +1881,19 @@ export function AdsAutoClient({
                 <p className="mt-1 font-mono text-xs">
                   {d.confirm.targetId}: {confirm.targetId}
                 </p>
+                <p className="mt-1 text-xs">
+                  {d.confirm.archiveCreated}{" "}
+                  <a
+                    href={
+                      offerId
+                        ? `/reports/launch?offerId=${encodeURIComponent(offerId)}`
+                        : "/reports/launch"
+                    }
+                    className="font-medium underline hover:opacity-80"
+                  >
+                    {d.confirm.viewArchive} →
+                  </a>
+                </p>
               </div>
             )}
           </div>

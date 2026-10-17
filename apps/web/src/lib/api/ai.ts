@@ -145,7 +145,11 @@ export interface AiTermsResult {
     overallVerdict: "go" | "caution" | "stop";
     traffic: AiTermsTraffic;
     brandBidding: RestrictionValue;
+    /** How the brand-bidding verdict was reached: explicit in terms, or silence (not prohibited) treated as pass. */
+    brandBiddingBasis?: "explicit" | "silence" | null;
     directLinking: RestrictionValue;
+    /** How the direct-linking verdict was reached (same as brandBiddingBasis). */
+    directLinkingBasis?: "explicit" | "silence" | null;
     geoRestrictions: string[];
     caps: string | null;
     payoutTerms: string | null;

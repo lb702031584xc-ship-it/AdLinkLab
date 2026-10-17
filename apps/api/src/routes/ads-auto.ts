@@ -71,6 +71,7 @@ import {
   validateClickMonitorScriptInput,
   CLICK_MONITOR_SCRIPT_VERSION,
 } from "../services/script-click-monitor.js";
+import { buildAutoArchiveData } from "./launch-archives.js";
 
 export interface AdsAutoRouteDeps {
   prisma: PrismaClient;
@@ -597,6 +598,8 @@ export async function registerAdsAutoRoutes(
         taskType: CREATE_CAMPAIGN_TASK_TYPE,
         status: "QUEUED",
         alreadyQueued: true,
+        // 重复确认不新建档案（首次确认时已建），故 archiveId 为 null。
+        archiveId: null as string | null,
       };
     }
 
@@ -634,6 +637,83 @@ export async function registerAdsAutoRoutes(
       },
     });
 
+    // 自动建档（投放档案）：失败静默（只记 log），绝不让确认失败。
+    let archiveId: string | null = null;
+    try {
+      const offer = plan.offerId
+        ? await prisma.offer.findFirst({
+            where: { id: plan.offerId, tenantId: info.tenantId },
+            select: {
+              name: true,
+              network: true,
+              destinationUrl: true,
+              commissionType: true,
+              commissionValue: true,
+              avgPrice: true,
+            },
+          })
+        : null;
+      let plannerSnapshot: Record<string, unknown> | null = null;
+      try {
+        const ws = await prisma.workState.findFirst({
+          where: {
+            tenantId: info.tenantId,
+            page: "traffic-planner",
+            offerId: plan.offerId,
+          },
+          orderBy: { updatedAt: "desc" },
+          select: { state: true },
+        });
+        if (ws?.state && typeof ws.state === "object" && !Array.isArray(ws.state)) {
+          plannerSnapshot = ws.state as Record<string, unknown>;
+        }
+      } catch {
+        // 快照读不到就按无快照建档（payout/CVR 为 null）。
+      }
+      const archiveData = buildAutoArchiveData({
+        plan: {
+          planId: plan.planId,
+          offerId: plan.offerId,
+          campaignName: plan.campaign.name,
+          dailyBudgetAmount: plan.campaign.dailyBudget.amount,
+          dailyBudgetCurrency: plan.campaign.dailyBudget.currency,
+          campaignMaxCpc: plan.campaign.bidding.maxCpc?.amount ?? null,
+          firstAdGroupMaxCpc: plan.adGroups[0]?.group.maxCpc?.amount ?? null,
+          keywords: plan.adGroups.flatMap((g) =>
+            g.group.keywords.map((k) => k.text)
+          ),
+          headlines: plan.adGroups[0]?.rsa.headlines ?? [],
+          descriptions: plan.adGroups[0]?.rsa.descriptions ?? [],
+          finalUrl: plan.adGroups[0]?.group.finalUrl ?? null,
+        },
+        offer: offer
+          ? {
+              name: offer.name,
+              network: offer.network,
+              destinationUrl: offer.destinationUrl,
+              commissionType: offer.commissionType,
+              commissionValue:
+                offer.commissionValue !== null
+                  ? Number(offer.commissionValue)
+                  : null,
+              avgPrice:
+                offer.avgPrice !== null ? Number(offer.avgPrice) : null,
+            }
+          : null,
+        plannerSnapshot,
+      });
+      const archive = await prisma.launchArchive.create({
+        data: {
+          id: randomUUID(),
+          tenantId: info.tenantId,
+          ...archiveData,
+        },
+      });
+      archiveId = archive.id;
+    } catch (e) {
+      console.error("[launch-archive] auto-create failed", e);
+    }
+
     return {
       planId: plan.planId,
       targetId: target.id,
@@ -643,6 +723,7 @@ export async function registerAdsAutoRoutes(
       integrationId: integration.id,
       scriptUrl: `/api/v1/ads/auto-create/${plan.planId}/script`,
       copyPackUrl: `/api/v1/ads/auto-create/${plan.planId}/copy-pack`,
+      archiveId,
     };
   });
 

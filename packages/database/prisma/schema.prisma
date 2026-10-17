@@ -235,6 +235,8 @@ model Tenant {
   onboardTasks          OnboardTask[]
   coachSetting          CoachSetting?
   manualSpend           ManualSpend?
+  /// 投放档案 back-reference (additive)
+  launchArchives        LaunchArchive[]
 
   @@map("tenants")
 }
@@ -1983,4 +1985,52 @@ model OfferCapture {
 
   @@index([tenantId, createdAt(sort: Desc)], map: "offer_captures_tenant_created_idx")
   @@map("offer_captures")
+}
+
+/// 投放档案：一次投放的完整档案——决策、条款、出价、文案、投后数据。
+/// 确认广告计划后自动建档（draft），投后回填 impressions/clicks/spend 等。
+model LaunchArchive {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId          String    @map("tenant_id") @db.Uuid
+  /// 库里 Offer id；手动 Offer 建档时为 null。
+  offerId           String?   @map("offer_id") @db.Uuid
+  offerName         String    @map("offer_name")
+  network           String
+  offerUrl          String?   @map("offer_url")
+  decision          String?
+  decisionReason    String?   @map("decision_reason")
+  termsBrandBidding String?   @map("terms_brand_bidding")
+  termsDirectLinking String?  @map("terms_direct_linking")
+  termsSummary      String?   @map("terms_summary")
+  payout            Float?
+  epc               Float?
+  breakevenCpc      Float?    @map("breakeven_cpc")
+  breakevenCvrPct   Float?    @map("breakeven_cvr_pct")
+  recommendedBid    Float?    @map("recommended_bid")
+  myBid             Float?    @map("my_bid")
+  officialBid       Float?    @map("official_bid")
+  dailyBudget       Float?    @map("daily_budget")
+  budgetCurrency    String    @default("USD") @map("budget_currency")
+  /// 关键词字符串数组。
+  keywords          Json      @default("[]")
+  /// RSA 文案 { headlines: string[], descriptions: string[] }。
+  adCopy            Json      @default("{}")
+  impressions       Int?
+  clicks            Int?
+  spend             Float?
+  conversions       Int?
+  revenue           Float?
+  status            String    @default("draft")
+  notes             String?
+  launchedAt        DateTime? @map("launched_at") @db.Timestamptz(3)
+  endedAt           DateTime? @map("ended_at") @db.Timestamptz(3)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, createdAt(sort: Desc)], map: "launch_archives_tenant_created_idx")
+  @@index([tenantId, network], map: "launch_archives_tenant_network_idx")
+  @@index([tenantId, status], map: "launch_archives_tenant_status_idx")
+  @@map("launch_archives")
 }

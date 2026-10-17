@@ -44,6 +44,18 @@ function TermsReport({ result }: { result: AiTermsResult }) {
   const d = t.ai.terms;
   const terms = result.terms;
 
+  /**
+   * Brand-bidding / direct-linking badge: silence (terms don't prohibit it)
+   * counts as a pass, and the badge says so. Missing basis (old data) is
+   * just "通过". Non-allowed verdicts keep the shared restriction labels.
+   */
+  const basisLabel = (v: RestrictionValue, basis?: "explicit" | "silence" | null) => {
+    if (v !== "allowed") return d.restrictionValues[v];
+    if (basis === "explicit") return d.allowedExplicit;
+    if (basis === "silence") return d.allowedSilence;
+    return d.allowedDefault;
+  };
+
   return (
     <div className="mt-6 rounded-xl border border-ink/10 bg-white/70 p-6">
       <div className="flex flex-wrap items-center gap-3">
@@ -84,7 +96,7 @@ function TermsReport({ result }: { result: AiTermsResult }) {
               <span
                 className={`rounded-full px-2 py-0.5 text-xs font-medium ${restrictionBadge(terms.brandBidding)}`}
               >
-                {d.restrictionValues[terms.brandBidding]}
+                {basisLabel(terms.brandBidding, terms.brandBiddingBasis)}
               </span>
             </td>
           </tr>
@@ -94,7 +106,7 @@ function TermsReport({ result }: { result: AiTermsResult }) {
               <span
                 className={`rounded-full px-2 py-0.5 text-xs font-medium ${restrictionBadge(terms.directLinking)}`}
               >
-                {d.restrictionValues[terms.directLinking]}
+                {basisLabel(terms.directLinking, terms.directLinkingBasis)}
               </span>
             </td>
           </tr>

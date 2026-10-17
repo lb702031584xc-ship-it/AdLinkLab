@@ -25,6 +25,7 @@ import { zh as coachZh, en as coachEn } from "./dict/coach";
 import { zh as keywordStarterZh, en as keywordStarterEn } from "./dict/keyword-starter";
 import { zh as networksZh, en as networksEn } from "./dict/networks";
 import { zh as weeklyReportZh, en as weeklyReportEn } from "./dict/weekly-report";
+import { zh as launchArchiveZh, en as launchArchiveEn } from "./dict/launch-archive";
 import { zh as cashbackRateWatchZh, en as cashbackRateWatchEn } from "./dict/cashback-rate-watch";
 import { zh as cashbackTermsWatchZh, en as cashbackTermsWatchEn } from "./dict/cashback-terms-watch";
 import { zh as cashbackLpScoreZh, en as cashbackLpScoreEn } from "./dict/cashback-lp-score";
@@ -68,6 +69,7 @@ export const dictionaries = {
     keywordStarter: keywordStarterZh,
     networks: networksZh,
     weeklyReport: weeklyReportZh,
+    launchArchive: launchArchiveZh,
     cashbackRateWatch: cashbackRateWatchZh,
     cashbackTermsWatch: cashbackTermsWatchZh,
     cashbackLpScore: cashbackLpScoreZh,
@@ -102,6 +104,7 @@ export const dictionaries = {
     keywordStarter: keywordStarterEn,
     networks: networksEn,
     weeklyReport: weeklyReportEn,
+    launchArchive: launchArchiveEn,
     cashbackRateWatch: cashbackRateWatchEn,
     cashbackTermsWatch: cashbackTermsWatchEn,
     cashbackLpScore: cashbackLpScoreEn,

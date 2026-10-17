@@ -54,7 +54,11 @@ export interface TermsShape {
     incentivized: TermsRestriction;
   };
   brandBidding: TermsRestriction;
+  /** How brandBidding=allowed was reached: explicit allowance, or terms silent on it. Null unless verdict is allowed. */
+  brandBiddingBasis?: "explicit" | "silence" | null;
   directLinking: TermsRestriction;
+  /** How directLinking=allowed was reached: explicit allowance, or terms silent on it. Null unless verdict is allowed. */
+  directLinkingBasis?: "explicit" | "silence" | null;
   geoRestrictions: string[];
   caps: string | null;
   payoutTerms: string | null;
@@ -72,7 +76,9 @@ const TERMS_JSON_SPEC = `{
     "incentivized": "allowed" | "forbidden" | "restricted" | "unknown"
   },
   "brandBidding": "allowed" | "forbidden" | "restricted" | "unknown",
+  "brandBiddingBasis": "explicit" | "silence" | null,
   "directLinking": "allowed" | "forbidden" | "restricted" | "unknown",
+  "directLinkingBasis": "explicit" | "silence" | null,
   "geoRestrictions": ["<geo or restriction as stated>", "..."],
   "caps": "<cap/limit as stated, or null>",
   "payoutTerms": "<payout terms as stated, or null>",
@@ -102,15 +108,17 @@ export function buildTermsPrompt(
     TERMS_JSON_SPEC,
     "",
     "Rules:",
-    "- Be CONSERVATIVE: when the terms are ambiguous or silent on a restriction, use \"unknown\" — NEVER invent \"allowed\".",
+    "- Be CONSERVATIVE: when the terms are ambiguous or silent on a restriction, use \"unknown\" — NEVER invent \"allowed\". EXCEPTION: brandBidding and directLinking ONLY (see below) — for those two, silence means \"allowed\" with basis \"silence\".",
     "- \"restricted\" means allowed with conditions (e.g. prior approval, whitelisted keywords only, capped spend).",
     "- traffic.search covers paid search / PPC / SEM. traffic.incentivized covers cashback, loyalty, reward and any incentivized traffic — assess it EXPLICITLY, because many offers ban it even when other traffic is allowed.",
-    "- brandBidding: distinguish \"no brand bidding\" (forbidden) from \"brand bidding with prior written approval\" (restricted) from silence (unknown).",
-    "- directLinking: \"forbidden\" if the terms require a landing page / pre-lander or forbid sending traffic straight to the merchant URL.",
+    "- brandBidding: \"forbidden\" for \"no brand bidding\"; \"restricted\" for \"brand bidding with prior written approval\" or similar conditions; \"allowed\" with basis \"explicit\" when the terms explicitly allow brand bidding; \"allowed\" with basis \"silence\" when the terms say NOTHING about brand bidding at all. Use \"unknown\" (basis null) ONLY when the terms are genuinely self-contradictory on brand bidding and cannot be decided.",
+    "- directLinking: \"forbidden\" if the terms require a landing page / pre-lander or forbid sending traffic straight to the merchant URL; \"restricted\" when direct linking needs approval/conditions; \"allowed\" with basis \"explicit\" when the terms explicitly allow sending traffic straight to the merchant URL; \"allowed\" with basis \"silence\" when the terms say NOTHING about direct linking at all. Use \"unknown\" (basis null) ONLY when the terms are genuinely self-contradictory on direct linking and cannot be decided.",
+    "- For brandBidding and directLinking ONLY: silence is NOT a red flag, do not emit a medium/low redFlag for their silence.",
+    "- When brandBidding or directLinking verdict is \"forbidden\", \"restricted\" or \"unknown\", its basis MUST be null.",
     "- geoRestrictions: list restricted or allowed geos exactly as stated; use an empty array when the terms mention none.",
     "- caps / payoutTerms: quote the stated terms briefly, or null when not stated.",
     "- redFlags: every concrete restriction that could get an ad account or affiliate account banned gets severity \"high\"; notable unknowns get \"medium\" or \"low\".",
-    "- overallVerdict calibration: \"stop\" when paid search is forbidden or a high-severity flag directly bans the advertiser's model; \"caution\" when key fields are \"unknown\"/\"restricted\" or medium flags exist; \"go\" ONLY when search is explicitly allowed and no high-severity flags exist.",
+    "- overallVerdict calibration: \"stop\" when paid search is forbidden or a high-severity flag directly bans the advertiser's model; \"caution\" when key fields are \"unknown\"/\"restricted\" or medium flags exist; \"go\" ONLY when search is explicitly allowed and no high-severity flags exist. brandBidding / directLinking allowed on silence (basis \"silence\") does NOT count as an unknown and does NOT block \"go\".",
   ].join("\n");
 
   const user = [
@@ -144,6 +152,17 @@ export function validateTermsShape(obj: unknown): TermsShape {
   }
   const brandBidding = normEnum(o.brandBidding, TERMS_RESTRICTIONS, "brandBidding");
   const directLinking = normEnum(o.directLinking, TERMS_RESTRICTIONS, "directLinking");
+  // Basis: only meaningful when verdict is "allowed"; missing/invalid → null.
+  const normBasis = (
+    v: unknown,
+    verdict: TermsRestriction
+  ): "explicit" | "silence" | null => {
+    if (verdict !== "allowed") return null;
+    const lv = typeof v === "string" ? v.trim().toLowerCase() : "";
+    return lv === "explicit" || lv === "silence" ? lv : null;
+  };
+  const brandBiddingBasis = normBasis(o.brandBiddingBasis, brandBidding);
+  const directLinkingBasis = normBasis(o.directLinkingBasis, directLinking);
   if (
     !Array.isArray(o.geoRestrictions) ||
     !(o.geoRestrictions as unknown[]).every((g) => typeof g === "string")
@@ -173,7 +192,9 @@ export function validateTermsShape(obj: unknown): TermsShape {
     overallVerdict,
     traffic: trafficOut,
     brandBidding,
+    brandBiddingBasis,
     directLinking,
+    directLinkingBasis,
     geoRestrictions: (o.geoRestrictions as string[]).map((g) => g.trim()).filter(Boolean),
     caps: caps?.trim() || null,
     payoutTerms: payoutTerms?.trim() || null,

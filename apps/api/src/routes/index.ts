@@ -77,6 +77,7 @@ import { registerLaunchRoutes } from "./launch.js";
 import { registerCampaignToggleRoutes } from "./campaign-toggle.js";
 import { registerAdsAutoRoutes } from "./ads-auto.js";
 import { registerKeywordCheckRoutes } from "./keyword-check.js";
+import { registerLaunchArchiveRoutes } from "./launch-archives.js";
 import { registerWorkStateRoutes } from "./work-state.js";
 import { registerCashbackRoutes } from "./cashback.js";
 import { registerCashbackRateWatchRoutes } from "./cashback-rate-watch.js";
@@ -216,6 +217,7 @@ export async function registerRoutes(
     await registerLaunchRoutes(app, { prisma: services.prisma });
     await registerCampaignToggleRoutes(app, { prisma: services.prisma });
     await registerAdsAutoRoutes(app, { prisma: services.prisma });
+    await registerLaunchArchiveRoutes(app, { prisma: services.prisma });
     await registerKeywordCheckRoutes(app, { prisma: services.prisma });
     await registerWorkStateRoutes(app, { prisma: services.prisma });
     await registerCashbackRoutes(app, { prisma: services.prisma });

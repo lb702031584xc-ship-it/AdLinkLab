@@ -194,6 +194,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         {
           title: s.reports,
                     items: [
+            { href: "/reports/launch", label: ni.launchArchive, phase: ph.monitor },
             { href: "/tracking-links", label: t.common.nav.trackingLinks },
             { href: "/clicks", label: t.common.nav.clicks },
             { href: "/conversions", label: t.common.nav.conversions },

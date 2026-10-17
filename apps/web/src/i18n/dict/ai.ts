@@ -280,6 +280,9 @@ export const zh = {
       restricted: "受限",
       unknown: "未知",
     },
+    allowedExplicit: "通过（条款明确允许）",
+    allowedSilence: "通过（条款未禁止）",
+    allowedDefault: "通过",
     batch: {
       nameLabel: "名称",
       namePlaceholder: "Offer 名称（可选）",
@@ -1269,6 +1272,9 @@ export const en: typeof zh = {
       restricted: "Restricted",
       unknown: "Unknown",
     },
+    allowedExplicit: "Pass (explicitly allowed by terms)",
+    allowedSilence: "Pass (not prohibited by terms)",
+    allowedDefault: "Pass",
     batch: {
       nameLabel: "Name",
       namePlaceholder: "Offer name (optional)",
