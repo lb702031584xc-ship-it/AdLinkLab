@@ -190,10 +190,10 @@ export function TrafficPlannerClient({
   /** 独立页 offer 下拉列表（嵌入时不传，不显示下拉）。 */
   offers?: PlannerOffer[];
   /**
-   * 上游（工作表 ③ 盈利测算）同步来的值：payout/CVR/退款率。
-   * 恢复完成后应用到对应字段（只覆盖这三个字段，关键词/情报等仍用本页快照）。
+   * 上游（工作表 ③ 盈利测算）同步来的值：payout/CVR/退款率/均价/佣金率。
+   * 恢复完成后应用到对应字段（只覆盖这些字段，关键词/情报等仍用本页快照）。
    */
-  initialInputs?: { payout?: string; cvr?: string; refundRate?: string };
+  initialInputs?: { payout?: string; cvr?: string; refundRate?: string; avgPrice?: string; commissionRate?: string };
 }) {
   const { lang } = useI18n();
   const d: Dict = lang === "zh" ? tpZh : tpEn;
@@ -239,19 +239,21 @@ export function TrafficPlannerClient({
   const [networkCvr, setNetworkCvr] = useState(initialInputs?.cvr ?? "");
   const [refundRate, setRefundRate] = useState(initialInputs?.refundRate ?? "");
 
-  /* ③→④ 同步：工作表嵌入时，③ 盈利测算的输入变化后同步到 ④ 的 payout/CVR/退款率。
+  /* ③→④ 同步：工作表嵌入时，③ 盈利测算的输入变化后同步到 ④ 的 payout/CVR/退款率/均价/佣金率。
      useState 初始值只在挂载时生效，之前 ③ 改了之后 ④ 一直用旧值、重算也判不准。
      按值比较（父级每次渲染都会新建 initialInputs 对象）；挂载时 initialInputs 已由
      初始值 + 快照恢复处理，这里不重复覆盖——快照里的手改值优先。 */
   const appliedInputsKeyRef = useRef<string | null>(null);
   useEffect(() => {
     if (!initialInputs) return;
-    const key = `${initialInputs.payout ?? ""}::${initialInputs.cvr ?? ""}::${initialInputs.refundRate ?? ""}`;
+    const key = `${initialInputs.payout ?? ""}::${initialInputs.cvr ?? ""}::${initialInputs.refundRate ?? ""}::${initialInputs.avgPrice ?? ""}::${initialInputs.commissionRate ?? ""}`;
     if (appliedInputsKeyRef.current === key) return;
     appliedInputsKeyRef.current = key;
     if (initialInputs.payout != null) setPayout(initialInputs.payout);
     if (initialInputs.cvr != null) setNetworkCvr(initialInputs.cvr);
     if (initialInputs.refundRate != null) setRefundRate(initialInputs.refundRate);
+    if (initialInputs.avgPrice != null) setAvgPrice(initialInputs.avgPrice);
+    if (initialInputs.commissionRate != null) setCommissionRate(initialInputs.commissionRate);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialInputs]);
   // Offervault

@@ -1127,6 +1127,8 @@ export function WorksheetClient({
                   payout: profitState.inputs.payout,
                   cvr: profitState.inputs.cvrPct,
                   refundRate: profitState.inputs.refundPct,
+                  avgPrice: profitState.inputs.avgPrice,
+                  commissionRate: profitState.inputs.commissionRate,
                 }
               : undefined
           }

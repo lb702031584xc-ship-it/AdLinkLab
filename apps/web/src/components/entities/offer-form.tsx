@@ -3,6 +3,7 @@
 import { useState, useTransition, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { createOfferAction } from "@/lib/api/entity-actions";
+import { setLastOfferId } from "@/lib/current-offer";
 import { useI18n } from "@/i18n/I18nProvider";
 import { coachCheckAction, type CoachFinding } from "@/lib/api/coach-actions";
 import { CoachGate, hasCoachBlock } from "@/components/coach/coach-gate";
@@ -76,6 +77,12 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
       if (!result.ok) {
         setError(result.error);
         return;
+      }
+      try {
+        const newId = result.data?.offer?.id;
+        if (typeof newId === "string" && newId) setLastOfferId(newId);
+      } catch {
+        /* 记忆写入失败不阻断跳转 */
       }
       router.push(`/offers?tab=${source}`);
     });
