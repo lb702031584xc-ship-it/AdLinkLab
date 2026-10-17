@@ -6,7 +6,7 @@ import { checkBrandBiddingAction } from "@/lib/api/ai-actions";
 import type { BrandBiddingResult } from "@/lib/api/ai";
 
 /**
- * 品牌词投流检查（AI 分析 Step ④ 内的指标卡）。
+ * 品牌词投流检查（AI 分析 Step ⑤ 内的指标卡）。
  * 查某品牌词在 Google 上谁在投广告（官方 vs 非官方），给出投流评估。
  * 数据源 DataForSEO SERP；无凭证时显示手动核查指引，不编造。
  */

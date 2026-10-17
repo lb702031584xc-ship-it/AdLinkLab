@@ -35,7 +35,7 @@ import type { OfferCaptureItem } from "@/lib/api/ai";
 type Dict = TrafficPlannerDict;
 type Mode = "landing" | "direct";
 type BrandPolicy = "allowed" | "forbidden";
-/** 盈利模式：电商（按比例佣金，payout 派生）/ 联盟（固定 payout，扣量）。与工作表 ③ 判定一致。 */
+/** 盈利模式：电商（按比例佣金，payout 派生）/ 联盟（固定 payout，扣量）。与工作表 ④ 判定一致。 */
 type ProfitMode = "ecommerce" | "affiliate";
 
 /* ---------- 轻量 markdown 渲染（标题/加粗/列表/段落） ---------- */
@@ -190,7 +190,7 @@ export function TrafficPlannerClient({
   /** 独立页 offer 下拉列表（嵌入时不传，不显示下拉）。 */
   offers?: PlannerOffer[];
   /**
-   * 上游（工作表 ③ 盈利测算）同步来的值：payout/CVR/退款率/均价/佣金率。
+   * 上游（工作表 ④ 盈利测算）同步来的值：payout/CVR/退款率/均价/佣金率。
    * 恢复完成后应用到对应字段（只覆盖这些字段，关键词/情报等仍用本页快照）。
    */
   initialInputs?: { payout?: string; cvr?: string; refundRate?: string; avgPrice?: string; commissionRate?: string };
@@ -201,7 +201,7 @@ export function TrafficPlannerClient({
   const [mode, setMode] = useState<Mode>("landing");
   const [brandPolicy, setBrandPolicy] = useState<BrandPolicy>("allowed");
 
-  /* 盈利模式：老快照没有 profitMode 时，固定佣金 → 联盟，否则电商（与工作表 ③ 一致）。 */
+  /* 盈利模式：老快照没有 profitMode 时，固定佣金 → 联盟，否则电商（与工作表 ④ 一致）。 */
   const [profitMode, setProfitMode] = useState<ProfitMode>(
     initialOffer?.commissionType === "fixed" ? "affiliate" : "ecommerce"
   );
@@ -239,8 +239,8 @@ export function TrafficPlannerClient({
   const [networkCvr, setNetworkCvr] = useState(initialInputs?.cvr ?? "");
   const [refundRate, setRefundRate] = useState(initialInputs?.refundRate ?? "");
 
-  /* ③→④ 同步：工作表嵌入时，③ 盈利测算的输入变化后同步到 ④ 的 payout/CVR/退款率/均价/佣金率。
-     useState 初始值只在挂载时生效，之前 ③ 改了之后 ④ 一直用旧值、重算也判不准。
+  /* ④→⑤ 同步：工作表嵌入时，④ 盈利测算的输入变化后同步到 ⑤ 的 payout/CVR/退款率/均价/佣金率。
+     useState 初始值只在挂载时生效，之前 ④ 改了之后 ⑤ 一直用旧值、重算也判不准。
      按值比较（父级每次渲染都会新建 initialInputs 对象）；挂载时 initialInputs 已由
      初始值 + 快照恢复处理，这里不重复覆盖——快照里的手改值优先。 */
   const appliedInputsKeyRef = useRef<string | null>(null);
@@ -483,7 +483,7 @@ export function TrafficPlannerClient({
   });
   const appliedInputsRef = useRef<string | null>(null);
 
-  /* 上游 ③ 的值：恢复完成后应用（只覆盖 payout/CVR/退款率三个字段） */
+  /* 上游 ④ 的值：恢复完成后应用（只覆盖 payout/CVR/退款率三个字段） */
   useEffect(() => {
     if (!restored || !initialInputs) return;
     const key = JSON.stringify(initialInputs);
@@ -606,7 +606,7 @@ export function TrafficPlannerClient({
     if (!manual) return;
     resetWorkingFields();
     fillFromOffer({ id: "", name: manual.name, network: manual.network });
-    // 手动 Offer 的 ③ 值：读工作表手动快照（offerId null），只补空不覆盖手改值
+    // 手动 Offer 的 ④ 值：读工作表手动快照（offerId null），只补空不覆盖手改值
     void (async () => {
       try {
         const res = await loadWorkStateAction("ai-worksheet", null);

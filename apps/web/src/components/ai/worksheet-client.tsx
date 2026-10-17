@@ -7,6 +7,11 @@ import { EntityPageHeader } from "@/components/entities/ui";
 import { calcProfit } from "@/lib/profit-calc";
 import { getLastOfferId, getManualOffer, setLastOfferId, setManualOffer } from "@/lib/current-offer";
 import {
+  evaluateDemandGate,
+  type DemandGateKeyword,
+} from "@/lib/demand-gate";
+import { judgeKeywordRelevanceAction } from "@/lib/api/ai-actions";
+import {
   listWorkStateHistoryAction,
   loadWorkStateAction,
   saveWorkStateAction,
@@ -30,6 +35,8 @@ export interface WorksheetOffer {
   commissionValue?: string | number | null;
   commissionType?: string | null;
   avgPrice?: string | number | null;
+  /** Offer 来源：affiliate | amazon | cashback（亚马逊 offer 才显示销量/评论门槛）。 */
+  source?: string | null;
 }
 
 function statusBadge(s: StepStatus): string {
@@ -47,7 +54,7 @@ function fmt(n: number | null, digits = 2): string {
   });
 }
 
-/* ---------------- Step ③: compact profitability calculator ---------------- */
+/* ---------------- Step ④: compact profitability calculator ---------------- */
 /* Uses the shared @/lib/profit-calc — no duplicated formulas. */
 
 export type ProfitMode = "ecommerce" | "other";
@@ -57,9 +64,9 @@ export interface ProfitStepState {
   summary: string;
   /** P0-2：本次测算是否基于估算输入（true = 估算值，未实测）。来源不明时默认 true。 */
   isEstimated?: boolean;
-  /** ③ 的输入（用于快照恢复 + 往 ④ 投流模块同步 payout/CVR/退款率）。 */
+  /** ④ 的输入（用于快照恢复 + 往 ⑤ 投流模块同步 payout/CVR/退款率）。 */
   inputs?: {
-    /** 电商：payout = 均价 × 佣金率（算出后存这里，供 ④ 同步）；其他：手填固定 payout。 */
+    /** 电商：payout = 均价 × 佣金率（算出后存这里，供 ⑤ 同步）；其他：手填固定 payout。 */
     payout: string;
     cpc: string;
     cvrPct: string;
@@ -113,7 +120,7 @@ function ProfitStep({
   /** P0-2 输入来源：均价 / 佣金率 / payout / CPC / CVR 各自从哪来。
       来源不明时默认估算（宁可标估算，不把猜测当实测）。
       offer = 库里 Offer 带入；manual = 用户手填；keywords = 投放选词快照；
-      planner = 投流决策（④）快照；snapshot = 上次保存的工作表快照；
+      planner = 投流决策（⑤）快照；snapshot = 上次保存的工作表快照；
       derived = 切到“其他”时由均价×佣金率带过去的 payout。 */
   type ProvSource = "offer" | "manual" | "keywords" | "planner" | "snapshot" | "derived" | null;
   type ProvField = "avgPrice" | "commissionRate" | "payout" | "cpc" | "cvrPct";
@@ -177,8 +184,8 @@ function ProfitStep({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offerId]);
 
-  /* 转化率/退款率/payout 联动：为空时从该 offer 的投流决策（④）快照取——
-     前面在 ④ 填过的不用在 ③ 重填。只填空字段，不覆盖手改（函数式 setState 防竞态）。 */
+  /* 转化率/退款率/payout 联动：为空时从该 offer 的投流决策（⑤）快照取——
+     前面在 ⑤ 填过的不用在 ④ 重填。只填空字段，不覆盖手改（函数式 setState 防竞态）。 */
   useEffect(() => {
     if (!offerId) return;
     let cancelled = false;
@@ -192,7 +199,7 @@ function ProfitStep({
         if (cvr) { setCvrPct((prev) => (prev.trim() ? prev : cvr)); setFieldProv("cvrPct", "planner"); }
         const refund = str(s.refundRate);
         if (refund) setRefundPct((prev) => (prev.trim() ? prev : refund));
-        // offer 佣金算不出 payout 时（按比例缺均价等），取 ④ 里手填过的 payout
+        // offer 佣金算不出 payout 时（按比例缺均价等），取 ⑤ 里手填过的 payout
         if (!initialPayout) {
           const p = str(s.payout);
           if (p) { setPayout((prev) => (prev.trim() ? prev : p)); setFieldProv("payout", "planner"); }
@@ -211,7 +218,7 @@ function ProfitStep({
     "w-full rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm text-ink placeholder:text-ink/35 focus:border-signal focus:outline-none";
   const labelClass = "mb-1 block text-sm font-medium text-ink/80";
 
-  /* 电商：payout = 均价 × 佣金率（算不出时沿用上次/④填过的 payout，不丢旧数据）。 */
+  /* 电商：payout = 均价 × 佣金率（算不出时沿用上次/⑤填过的 payout，不丢旧数据）。 */
   const derivedPayout = useMemo(() => {
     if (mode !== "ecommerce") return payout;
     const ap = parseFloat(avgPrice);
@@ -453,6 +460,455 @@ function ProfitStep({
   );
 }
 
+/* ---------------- Step ①: 需求门槛（先看有没有量，没量不用往下走） ---------------- */
+
+export interface DemandGateState {
+  status: StepStatus;
+  summary: string;
+  inputs?: {
+    domainOrganic: string;
+    domainPaid: string;
+    paidTrend: string;
+    cpc: string;
+    amazonSales: string;
+    amazonReviews: string;
+    amazonRating: string;
+    judgments: Array<{ keyword: string; volume: string; relevant: boolean; reason: string }>;
+  };
+}
+
+function DemandGateStep({
+  onChange,
+  initialPayout,
+  initialValues,
+  offerId,
+  offerName,
+  offerDescription,
+  isAmazon,
+}: {
+  onChange: (s: DemandGateState | null) => void;
+  initialPayout?: string;
+  initialValues?: DemandGateState["inputs"];
+  offerId?: string | null;
+  offerName: string;
+  offerDescription: string;
+  isAmazon: boolean;
+}) {
+  const t = useDict();
+  const g = t.ai.worksheet.demandGate;
+
+  const [domainOrganic, setDomainOrganic] = useState(initialValues?.domainOrganic ?? "");
+  const [domainPaid, setDomainPaid] = useState(initialValues?.domainPaid ?? "");
+  const [paidTrend, setPaidTrend] = useState(initialValues?.paidTrend ?? "");
+  const [cpc, setCpc] = useState(initialValues?.cpc ?? "");
+  const [amazonSales, setAmazonSales] = useState(initialValues?.amazonSales ?? "");
+  const [amazonReviews, setAmazonReviews] = useState(initialValues?.amazonReviews ?? "");
+  const [amazonRating, setAmazonRating] = useState(initialValues?.amazonRating ?? "");
+  const [kwList, setKwList] = useState<Array<{ keyword: string; volume: string }>>(
+    () => (initialValues?.judgments ?? []).map((j) => ({ keyword: j.keyword, volume: j.volume }))
+  );
+  const [judgments, setJudgments] = useState<Record<string, { relevant: boolean; reason: string }>>(
+    () => {
+      const m: Record<string, { relevant: boolean; reason: string }> = {};
+      for (const j of initialValues?.judgments ?? []) {
+        m[j.keyword.trim().toLowerCase()] = { relevant: j.relevant, reason: j.reason };
+      }
+      return m;
+    }
+  );
+  const [judging, setJudging] = useState(false);
+  const [judgeError, setJudgeError] = useState<string | null>(null);
+  const snapshotAppliedRef = useRef(false);
+
+  /* 快照晚到：只填空字段；判断结果只合并未判过的词 */
+  useEffect(() => {
+    if (!initialValues || snapshotAppliedRef.current) return;
+    snapshotAppliedRef.current = true;
+    if (!domainOrganic && initialValues.domainOrganic) setDomainOrganic(initialValues.domainOrganic);
+    if (!domainPaid && initialValues.domainPaid) setDomainPaid(initialValues.domainPaid);
+    if (!paidTrend && initialValues.paidTrend) setPaidTrend(initialValues.paidTrend);
+    if (!cpc && initialValues.cpc) setCpc(initialValues.cpc);
+    if (!amazonSales && initialValues.amazonSales) setAmazonSales(initialValues.amazonSales);
+    if (!amazonReviews && initialValues.amazonReviews) setAmazonReviews(initialValues.amazonReviews);
+    if (!amazonRating && initialValues.amazonRating) setAmazonRating(initialValues.amazonRating);
+    setJudgments((prev) => {
+      const next = { ...prev };
+      for (const j of initialValues.judgments ?? []) {
+        const key = j.keyword.trim().toLowerCase();
+        if (!next[key]) next[key] = { relevant: j.relevant, reason: j.reason };
+      }
+      return next;
+    });
+    setKwList((prev) => {
+      const seen = new Set(prev.map((k) => k.keyword.trim().toLowerCase()));
+      const add = (initialValues.judgments ?? [])
+        .filter((j) => !seen.has(j.keyword.trim().toLowerCase()))
+        .map((j) => ({ keyword: j.keyword, volume: j.volume }));
+      return add.length ? [...prev, ...add] : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialValues]);
+
+  /* 关键词：从需求验证页快照取（SEMrush 数据在那页，page key = keyword-research）。 */
+  useEffect(() => {
+    if (!offerId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await loadWorkStateAction("keyword-research", offerId);
+        if (cancelled || !res.ok || !res.data.state) return;
+        const rows = (res.data.state.rows ?? []) as Array<{ keyword?: string; volume?: string }>;
+        const incoming = rows
+          .map((r) => ({ keyword: (r.keyword ?? "").trim(), volume: (r.volume ?? "").trim() }))
+          .filter((r) => r.keyword);
+        if (incoming.length === 0) return;
+        setKwList((prev) => {
+          const byKey = new Map(prev.map((k) => [k.keyword.trim().toLowerCase(), k]));
+          for (const k of incoming) {
+            const key = k.keyword.toLowerCase();
+            const cur = byKey.get(key);
+            // 需求验证页的量是最新的，覆盖；没量的旧词保留
+            byKey.set(key, { keyword: cur?.keyword ?? k.keyword, volume: k.volume || cur?.volume || "" });
+          }
+          return [...byKey.values()];
+        });
+      } catch {
+        /* 取不到就不填 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [offerId]);
+
+  /* CPC：为空时从投放选词快照取参考 CPC 均值（与 ④ 盈利测算同源）。 */
+  useEffect(() => {
+    if (cpc || !offerId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await loadWorkStateAction("keyword-launch", offerId);
+        if (cancelled || !res.ok || !res.data.state) return;
+        const rows = (res.data.state.rows ?? []) as Array<{ refCpc?: string }>;
+        const nums = rows
+          .map((r) => Number(r.refCpc))
+          .filter((n) => Number.isFinite(n) && n > 0);
+        if (nums.length === 0) return;
+        const avg = nums.reduce((a, b) => a + b, 0) / nums.length;
+        setCpc((prev) => (prev.trim() ? prev : String(Math.round(avg * 100) / 100)));
+      } catch {
+        /* 取不到就不填 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offerId]);
+
+  const gateKeywords: DemandGateKeyword[] = useMemo(
+    () =>
+      kwList.map((k) => ({
+        keyword: k.keyword,
+        volume: (() => {
+          const n = parseFloat(k.volume);
+          return Number.isFinite(n) && n >= 0 ? n : null;
+        })(),
+        relevant: judgments[k.keyword.trim().toLowerCase()]?.relevant ?? null,
+      })),
+    [kwList, judgments]
+  );
+
+  const result = useMemo(() => {
+    const num = (s: string) => {
+      const n = parseFloat(s);
+      return Number.isFinite(n) && n >= 0 ? n : null;
+    };
+    return evaluateDemandGate({
+      payout: parseFloat(initialPayout ?? "") || 0,
+      cpc: parseFloat(cpc) || 0,
+      keywords: gateKeywords,
+      domainOrganicVolume: num(domainOrganic),
+      domainPaidVolume: num(domainPaid),
+      paidTrend: paidTrend === "up" || paidTrend === "flat" || paidTrend === "down" ? paidTrend : null,
+      amazon: isAmazon
+        ? {
+            estimatedMonthlySales: num(amazonSales),
+            reviewCount: num(amazonReviews),
+            rating: num(amazonRating),
+          }
+        : null,
+    });
+  }, [initialPayout, cpc, gateKeywords, domainOrganic, domainPaid, paidTrend, amazonSales, amazonReviews, amazonRating, isAmazon]);
+
+  useEffect(() => {
+    if (result.verdict === "unknown") {
+      onChange(null);
+      return;
+    }
+    const status: StepStatus =
+      result.verdict === "pass" ? "pass" : result.verdict === "caution" ? "warn" : "fail";
+    const judged = gateKeywords
+      .filter((k) => k.relevant !== null)
+      .map((k) => {
+        const j = judgments[k.keyword.trim().toLowerCase()]!;
+        const vol = kwList.find((x) => x.keyword.trim().toLowerCase() === k.keyword.trim().toLowerCase())?.volume ?? "";
+        return { keyword: k.keyword, volume: vol, relevant: j.relevant, reason: j.reason };
+      });
+    onChange({
+      status,
+      summary: `${g.relevantVolume} ${fmt(result.relevantVolume, 0)} · ${g.requiredVolume} ${result.requiredVolume !== null ? fmt(result.requiredVolume, 0) : "—"} · ${g.relevantRatio} ${result.relevanceRatio !== null ? `${fmt(result.relevanceRatio * 100)}%` : "—"}`,
+      inputs: {
+        domainOrganic,
+        domainPaid,
+        paidTrend,
+        cpc,
+        amazonSales,
+        amazonReviews,
+        amazonRating,
+        judgments: judged,
+      },
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [result]);
+
+  const judge = async () => {
+    const todo = kwList.filter((k) => judgments[k.keyword.trim().toLowerCase()] == null);
+    if (todo.length === 0 || judging) return;
+    setJudging(true);
+    setJudgeError(null);
+    try {
+      const res = await judgeKeywordRelevanceAction(
+        offerName,
+        offerDescription,
+        todo.map((k) => ({
+          keyword: k.keyword,
+          volume: (() => {
+            const n = parseFloat(k.volume);
+            return Number.isFinite(n) && n >= 0 ? n : null;
+          })(),
+        }))
+      );
+      if (!res.ok) {
+        setJudgeError(res.error);
+        return;
+      }
+      setJudgments((prev) => {
+        const next = { ...prev };
+        for (const j of res.data.judgments) {
+          next[j.keyword.trim().toLowerCase()] = { relevant: j.relevant, reason: j.reason };
+        }
+        return next;
+      });
+    } finally {
+      setJudging(false);
+    }
+  };
+
+  const inputClass =
+    "w-full rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm text-ink placeholder:text-ink/35 focus:border-signal focus:outline-none";
+  const labelClass = "mb-1 block text-sm font-medium text-ink/80";
+
+  const reasonLines = result.flags.map((f) => {
+    switch (f) {
+      case "noKeywords":
+        return g.flag.noKeywords;
+      case "notJudged":
+        return g.flag.notJudged;
+      case "noRelevant":
+        return g.flag.noRelevant;
+      case "lowRelevanceRatio":
+        return g.flag.lowRelevanceRatio.replace("{ratio}", result.relevanceRatio !== null ? fmt(result.relevanceRatio * 100) : "—");
+      case "noPayout":
+        return g.flag.noPayout;
+      case "noCpc":
+        return g.flag.noCpc;
+      case "volumeBelowTest":
+        return g.flag.volumeBelowTest
+          .replace("{relevant}", fmt(result.relevantVolume, 0))
+          .replace("{required}", result.requiredVolume !== null ? fmt(result.requiredVolume, 0) : "—");
+      case "volumeThin":
+        return g.flag.volumeThin
+          .replace("{relevant}", fmt(result.relevantVolume, 0))
+          .replace("{required3}", result.requiredVolume !== null ? fmt(result.requiredVolume * 3, 0) : "—");
+      case "volumeEnough":
+        return g.flag.volumeEnough
+          .replace("{relevant}", fmt(result.relevantVolume, 0))
+          .replace("{required3}", result.requiredVolume !== null ? fmt(result.requiredVolume * 3, 0) : "—");
+      case "trendDown":
+        return g.flag.trendDown;
+      case "trendUp":
+        return g.flag.trendUp;
+      case "amazonLowSales":
+        return g.flag.amazonLowSales.replace("{sales}", amazonSales || "—");
+      case "amazonFewReviews":
+        return g.flag.amazonFewReviews.replace("{reviews}", amazonReviews || "—");
+      case "amazonLowRating":
+        return g.flag.amazonLowRating.replace("{rating}", amazonRating || "—");
+      default:
+        return "";
+    }
+  }).filter(Boolean);
+
+  const statusCls =
+    result.verdict === "pass"
+      ? "bg-green-100 text-green-800"
+      : result.verdict === "caution"
+        ? "bg-amber-100 text-amber-800"
+        : result.verdict === "fail"
+          ? "bg-red-100 text-red-800"
+          : "bg-ink/10 text-ink/50";
+  const statusText =
+    result.verdict === "pass"
+      ? g.verdictPass
+      : result.verdict === "caution"
+        ? g.verdictCaution
+        : result.verdict === "fail"
+          ? g.verdictFail
+          : g.verdictPending;
+
+  if (!offerId) {
+    return <p className="text-sm text-ink/55">{g.needOffer}</p>;
+  }
+
+  return (
+    <div>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div>
+          <label className={labelClass} htmlFor="ws-dg-organic">{g.domainOrganicLabel}</label>
+          <input id="ws-dg-organic" inputMode="decimal" value={domainOrganic}
+            onChange={(e) => setDomainOrganic(e.target.value)} placeholder="12000" className={inputClass} />
+        </div>
+        <div>
+          <label className={labelClass} htmlFor="ws-dg-paid">{g.domainPaidLabel}</label>
+          <input id="ws-dg-paid" inputMode="decimal" value={domainPaid}
+            onChange={(e) => setDomainPaid(e.target.value)} placeholder="3000" className={inputClass} />
+        </div>
+        <div>
+          <label className={labelClass} htmlFor="ws-dg-trend">{g.paidTrendLabel}</label>
+          <select id="ws-dg-trend" value={paidTrend} onChange={(e) => setPaidTrend(e.target.value)} className={inputClass}>
+            <option value="">{g.paidTrendOptions.none}</option>
+            <option value="up">{g.paidTrendOptions.up}</option>
+            <option value="flat">{g.paidTrendOptions.flat}</option>
+            <option value="down">{g.paidTrendOptions.down}</option>
+          </select>
+        </div>
+        <div>
+          <label className={labelClass} htmlFor="ws-dg-cpc">{g.cpcLabel}</label>
+          <input id="ws-dg-cpc" inputMode="decimal" value={cpc}
+            onChange={(e) => setCpc(e.target.value)} placeholder="0.80" className={inputClass} />
+        </div>
+      </div>
+
+      {isAmazon ? (
+        <div className="mt-4">
+          <p className="mb-2 text-sm font-medium text-ink">{g.amazonTitle}</p>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div>
+              <label className={labelClass} htmlFor="ws-dg-sales">{g.amazonSalesLabel}</label>
+              <input id="ws-dg-sales" inputMode="decimal" value={amazonSales}
+                onChange={(e) => setAmazonSales(e.target.value)} placeholder="500" className={inputClass} />
+            </div>
+            <div>
+              <label className={labelClass} htmlFor="ws-dg-reviews">{g.amazonReviewsLabel}</label>
+              <input id="ws-dg-reviews" inputMode="decimal" value={amazonReviews}
+                onChange={(e) => setAmazonReviews(e.target.value)} placeholder="1200" className={inputClass} />
+            </div>
+            <div>
+              <label className={labelClass} htmlFor="ws-dg-rating">{g.amazonRatingLabel}</label>
+              <input id="ws-dg-rating" inputMode="decimal" value={amazonRating}
+                onChange={(e) => setAmazonRating(e.target.value)} placeholder="4.5" className={inputClass} />
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <p className="text-sm font-medium text-ink">
+          {g.keywordsTitle} ({kwList.length})
+        </p>
+        <button
+          type="button"
+          onClick={judge}
+          disabled={judging || kwList.length === 0}
+          className="rounded-lg bg-ink px-3 py-1.5 text-xs font-medium text-white hover:bg-ink/85 disabled:opacity-50"
+        >
+          {judging ? g.judging : g.judgeButton}
+        </button>
+        <Link
+          href={`/keywords/starter?offerId=${encodeURIComponent(offerId)}`}
+          className="text-xs text-signal hover:underline"
+        >
+          {g.goDemandPage} →
+        </Link>
+      </div>
+      {judgeError ? <p className="mt-1 text-xs text-red-600">{judgeError}</p> : null}
+      {kwList.length === 0 ? (
+        <p className="mt-2 text-sm text-ink/55">{g.noKeywords}</p>
+      ) : (
+        <div className="mt-2 max-h-64 overflow-y-auto rounded-lg border border-ink/10">
+          <table className="w-full text-left text-xs">
+            <thead className="bg-ink/[0.03]">
+              <tr>
+                <th className="px-3 py-1.5 font-medium text-ink/70">{g.colKeyword}</th>
+                <th className="px-3 py-1.5 font-medium text-ink/70">{g.colVolume}</th>
+                <th className="px-3 py-1.5 font-medium text-ink/70">{g.colRelevant}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {kwList.map((k) => {
+                const j = judgments[k.keyword.trim().toLowerCase()];
+                return (
+                  <tr key={k.keyword} className="border-t border-ink/5">
+                    <td className="px-3 py-1.5 font-medium text-ink">{k.keyword}</td>
+                    <td className="px-3 py-1.5 text-ink/70">{k.volume || "—"}</td>
+                    <td className="px-3 py-1.5" title={j?.reason}>
+                      {j == null ? (
+                        <span className="text-ink/40">{g.notJudged}</span>
+                      ) : j.relevant ? (
+                        <span className="text-green-700">✅ {g.relevantYes}{j.reason ? ` · ${j.reason}` : ""}</span>
+                      ) : (
+                        <span className="text-ink/50">❌ {g.relevantNo}{j.reason ? ` · ${j.reason}` : ""}</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <span className={`rounded-full px-3 py-1 text-sm font-semibold ${statusCls}`}>{statusText}</span>
+        {result.verdict !== "unknown" ? (
+          <span className="text-sm text-ink/70">
+            {g.relevantVolume} <b>{fmt(result.relevantVolume, 0)}</b>
+            {" · "}
+            {g.requiredVolume} <b>{result.requiredVolume !== null ? fmt(result.requiredVolume, 0) : "—"}</b>
+            {" · "}
+            {g.testClicks} <b>{result.testClicksNeeded !== null ? fmt(result.testClicksNeeded, 0) : "—"}</b>
+          </span>
+        ) : null}
+      </div>
+      {reasonLines.length > 0 ? (
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-ink/75">
+          {reasonLines.map((line, i) => (
+            <li key={i}>{line}</li>
+          ))}
+        </ul>
+      ) : null}
+      {domainOrganic || domainPaid ? (
+        <p className="mt-2 text-xs text-ink/45">
+          {g.domainContext
+            .replace("{organic}", domainOrganic || "—")
+            .replace("{paid}", domainPaid || "—")}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 /* ---------------- Step card shell ---------------- */
 
 function StepCard({
@@ -589,6 +1045,7 @@ export function WorksheetClient({
   const [termsVerdict, setTermsVerdict] = useState<"go" | "caution" | "stop" | null>(null);
   const [complianceResults, setComplianceResults] = useState<AiUrlCheckResult[] | null>(null);
   const [complianceCounted, setComplianceCounted] = useState(true);
+  const [demandGateState, setDemandGateState] = useState<DemandGateState | null>(null);
   const [profitState, setProfitState] = useState<ProfitStepState | null>(null);
   // offer 盈利字段 → 盈利测算 payout 预填：固定佣金直接用；按比例则 平均价×比例
   const initialPayout = (() => {
@@ -602,7 +1059,7 @@ export function WorksheetClient({
     }
     return undefined;
   })();
-  /* ③ 模式自动判：按比例佣金 → 电商（均价 × 佣金率）；固定佣金 → 其他（固定 payout）。 */
+  /* ④ 模式自动判：按比例佣金 → 电商（均价 × 佣金率）；固定佣金 → 其他（固定 payout）。 */
   const initialProfitMode: ProfitMode =
     offer?.commissionType === "fixed" ? "other" : "ecommerce";
   const initialAvgPrice =
@@ -630,6 +1087,7 @@ export function WorksheetClient({
     openStep,
     offer,
     manual: { name: mName, network: mNetwork, url: mUrl },
+    demandGateState,
     termsVerdict,
     complianceResults,
     complianceCounted,
@@ -640,6 +1098,7 @@ export function WorksheetClient({
   // 只有 Offer、没有分析结果的快照不算有意义：避免切到新 Offer 时自动保存把旧 Offer 的带结果快照覆盖掉。
   // Offer 本身由 lastOfferId / manualOffer 记忆恢复，不需要靠快照。
   const snapshotMeaningful = (s: Record<string, unknown>): boolean =>
+    s.demandGateState != null ||
     s.termsVerdict != null ||
     s.complianceResults != null ||
     s.profitState != null ||
@@ -659,6 +1118,9 @@ export function WorksheetClient({
     }
     if (s.termsVerdict === "go" || s.termsVerdict === "caution" || s.termsVerdict === "stop") {
       setTermsVerdict(s.termsVerdict);
+    }
+    if (s.demandGateState && typeof s.demandGateState === "object") {
+      setDemandGateState(s.demandGateState as DemandGateState);
     }
     if (Array.isArray(s.complianceResults)) {
       setComplianceResults(s.complianceResults as AiUrlCheckResult[]);
@@ -751,7 +1213,7 @@ export function WorksheetClient({
     }, 2500);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source, openStep, offer, mName, mNetwork, mUrl, termsVerdict, complianceResults, complianceCounted, profitState, trafficResult]);
+  }, [source, openStep, offer, mName, mNetwork, mUrl, demandGateState, termsVerdict, complianceResults, complianceCounted, profitState, trafficResult]);
 
   const openHistory = async () => {
     setHistoryOpen((o) => !o);
@@ -784,19 +1246,22 @@ export function WorksheetClient({
         : "pass";
 
   const profitStatus: StepStatus = profitState?.status ?? null;
+  const demandGateStatus: StepStatus = demandGateState?.status ?? null;
   const trafficDone = trafficResult !== null;
 
   const statusText = (s: StepStatus) =>
     s === "pass" ? w.status.pass : s === "warn" ? w.status.warn : s === "fail" ? w.status.fail : w.status.pending;
 
-  /* Final verdict: gates are terms / compliance (if counted) / profit.
+  /* Final verdict: gates are demand / terms / compliance (if counted) / profit.
      Traffic planning is informational — done counts as pass, never blocks. */
   const gateStatuses: StepStatus[] = [
+    demandGateStatus,
     termsStatus,
     complianceCounted ? complianceStatus : null,
     profitStatus,
   ];
   const allDone =
+    demandGateStatus !== null &&
     termsStatus !== null &&
     profitStatus !== null &&
     trafficDone &&
@@ -805,6 +1270,10 @@ export function WorksheetClient({
   const anyWarn = gateStatuses.some((s) => s === "warn");
   const verdict: "incomplete" | "go" | "goWithWarn" | "noGo" =
     !allDone ? "incomplete" : anyFail ? "noGo" : anyWarn ? "goWithWarn" : "go";
+
+  const demandReason = demandGateState
+    ? `${w.steps.demand} — ${statusText(demandGateStatus)} (${demandGateState.summary})`
+    : `${w.steps.demand} — ${w.status.pending}`;
 
   const termsReason =
     termsVerdict === "go"
@@ -853,7 +1322,7 @@ export function WorksheetClient({
   /* P0-1 一票否决汇总条（只展示已有分析结果的合成，不改任何判定逻辑）：
      条款 stop（= DO_NOT_RUN）/ 盈利 EPC ≤ CPC 任一命中 → 红条；
      仅 unknown（条款/盈利尚未分析）且无红条 → 黄条；两者都没有 → 不显示。
-     注意：工作表 ④ 是投流决策（TrafficPlanner），不含流量门（TrafficGate）结果，
+     注意：工作表 ⑤ 是投流决策（TrafficPlanner），不含流量门（TrafficGate）结果，
      因此流量门不参与本横幅——如需接入，需另行把流量门检测接进工作表。 */
   const profitVeto = useMemo(() => {
     const inp = profitState?.inputs;
@@ -1168,15 +1637,37 @@ export function WorksheetClient({
         ))}
       </ol>
 
-      {/* Step ① terms */}
+      {/* Step ① demand gate: 先看有没有量，没量不用往下走 */}
       <StepCard
         n={1}
-        title={`① ${w.steps.terms}`}
+        title={`① ${w.steps.demand}`}
+        hint={w.stepHint.demand}
+        status={demandGateStatus}
+        statusLabel={statusText(demandGateStatus)}
+        open={openStep === 1}
+        onToggle={() => toggleStep(1)}
+      >
+        <DemandGateStep
+          onChange={setDemandGateState}
+          initialPayout={initialPayout}
+          initialValues={demandGateState?.inputs}
+          offerId={offer?.id ?? null}
+          offerName={offer?.name ?? ""}
+          offerDescription={offer ? `${offer.name} ${offer.network}` : ""}
+          isAmazon={offer?.source === "amazon"}
+          key={offer?.id ?? "manual"}
+        />
+      </StepCard>
+
+      {/* Step ② terms */}
+      <StepCard
+        n={2}
+        title={`② ${w.steps.terms}`}
         hint={w.stepHint.terms}
         status={termsStatus}
         statusLabel={statusText(termsStatus)}
-        open={openStep === 1}
-        onToggle={() => toggleStep(1)}
+        open={openStep === 2}
+        onToggle={() => toggleStep(2)}
       >
         {source === "cashback" ? (
           <p className="mb-4 rounded-lg border border-signal/25 bg-signal/5 px-3 py-2 text-sm text-ink/75">
@@ -1196,15 +1687,15 @@ export function WorksheetClient({
         />
       </StepCard>
 
-      {/* Step ② compliance */}
+      {/* Step ③ compliance */}
       <StepCard
-        n={2}
-        title={`② ${w.steps.compliance}`}
+        n={3}
+        title={`③ ${w.steps.compliance}`}
         hint={w.stepHint.compliance}
         status={complianceStatus}
         statusLabel={statusText(complianceStatus)}
-        open={openStep === 2}
-        onToggle={() => toggleStep(2)}
+        open={openStep === 3}
+        onToggle={() => toggleStep(3)}
         extraBadge={complianceCounted ? null : w.complianceExcluded}
       >
         <label className="mb-4 flex cursor-pointer items-start gap-2.5 rounded-lg border border-ink/10 bg-white px-3 py-2.5">
@@ -1237,15 +1728,15 @@ export function WorksheetClient({
         />
       </StepCard>
 
-      {/* Step ③ profit */}
+      {/* Step ④ profit */}
       <StepCard
-        n={3}
-        title={`③ ${w.steps.profit}`}
+        n={4}
+        title={`④ ${w.steps.profit}`}
         hint={w.stepHint.profit}
         status={profitStatus}
         statusLabel={statusText(profitStatus)}
-        open={openStep === 3}
-        onToggle={() => toggleStep(3)}
+        open={openStep === 4}
+        onToggle={() => toggleStep(4)}
         extraBadge={
           profitState && profitState.isEstimated !== false
             ? t.ai.profit.estimatedBadge
@@ -1264,15 +1755,15 @@ export function WorksheetClient({
         />
       </StepCard>
 
-      {/* Step ④ traffic */}
+      {/* Step ⑤ traffic */}
       <StepCard
-        n={4}
-        title={`④ ${w.steps.traffic}`}
+        n={5}
+        title={`⑤ ${w.steps.traffic}`}
         hint={w.stepHint.traffic}
         status={trafficDone ? "pass" : null}
         statusLabel={trafficDone ? w.status.pass : w.status.pending}
-        open={openStep === 4}
-        onToggle={() => toggleStep(4)}
+        open={openStep === 5}
+        onToggle={() => toggleStep(5)}
       >
         <TrafficPlannerClient
           showSetupNudge={false}
@@ -1332,7 +1823,7 @@ export function WorksheetClient({
         </p>
         <h3 className="mt-4 text-sm font-semibold text-ink">{w.verdict.reasons}</h3>
         <ul className="mt-2 space-y-1.5">
-          {[termsReason, complianceReason, profitReason, trafficReason].map((r, i) => (
+          {[demandReason, termsReason, complianceReason, profitReason, trafficReason].map((r, i) => (
             <li key={i} className="text-sm text-ink/75">
               {r}
             </li>

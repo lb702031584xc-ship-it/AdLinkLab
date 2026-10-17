@@ -885,6 +885,25 @@ export async function parseIntelCapture(
   });
 }
 
+export interface KeywordJudgment {
+  keyword: string;
+  relevant: boolean;
+  reason: string;
+}
+
+/** 关键词相关性 AI 判断（需求门槛第 ① 步）。 */
+export async function judgeKeywordRelevance(
+  offerName: string,
+  offerDescription: string,
+  keywords: Array<{ keyword: string; volume?: number | null; competition?: string | null; intent?: string | null }>,
+  language?: string
+): Promise<{ judgments: KeywordJudgment[] }> {
+  return aiFetch<{ judgments: KeywordJudgment[] }>("/api/v1/ai/judge-keyword-relevance", {
+    method: "POST",
+    body: JSON.stringify({ offerName, offerDescription, keywords, language }),
+  });
+}
+
 /** 解析插件抓到的 SEMrush / Planner 页面 → 关键词表一行（找不到为 null）。 */
 export async function parseKeywordCapture(captureId: string): Promise<ParsedKeywordData> {
   return aiFetch<ParsedKeywordData>("/api/v1/ai/parse-keyword-capture", {

@@ -44,6 +44,8 @@ import {
   parseIntelCapture,
   type OfferCaptureDetail,
   type OfferCaptureItem,
+  type KeywordJudgment,
+  judgeKeywordRelevance,
   type AiUrlCheckResponse,
   type AnalyzeInput,
   type SaveSettingsInput,
@@ -440,6 +442,26 @@ export async function parseIntelCaptureAction(
     return {
       ok: false,
       error: e instanceof AiApiError ? e.message : "AI 解析抓取失败",
+    };
+  }
+}
+
+/** 关键词相关性 AI 判断（需求门槛第 ① 步）。 */
+export async function judgeKeywordRelevanceAction(
+  offerName: string,
+  offerDescription: string,
+  keywords: Array<{ keyword: string; volume?: number | null; competition?: string | null; intent?: string | null }>
+): Promise<AiActionResult<{ judgments: KeywordJudgment[] }>> {
+  try {
+    const lang = await getLang();
+    return {
+      ok: true,
+      data: await judgeKeywordRelevance(offerName, offerDescription, keywords, lang),
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof AiApiError ? e.message : "AI 判断关键词相关性失败",
     };
   }
 }

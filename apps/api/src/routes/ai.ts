@@ -47,6 +47,7 @@ import { parseKeywordCapture } from "../ai/keyword-capture.js";
 import { parseEcommerceCapture } from "../ai/ecommerce-capture.js";
 import { extractKeywordsWithAi } from "../ai/keyword-capture-ai.js";
 import { extractIntelWithAi, isIntelKind } from "../ai/intel-capture-ai.js";
+import { judgeKeywordRelevance } from "../ai/keyword-relevance.js";
 import { extractProductWithAi } from "../ai/product-capture-ai.js";
 import {
   checkUrlVerdict,
@@ -1580,6 +1581,72 @@ export async function registerAiRoutes(
     // P0-6 — helper 内部调用未透传 usage，只记 calls=1。
     await trackHelperLlmCall(info.tenantId, settings.model as string);
     return extracted;
+  });
+
+  /**
+   * 关键词相关性 AI 判断（需求门槛第 ① 步）：SEMrush 返回的关键词很多沾边
+   * 但不相关，不相关的量再大也不能算进需求。逐个判断是否与该 offer 相关。
+   */
+  app.post("/api/v1/ai/judge-keyword-relevance", async (request) => {
+    const info = await requireSession(deps, request);
+    // P0-6 — 配额守门（超限 429）。
+    await enforceAiQuota(prisma, info.tenantId);
+    const body = (request.body ?? {}) as {
+      offerName?: unknown;
+      offerDescription?: unknown;
+      keywords?: unknown;
+      language?: unknown;
+    };
+    const offerName = typeof body.offerName === "string" ? body.offerName.trim() : "";
+    if (!offerName) throw new ValidationError("offerName is required");
+    const offerDescription =
+      typeof body.offerDescription === "string" ? body.offerDescription : "";
+    if (!Array.isArray(body.keywords) || body.keywords.length === 0) {
+      throw new ValidationError("keywords is required");
+    }
+    if (body.keywords.length > 50) {
+      throw new ValidationError("keywords 最多 50 个");
+    }
+    const keywords: Array<{ keyword: string; volume?: number | null; competition?: string | null; intent?: string | null }> = [];
+    for (const k of body.keywords) {
+      const kw = (k as { keyword?: unknown })?.keyword;
+      if (typeof kw !== "string" || !kw.trim()) continue;
+      const vol = (k as { volume?: unknown })?.volume;
+      keywords.push({
+        keyword: kw.trim(),
+        volume: typeof vol === "number" && Number.isFinite(vol) ? vol : null,
+        competition: typeof (k as { competition?: unknown })?.competition === "string"
+          ? ((k as { competition: string }).competition as string)
+          : null,
+        intent: typeof (k as { intent?: unknown })?.intent === "string"
+          ? ((k as { intent: string }).intent as string)
+          : null,
+      });
+    }
+    if (keywords.length === 0) throw new ValidationError("keywords is required");
+    const settings = await readSettings(prisma);
+    if (!isConfigured(settings)) {
+      throw new AppError("AI is not configured", {
+        code: "AI_NOT_CONFIGURED",
+        statusCode: 400,
+      });
+    }
+    const pepper = assertAiSettingsPepperConfigured();
+    const apiKey = decryptSecret(settings.apiKeyEnc as string, pepper);
+    const judgments = await judgeKeywordRelevance(
+      {
+        baseUrl: settings.baseUrl as string,
+        model: settings.model as string,
+        apiKey,
+        language: body.language === "en" ? "en" : "zh",
+      },
+      offerName,
+      offerDescription,
+      keywords
+    );
+    // P0-6 — helper 内部调用未透传 usage，只记 calls=1。
+    await trackHelperLlmCall(info.tenantId, settings.model as string);
+    return { judgments };
   });
 
   /**

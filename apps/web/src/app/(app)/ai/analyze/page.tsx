@@ -46,6 +46,7 @@ export default async function AiAnalyzePage({
         commissionValue: o.commissionValue,
         commissionType: o.commissionType,
         avgPrice: o.avgPrice,
+        source: o.source,
       };
     } catch {
       /* invalid id: render worksheet without a subject */
@@ -64,6 +65,7 @@ export default async function AiAnalyzePage({
       commissionValue: o.commissionValue,
       commissionType: o.commissionType,
       avgPrice: o.avgPrice,
+      source: o.source,
     }));
   } catch {
     /* page still renders; selector will be empty */

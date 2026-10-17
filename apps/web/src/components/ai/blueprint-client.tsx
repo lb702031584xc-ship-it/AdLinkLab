@@ -301,7 +301,7 @@ export function BlueprintClient({
   };
 
   /* 佣金联动：Offer 实体 + 本页快照都没有佣金数值时，从兄弟页快照取：
-     工作表 ③ 盈利测算的 profitState.inputs（commissionRate / payout + mode 最准），
+     工作表 ④ 盈利测算的 profitState.inputs（commissionRate / payout + mode 最准），
      回落投流页快照的 payout（按已知的佣金类型折算）。只补空，不覆盖；
      兄弟页类型与已知类型冲突时不猜。 */
   const fillCommissionFromSnapshots = async (

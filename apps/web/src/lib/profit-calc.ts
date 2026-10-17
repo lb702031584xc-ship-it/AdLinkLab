@@ -2,7 +2,7 @@
  * Shared profitability math (pure functions, no dependencies).
  *
  * Single source of truth for: the /ai/profit page, the /ai/analyze worksheet
- * step ③ (盈利测算), the /offers quick-calc button, and the traffic-planner
+ * step ④ (盈利测算), the /offers quick-calc button, and the traffic-planner
  * bid math. Add new formulas here — never duplicate them per page.
  *
  * All money values are in the account currency; rates are fractions (0-1)
