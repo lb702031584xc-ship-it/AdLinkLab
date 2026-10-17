@@ -16,6 +16,62 @@ import { assertSafeRedirectUrl } from "@adlinklab/tracking";
 
 const OFFER_CREATE_SCOPE = "OFFER_CREATE";
 
+/** P1-2：品牌名来源（自动提取仅建议，人工填写优先）。 */
+export const BRAND_NAME_SOURCES = ["manual", "auto_extracted", "domain_fallback"] as const;
+
+/** P1-15：节日主题（只影响 RSA 文案）。"none" = 无节日主题。 */
+export const FESTIVAL_THEMES = [
+  "none",
+  "valentines",
+  "easter",
+  "mothers-day",
+  "fathers-day",
+  "independence-day",
+  "back-to-school",
+  "labor-day",
+  "halloween",
+  "thanksgiving",
+  "black-friday",
+  "cyber-monday",
+  "prime-day",
+  "prime-big-deal-days",
+  "christmas",
+  "new-year",
+] as const;
+
+export function normalizeFestivalTheme(input: unknown): string | undefined {
+  if (typeof input !== "string") return undefined;
+  const v = input.trim().toLowerCase();
+  if (!v || v === "none") return undefined;
+  return (FESTIVAL_THEMES as readonly string[]).includes(v) ? v : undefined;
+}
+
+function validateBrandFields(input: {
+  brandName?: string;
+  brandNameSource?: string;
+  brandNameConfidence?: number;
+}): void {
+  if (input.brandName !== undefined && input.brandName.trim() === "") {
+    throw new ValidationError("brandName must be non-empty when provided");
+  }
+  if (
+    input.brandNameSource !== undefined &&
+    !(BRAND_NAME_SOURCES as readonly string[]).includes(input.brandNameSource)
+  ) {
+    throw new ValidationError(
+      "brandNameSource must be manual, auto_extracted or domain_fallback"
+    );
+  }
+  if (
+    input.brandNameConfidence !== undefined &&
+    (!Number.isFinite(input.brandNameConfidence) ||
+      input.brandNameConfidence < 0 ||
+      input.brandNameConfidence > 1)
+  ) {
+    throw new ValidationError("brandNameConfidence must be between 0 and 1");
+  }
+}
+
 /**
  * Phase 5 — Offer CRUD + status lifecycle (tenant scoped).
  * Does not mutate Google Ads URLs.
@@ -54,10 +110,17 @@ export class OfferService {
     commissionType?: string;
     avgPrice?: number;
     pickedAt?: Date;
+    /** P1-2：品牌名（自动提取仅建议；人工填写优先） */
+    brandName?: string;
+    brandNameSource?: string;
+    brandNameConfidence?: number;
+    /** P1-15：节日主题（只影响 RSA 文案） */
+    festivalTheme?: string;
   }): Promise<{ offer: Offer; created: boolean; replayed: boolean }> {
     if (!input.tenantId) throw new ValidationError("tenantId is required");
     if (!input.name?.trim()) throw new ValidationError("name is required");
     if (!input.network?.trim()) throw new ValidationError("network is required");
+    validateBrandFields(input);
     if (
       input.source !== undefined &&
       !["affiliate", "amazon", "cashback"].includes(input.source)
@@ -107,6 +170,10 @@ export class OfferService {
           commissionType: input.commissionType,
           avgPrice: input.avgPrice,
           pickedAt: input.pickedAt,
+          brandName: input.brandName?.trim() || undefined,
+          brandNameSource: input.brandNameSource,
+          brandNameConfidence: input.brandNameConfidence,
+          festivalTheme: normalizeFestivalTheme(input.festivalTheme),
           idempotencyScope: input.idempotencyKey
             ? OFFER_CREATE_SCOPE
             : undefined,
@@ -160,6 +227,10 @@ export class OfferService {
       priority?: number;
       startsAt?: Date | null;
       endsAt?: Date | null;
+      brandName?: string;
+      brandNameSource?: string;
+      brandNameConfidence?: number;
+      festivalTheme?: string;
     },
     requestId?: string
   ): Promise<Offer> {
@@ -167,6 +238,7 @@ export class OfferService {
     if (data.destinationUrl) {
       assertSafeRedirectUrl(data.destinationUrl);
     }
+    validateBrandFields(data);
 
     return this.unitOfWork.transaction(async (ctx) => {
       const updated = await ctx.offers.update(id, {
@@ -174,6 +246,14 @@ export class OfferService {
         network: data.network ?? existing.network,
         destinationUrl: data.destinationUrl ?? existing.destinationUrl,
         priority: data.priority ?? existing.priority,
+        brandName: data.brandName?.trim() || existing.brandName,
+        brandNameSource: data.brandNameSource ?? existing.brandNameSource,
+        brandNameConfidence:
+          data.brandNameConfidence ?? existing.brandNameConfidence,
+        festivalTheme:
+          data.festivalTheme === undefined
+            ? existing.festivalTheme
+            : normalizeFestivalTheme(data.festivalTheme),
         startsAt:
           data.startsAt === null
             ? undefined

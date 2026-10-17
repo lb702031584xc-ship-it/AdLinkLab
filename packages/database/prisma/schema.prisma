@@ -429,6 +429,12 @@ model Offer {
   avgPrice         Decimal?    @map("avg_price") @db.Decimal(19, 4)
   /// 挑选日期（选品时记录，offer 多时作参考）
   pickedAt         DateTime?   @map("picked_at") @db.Timestamptz(3)
+  /// P1-2：品牌提取（自动提取仅建议，人工填写优先；置信度 <0.6 需人工确认）
+  brandName        String?     @map("brand_name")
+  brandNameSource  String?     @map("brand_name_source")
+  brandNameConfidence Float?   @map("brand_name_confidence")
+  /// P1-15：节日主题（只影响 RSA 文案，不改变盈利/条款判定）
+  festivalTheme    String?     @map("festival_theme")
   createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt        DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
   archivedAt       DateTime?   @map("archived_at") @db.Timestamptz(3)

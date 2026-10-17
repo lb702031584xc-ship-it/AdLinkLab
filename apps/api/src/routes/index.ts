@@ -399,6 +399,10 @@ export async function registerRoutes(
       commissionType?: string;
       avgPrice?: number;
       pickedAt?: string;
+      brandName?: string;
+      brandNameSource?: string;
+      brandNameConfidence?: number;
+      festivalTheme?: string;
     };
   }>("/api/v1/offers", async (request) => {
     const tenantId = tenantOf(request, request.body?.tenantId);
@@ -420,6 +424,10 @@ export async function registerRoutes(
       commissionType: request.body.commissionType,
       avgPrice: request.body.avgPrice,
       pickedAt: request.body.pickedAt ? new Date(request.body.pickedAt) : undefined,
+      brandName: request.body.brandName,
+      brandNameSource: request.body.brandNameSource,
+      brandNameConfidence: request.body.brandNameConfidence,
+      festivalTheme: request.body.festivalTheme,
     });
   });
 
@@ -435,6 +443,10 @@ export async function registerRoutes(
       startsAt?: string | null;
       endsAt?: string | null;
       requestId?: string;
+      brandName?: string;
+      brandNameSource?: string;
+      brandNameConfidence?: number;
+      festivalTheme?: string;
     };
   }>("/api/v1/offers/:id", async (request) => {
     const tenantId = tenantOf(request, request.body?.tenantId);
@@ -446,6 +458,10 @@ export async function registerRoutes(
         network: request.body.network,
         destinationUrl: request.body.destinationUrl,
         priority: request.body.priority,
+        brandName: request.body.brandName,
+        brandNameSource: request.body.brandNameSource,
+        brandNameConfidence: request.body.brandNameConfidence,
+        festivalTheme: request.body.festivalTheme,
         startsAt:
           request.body.startsAt === null
             ? null

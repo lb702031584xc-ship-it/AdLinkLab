@@ -1,20 +1,30 @@
 /**
  * 需求门槛（AI 分析第 ① 步）纯函数。
  *
- * 付费投流只能收割已有搜索需求，创造不了需求。没量就投，等于拿钱等一个
- * 不存在的流量。门槛逻辑：
+ * 付费投流只能收割已有搜索需求。门槛用查证过的绝对量，不用测款预算倒推：
+ * 倒推假设你能拿到全部搜索量——实际上同一个 offer 很多人抢，你只能拿到一小片。
+ * 打法是小预算测展示+点击、能盈利就上量，所以门槛要回答“测完能放大吗”。
  *
- * 1. 相关搜索量 = AI 判为相关的关键词月搜索量之和（不相关的量再大也不算）。
- * 2. 测款所需点击 = 测款预算 ÷ CPC，测款预算按 3 × payout（与盈利测算一致）。
- * 3. 所需月搜索量 = 测款所需点击 ÷ 点击率（新账户排 2–4 位按 10% 估算）。
- *    相关量 < 所需量 → 一个月连一次测款都跑不完 → 不通过；
- *    相关量 < 3 × 所需量 → 测款要拖一个多月 → 谨慎；
- *    否则 → 通过。
- * 4. 修正项：付费趋势下滑（对手在撤）通过→谨慎；亚马逊月销量 < 30（死链接）
- *    直接不通过；评论 < 20 / 评分 < 3.5（没信任，落地页转化差）通过→谨慎。
+ * 量门槛（相关搜索量 = AI 判为相关的关键词月搜索量之和）：
+ *   点击 = 搜索量 × 展示份额 × 点击率（Ads That Convert 公式）。
+ *   保守估算：展示份额 80%（Ads That Convert 演算假设）、位置 1 点击率 2.1%
+ *   （First Page Sage 2026）。200 点击是实操者测款下限（Ads That Convert；
+ *   Adalysis 用 300）。200 ÷ (0.8 × 0.021) ≈ 11,905 → 取整 10,000 为放量门槛；
+ *   乐观估算（100% 份额 × WordStream 中位点击率 6.66%）200 点击只需 ≈ 3,000，
+ *   与 Pete Bowen 的 3,000 实操下限一致 → 3,000 为硬底线。
+ *   相关量 < 3,000 → 不通过；3,000–10,000 → 谨慎（只有排到顶部 + 高份额才够，
+ *   需用 Keyword Planner 核对）；≥ 10,000 → 通过。
  *
- * 域名自然/付费搜索量只作参考展示，不进门槛数学（真正能买的是关键词量）。
- * 亚马逊销量不从 BSR 编造——由用户按 Keepa/BSR 工具填预估月销量。
+ * 亚马逊（Spiegel 2015 实测 + 实操者共识）：
+ *   评分 < 4.0 → 不通过；4.0–4.3 → 谨慎；≥ 4.3 → 通过。
+ *   评论 < 15 → 不通过（Red Stag：15+ 评论 + 4.0★ 付费才划算）；15–49 → 谨慎；≥ 50 → 通过。
+ *   销量没有公开可信的最低线（30 和 300 都是编的/借的），不进门槛数学，只作参考展示。
+ *
+ * 域名（可选区块，无公开最低线，不进门槛数学；联盟里很多亚马逊 offer 根本没有独立站）：
+ *   域名流量是 SEMrush 估算值，不是你能买到的展示——你的展示来自关键词拍卖。
+ *   域名自然+付费 < 5,000 点击/月 → 估算可信度低（第三方研究区间），只提示不判死。
+ *   域名付费 = 0 → 未检出付费关键词，不代表没需求，需用 Keyword Planner 核对。
+ *   付费趋势：只看同比持续下滑（单月环比是噪音/季节性），下滑 → 谨慎。
  */
 
 export type DemandTrend = "up" | "flat" | "down";
@@ -33,8 +43,6 @@ export interface DemandGateAmazon {
 }
 
 export interface DemandGateInputs {
-  payout: number;
-  cpc: number;
   keywords: DemandGateKeyword[];
   domainOrganicVolume: number | null;
   domainPaidVolume: number | null;
@@ -47,16 +55,17 @@ export type DemandGateFlag =
   | "notJudged"
   | "noRelevant"
   | "lowRelevanceRatio"
-  | "noPayout"
-  | "noCpc"
-  | "volumeBelowTest"
-  | "volumeThin"
+  | "volumeBelowFloor"
+  | "volumeConditional"
   | "volumeEnough"
   | "trendDown"
   | "trendUp"
-  | "amazonLowSales"
+  | "domainLowAccuracy"
+  | "domainNoPaid"
+  | "amazonLowRating"
+  | "amazonRatingCaution"
   | "amazonFewReviews"
-  | "amazonLowRating";
+  | "amazonReviewsCaution";
 
 export interface DemandGateResult {
   verdict: "pass" | "caution" | "fail" | "unknown";
@@ -65,24 +74,32 @@ export interface DemandGateResult {
   totalCount: number;
   judgedCount: number;
   relevanceRatio: number | null;
-  testClicksNeeded: number | null;
-  requiredVolume: number | null;
+  /** 保守估算每月能抢到的点击：相关量 × 80% 展示份额 × 2.1% 位置 1 点击率。 */
+  estimatedClicks: number | null;
   flags: DemandGateFlag[];
 }
 
-/** 新账户排 2–4 位的搜索广告点击率估算。 */
-export const DEMAND_GATE_CTR = 0.1;
-/** 相关量达到所需量的几倍才算“量够、能快速测完”。 */
-export const DEMAND_GATE_COMFORT_MULTIPLE = 3;
-/** 亚马逊月销量低于此值视为死链接（付费流量救不活）。 */
-export const AMAZON_MIN_MONTHLY_SALES = 30;
-/** 亚马逊评论低于此值视为缺信任。 */
-export const AMAZON_MIN_REVIEWS = 20;
-/** 亚马逊评分低于此值视为口碑差。 */
-export const AMAZON_MIN_RATING = 3.5;
+/** 相关搜索量硬底线：低于此值，连乐观估算都凑不够一次测款的点击。 */
+export const MIN_RELEVANT_VOLUME = 3000;
+/** 相关搜索量放量门槛：保守估算下能拿到 200 测款点击。 */
+export const SCALE_RELEVANT_VOLUME = 10000;
+/** 保守估算用展示份额（Ads That Convert 演算假设，非实测基准）。 */
+export const CONSERVATIVE_IMPRESSION_SHARE = 0.8;
+/** 保守估算用点击率：位置 1 搜索广告点击率（First Page Sage 2026）。 */
+export const CONSERVATIVE_CTR = 0.021;
+/** 亚马逊评分低于此值不通过。 */
+export const AMAZON_MIN_RATING = 4.0;
+/** 亚马逊评分低于此值（但 ≥ 4.0）谨慎。 */
+export const AMAZON_PREFERRED_RATING = 4.3;
+/** 亚马逊评论低于此值不通过。 */
+export const AMAZON_MIN_REVIEWS = 15;
+/** 亚马逊评论低于此值（但 ≥ 15）谨慎。 */
+export const AMAZON_SCALE_REVIEWS = 50;
+/** 域名自然+付费低于此值时 SEMrush 估算可信度低（第三方研究区间）。 */
+export const DOMAIN_LOW_ACCURACY_CLICKS = 5000;
 
 export function evaluateDemandGate(inputs: DemandGateInputs): DemandGateResult {
-  const { payout, cpc, keywords, paidTrend, amazon } = inputs;
+  const { keywords, domainOrganicVolume, domainPaidVolume, paidTrend, amazon } = inputs;
   const totalCount = keywords.length;
   const judged = keywords.filter((k) => k.relevant !== null);
   const relevant = keywords.filter((k) => k.relevant === true);
@@ -95,8 +112,7 @@ export function evaluateDemandGate(inputs: DemandGateInputs): DemandGateResult {
     totalCount,
     judgedCount: judged.length,
     relevanceRatio,
-    testClicksNeeded: null,
-    requiredVolume: null,
+    estimatedClicks: null,
   };
 
   if (totalCount === 0) {
@@ -112,51 +128,67 @@ export function evaluateDemandGate(inputs: DemandGateInputs): DemandGateResult {
   const flags: DemandGateFlag[] = [];
   if (relevanceRatio !== null && relevanceRatio < 0.3) flags.push("lowRelevanceRatio");
 
-  if (!(payout > 0)) {
-    return { ...base, verdict: "unknown", flags: [...flags, "noPayout"] };
+  // 域名只提示，不判死（且只在用户填了域名数据时才提示）。
+  const domainTotal = (domainOrganicVolume ?? 0) + (domainPaidVolume ?? 0);
+  if (
+    (domainOrganicVolume != null || domainPaidVolume != null) &&
+    domainTotal > 0 &&
+    domainTotal < DOMAIN_LOW_ACCURACY_CLICKS
+  ) {
+    flags.push("domainLowAccuracy");
   }
-  if (!(cpc > 0)) {
-    return { ...base, verdict: "unknown", flags: [...flags, "noCpc"] };
+  if (domainPaidVolume === 0 && domainOrganicVolume != null) {
+    flags.push("domainNoPaid");
   }
-
-  const testClicksNeeded = Math.ceil((3 * payout) / cpc);
-  const requiredVolume = Math.ceil(testClicksNeeded / DEMAND_GATE_CTR);
 
   let verdict: "pass" | "caution" | "fail";
-  if (relevantVolume < requiredVolume) {
+  if (relevantVolume < MIN_RELEVANT_VOLUME) {
     verdict = "fail";
-    flags.push("volumeBelowTest");
-  } else if (relevantVolume < DEMAND_GATE_COMFORT_MULTIPLE * requiredVolume) {
+    flags.push("volumeBelowFloor");
+  } else if (relevantVolume < SCALE_RELEVANT_VOLUME) {
     verdict = "caution";
-    flags.push("volumeThin");
+    flags.push("volumeConditional");
   } else {
     verdict = "pass";
     flags.push("volumeEnough");
   }
 
-  // 付费趋势：对手在撤，通过降为谨慎（趋势本身不直接判死）。
-  if (paidTrend === "down" && verdict === "pass") {
-    verdict = "caution";
+  const downgrade = () => {
+    if (verdict === "pass") verdict = "caution";
+  };
+
+  // 亚马逊：评分/评论是硬门槛（销量无公开可信最低线，不进门槛）。
+  if (amazon) {
+    if (amazon.rating != null && amazon.rating < AMAZON_MIN_RATING) {
+      verdict = "fail";
+      flags.push("amazonLowRating");
+    } else if (amazon.rating != null && amazon.rating < AMAZON_PREFERRED_RATING) {
+      downgrade();
+      flags.push("amazonRatingCaution");
+    }
+    if (amazon.reviewCount != null && amazon.reviewCount < AMAZON_MIN_REVIEWS) {
+      verdict = "fail";
+      flags.push("amazonFewReviews");
+    } else if (amazon.reviewCount != null && amazon.reviewCount < AMAZON_SCALE_REVIEWS) {
+      downgrade();
+      flags.push("amazonReviewsCaution");
+    }
+  }
+
+  // 付费趋势：同比持续下滑，通过降为谨慎（趋势本身不直接判死）。
+  if (paidTrend === "down") {
+    downgrade();
     flags.push("trendDown");
   } else if (paidTrend === "up") {
     flags.push("trendUp");
   }
 
-  // 亚马逊：销量是硬门槛，评论/评分只降级。
-  if (amazon) {
-    if (amazon.estimatedMonthlySales != null && amazon.estimatedMonthlySales < AMAZON_MIN_MONTHLY_SALES) {
-      verdict = "fail";
-      flags.push("amazonLowSales");
-    }
-    if (amazon.reviewCount != null && amazon.reviewCount < AMAZON_MIN_REVIEWS && verdict === "pass") {
-      verdict = "caution";
-      flags.push("amazonFewReviews");
-    }
-    if (amazon.rating != null && amazon.rating < AMAZON_MIN_RATING && verdict === "pass") {
-      verdict = "caution";
-      flags.push("amazonLowRating");
-    }
-  }
-
-  return { ...base, verdict, flags, testClicksNeeded, requiredVolume };
+  return {
+    ...base,
+    verdict,
+    flags,
+    estimatedClicks: Math.round(
+      relevantVolume * CONSERVATIVE_IMPRESSION_SHARE * CONSERVATIVE_CTR
+    ),
+  };
 }

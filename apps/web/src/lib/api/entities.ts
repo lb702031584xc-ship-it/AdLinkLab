@@ -110,6 +110,14 @@ export interface Offer {
   avgPrice?: string | number | null;
   /** 挑选日期。 */
   pickedAt?: string | null;
+  /** P1-2：品牌名（自动提取仅建议，人工填写优先）。 */
+  brandName?: string | null;
+  /** P1-2：品牌名来源 manual | auto_extracted | domain_fallback。 */
+  brandNameSource?: string | null;
+  /** P1-2：品牌提取置信度 0–1；<0.6 需人工确认。 */
+  brandNameConfidence?: number | null;
+  /** P1-15：节日主题（只影响 RSA 文案）。 */
+  festivalTheme?: string | null;
   /** 推荐指数摘要（第三批；无数据时为 null/缺失）。 */
   metricsSummary?: MetricsSummary | null;
 }

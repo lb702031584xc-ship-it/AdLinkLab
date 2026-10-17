@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useDict } from "@/i18n/use-dict";
 import { EntityPageHeader } from "@/components/entities/ui";
-import { calcProfit } from "@/lib/profit-calc";
+import { calcProfit, ASSUMED_CLICKS_TO_ORDER, clicksToOrderFromCvr, suggestCpcByClicksToOrder } from "@/lib/profit-calc";
 import { getLastOfferId, getManualOffer, setLastOfferId, setManualOffer } from "@/lib/current-offer";
 import {
   evaluateDemandGate,
@@ -22,6 +22,9 @@ import { ComplianceClient } from "./compliance-client";
 import { TrafficPlannerClient, type PlannerOffer } from "./traffic-planner-client";
 import { OfferPipelineNav } from "./offer-pipeline-nav";
 import { BrandBiddingClient } from "./brand-bidding-client";
+import { TrafficGateCard } from "@/components/traffic/traffic-gate-card";
+import { checkTrafficGateAction } from "@/lib/api/traffic-actions";
+import type { TrafficGate } from "@/lib/api/amazon-types";
 import type { AiUrlCheckResult, TrafficPlanResult } from "@/lib/api/ai";
 
 export type WorksheetSource = "affiliate" | "amazon" | "cashback";
@@ -117,6 +120,8 @@ function ProfitStep({
   const [refundPct, setRefundPct] = useState(initialValues?.refundPct ?? "");
   const [shavePct, setShavePct] = useState(initialValues?.shavePct ?? "");
   const [cpcFromKeywords, setCpcFromKeywords] = useState(false);
+  /** P1-1：公式 A 分母覆盖（用户手改后不再跟随 CVR 联动）。 */
+  const [ctoOverride, setCtoOverride] = useState("");
   /** P0-2 输入来源：均价 / 佣金率 / payout / CPC / CVR 各自从哪来。
       来源不明时默认估算（宁可标估算，不把猜测当实测）。
       offer = 库里 Offer 带入；manual = 用户手填；keywords = 投放选词快照；
@@ -319,6 +324,36 @@ function ProfitStep({
   const derivedFromPrice =
     parseFloat(avgPrice) > 0 && parseFloat(commissionRate) > 0;
 
+  /* P1-1 — 建议 CPC 双公式并列（补充，不改 K3 公式）：
+     A = 价格 × 佣金比例 ÷ 预期点击出单数；分母优先用实测 CVR（1 ÷ CVR），
+     无实测时用讲师假设 50 并打估算角标；用户可手改分母。
+     B = EPC ÷ (1 + 目标 ROI)，即 result.maxCpcAtTargetRoi（K3 公式本身不动）。 */
+  const ctoFromCvr = (() => {
+    const cvr = parseFloat(cvrPct);
+    return Number.isFinite(cvr) && cvr > 0 && cvr < 100
+      ? clicksToOrderFromCvr(cvr / 100)
+      : null;
+  })();
+  const ctoOverrideNum = parseFloat(ctoOverride);
+  const effectiveCto =
+    Number.isFinite(ctoOverrideNum) && ctoOverrideNum > 0
+      ? ctoOverrideNum
+      : (ctoFromCvr ?? ASSUMED_CLICKS_TO_ORDER);
+  const ctoSource: "manual" | "measured" | "assumed" =
+    Number.isFinite(ctoOverrideNum) && ctoOverrideNum > 0
+      ? "manual"
+      : ctoFromCvr !== null
+        ? "measured"
+        : "assumed";
+  const formulaA =
+    mode === "ecommerce"
+      ? suggestCpcByClicksToOrder({
+          price: parseFloat(avgPrice),
+          commissionRatePct: parseFloat(commissionRate),
+          clicksToOrder: effectiveCto,
+        })
+      : null;
+
   return (
     <div>
       {/* 电商 / 其他：两套表单。电商按订单佣金 %、扣退货；其他固定 payout、扣量。 */}
@@ -456,6 +491,55 @@ function ProfitStep({
           {mode === "ecommerce" ? w.needInputEcommerce : w.needInput}
         </p>
       )}
+
+      {/* P1-1：建议 CPC 双公式并列（仅电商模式有价格 × 佣金比例）。 */}
+      {mode === "ecommerce" ? (
+        <div className="mt-4 rounded-xl border border-ink/10 bg-white p-5">
+          <p className="text-sm font-semibold text-ink">{w.dualCpcTitle}</p>
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            <div className="rounded-lg border border-ink/10 bg-ink/[0.02] p-4">
+              <p className="text-sm font-medium text-ink">{w.formulaALabel}</p>
+              <p className="mt-1 text-2xl font-semibold text-ink">
+                {formulaA !== null ? fmt(formulaA, 4) : "—"}
+              </p>
+              <p className="mt-1 font-mono text-xs text-ink/45">{w.formulaAFormula}</p>
+              <label className="mt-3 block text-xs font-medium text-ink/70">
+                {w.formulaACtoLabel}
+              </label>
+              <input
+                inputMode="decimal"
+                value={ctoOverride}
+                onChange={(e) => setCtoOverride(e.target.value)}
+                placeholder={String(Math.round(effectiveCto))}
+                className="mt-1 w-full rounded-lg border border-ink/15 bg-white px-3 py-1.5 text-sm text-ink"
+              />
+              <p className="mt-1 text-xs text-ink/55">
+                {ctoSource === "assumed" ? (
+                  <span className="rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-800">
+                    {w.formulaAAssumed}
+                  </span>
+                ) : ctoSource === "measured" ? (
+                  w.formulaAMeasured
+                ) : (
+                  "分母：你手动填写的值"
+                )}
+              </p>
+            </div>
+            <div className="rounded-lg border border-ink/10 bg-ink/[0.02] p-4">
+              <p className="text-sm font-medium text-ink">{w.formulaBLabel}</p>
+              <p className="mt-1 text-2xl font-semibold text-ink">
+                {result?.maxCpcAtTargetRoi !== null && result?.maxCpcAtTargetRoi !== undefined
+                  ? fmt(result.maxCpcAtTargetRoi, 4)
+                  : "—"}
+              </p>
+              <p className="mt-1 font-mono text-xs text-ink/45">{w.formulaBFormula}</p>
+              <p className="mt-3 text-xs text-ink/55">
+                {w.formulaBSource.replace("{roi}", targetRoiPct || "100")}
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -466,10 +550,10 @@ export interface DemandGateState {
   status: StepStatus;
   summary: string;
   inputs?: {
+    domainEnabled: boolean;
     domainOrganic: string;
     domainPaid: string;
     paidTrend: string;
-    cpc: string;
     amazonSales: string;
     amazonReviews: string;
     amazonRating: string;
@@ -479,7 +563,6 @@ export interface DemandGateState {
 
 function DemandGateStep({
   onChange,
-  initialPayout,
   initialValues,
   offerId,
   offerName,
@@ -487,7 +570,6 @@ function DemandGateStep({
   isAmazon,
 }: {
   onChange: (s: DemandGateState | null) => void;
-  initialPayout?: string;
   initialValues?: DemandGateState["inputs"];
   offerId?: string | null;
   offerName: string;
@@ -497,10 +579,10 @@ function DemandGateStep({
   const t = useDict();
   const g = t.ai.worksheet.demandGate;
 
+  const [domainEnabled, setDomainEnabled] = useState(initialValues?.domainEnabled ?? false);
   const [domainOrganic, setDomainOrganic] = useState(initialValues?.domainOrganic ?? "");
   const [domainPaid, setDomainPaid] = useState(initialValues?.domainPaid ?? "");
   const [paidTrend, setPaidTrend] = useState(initialValues?.paidTrend ?? "");
-  const [cpc, setCpc] = useState(initialValues?.cpc ?? "");
   const [amazonSales, setAmazonSales] = useState(initialValues?.amazonSales ?? "");
   const [amazonReviews, setAmazonReviews] = useState(initialValues?.amazonReviews ?? "");
   const [amazonRating, setAmazonRating] = useState(initialValues?.amazonRating ?? "");
@@ -524,10 +606,10 @@ function DemandGateStep({
   useEffect(() => {
     if (!initialValues || snapshotAppliedRef.current) return;
     snapshotAppliedRef.current = true;
+    if (initialValues.domainEnabled) setDomainEnabled(true);
     if (!domainOrganic && initialValues.domainOrganic) setDomainOrganic(initialValues.domainOrganic);
     if (!domainPaid && initialValues.domainPaid) setDomainPaid(initialValues.domainPaid);
     if (!paidTrend && initialValues.paidTrend) setPaidTrend(initialValues.paidTrend);
-    if (!cpc && initialValues.cpc) setCpc(initialValues.cpc);
     if (!amazonSales && initialValues.amazonSales) setAmazonSales(initialValues.amazonSales);
     if (!amazonReviews && initialValues.amazonReviews) setAmazonReviews(initialValues.amazonReviews);
     if (!amazonRating && initialValues.amazonRating) setAmazonRating(initialValues.amazonRating);
@@ -581,31 +663,6 @@ function DemandGateStep({
     };
   }, [offerId]);
 
-  /* CPC：为空时从投放选词快照取参考 CPC 均值（与 ④ 盈利测算同源）。 */
-  useEffect(() => {
-    if (cpc || !offerId) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await loadWorkStateAction("keyword-launch", offerId);
-        if (cancelled || !res.ok || !res.data.state) return;
-        const rows = (res.data.state.rows ?? []) as Array<{ refCpc?: string }>;
-        const nums = rows
-          .map((r) => Number(r.refCpc))
-          .filter((n) => Number.isFinite(n) && n > 0);
-        if (nums.length === 0) return;
-        const avg = nums.reduce((a, b) => a + b, 0) / nums.length;
-        setCpc((prev) => (prev.trim() ? prev : String(Math.round(avg * 100) / 100)));
-      } catch {
-        /* 取不到就不填 */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [offerId]);
-
   const gateKeywords: DemandGateKeyword[] = useMemo(
     () =>
       kwList.map((k) => ({
@@ -625,12 +682,11 @@ function DemandGateStep({
       return Number.isFinite(n) && n >= 0 ? n : null;
     };
     return evaluateDemandGate({
-      payout: parseFloat(initialPayout ?? "") || 0,
-      cpc: parseFloat(cpc) || 0,
       keywords: gateKeywords,
-      domainOrganicVolume: num(domainOrganic),
-      domainPaidVolume: num(domainPaid),
-      paidTrend: paidTrend === "up" || paidTrend === "flat" || paidTrend === "down" ? paidTrend : null,
+      // 域名是可选区块：没勾“有独立站”就不传域名数据，不产生域名相关提示。
+      domainOrganicVolume: domainEnabled ? num(domainOrganic) : null,
+      domainPaidVolume: domainEnabled ? num(domainPaid) : null,
+      paidTrend: domainEnabled && (paidTrend === "up" || paidTrend === "flat" || paidTrend === "down") ? paidTrend : null,
       amazon: isAmazon
         ? {
             estimatedMonthlySales: num(amazonSales),
@@ -639,7 +695,7 @@ function DemandGateStep({
           }
         : null,
     });
-  }, [initialPayout, cpc, gateKeywords, domainOrganic, domainPaid, paidTrend, amazonSales, amazonReviews, amazonRating, isAmazon]);
+  }, [gateKeywords, domainEnabled, domainOrganic, domainPaid, paidTrend, amazonSales, amazonReviews, amazonRating, isAmazon]);
 
   useEffect(() => {
     if (result.verdict === "unknown") {
@@ -657,12 +713,12 @@ function DemandGateStep({
       });
     onChange({
       status,
-      summary: `${g.relevantVolume} ${fmt(result.relevantVolume, 0)} · ${g.requiredVolume} ${result.requiredVolume !== null ? fmt(result.requiredVolume, 0) : "—"} · ${g.relevantRatio} ${result.relevanceRatio !== null ? `${fmt(result.relevanceRatio * 100)}%` : "—"}`,
+      summary: `${g.relevantVolume} ${fmt(result.relevantVolume, 0)} · ${g.estimatedClicks} ${result.estimatedClicks !== null ? fmt(result.estimatedClicks, 0) : "—"} · ${g.relevantRatio} ${result.relevanceRatio !== null ? `${fmt(result.relevanceRatio * 100)}%` : "—"}`,
       inputs: {
+        domainEnabled,
         domainOrganic,
         domainPaid,
         paidTrend,
-        cpc,
         amazonSales,
         amazonReviews,
         amazonRating,
@@ -719,32 +775,28 @@ function DemandGateStep({
         return g.flag.noRelevant;
       case "lowRelevanceRatio":
         return g.flag.lowRelevanceRatio.replace("{ratio}", result.relevanceRatio !== null ? fmt(result.relevanceRatio * 100) : "—");
-      case "noPayout":
-        return g.flag.noPayout;
-      case "noCpc":
-        return g.flag.noCpc;
-      case "volumeBelowTest":
-        return g.flag.volumeBelowTest
-          .replace("{relevant}", fmt(result.relevantVolume, 0))
-          .replace("{required}", result.requiredVolume !== null ? fmt(result.requiredVolume, 0) : "—");
-      case "volumeThin":
-        return g.flag.volumeThin
-          .replace("{relevant}", fmt(result.relevantVolume, 0))
-          .replace("{required3}", result.requiredVolume !== null ? fmt(result.requiredVolume * 3, 0) : "—");
+      case "volumeBelowFloor":
+        return g.flag.volumeBelowFloor.replace("{relevant}", fmt(result.relevantVolume, 0));
+      case "volumeConditional":
+        return g.flag.volumeConditional.replace("{relevant}", fmt(result.relevantVolume, 0));
       case "volumeEnough":
-        return g.flag.volumeEnough
-          .replace("{relevant}", fmt(result.relevantVolume, 0))
-          .replace("{required3}", result.requiredVolume !== null ? fmt(result.requiredVolume * 3, 0) : "—");
+        return g.flag.volumeEnough.replace("{relevant}", fmt(result.relevantVolume, 0));
       case "trendDown":
         return g.flag.trendDown;
       case "trendUp":
         return g.flag.trendUp;
-      case "amazonLowSales":
-        return g.flag.amazonLowSales.replace("{sales}", amazonSales || "—");
-      case "amazonFewReviews":
-        return g.flag.amazonFewReviews.replace("{reviews}", amazonReviews || "—");
+      case "domainLowAccuracy":
+        return g.flag.domainLowAccuracy;
+      case "domainNoPaid":
+        return g.flag.domainNoPaid;
       case "amazonLowRating":
         return g.flag.amazonLowRating.replace("{rating}", amazonRating || "—");
+      case "amazonRatingCaution":
+        return g.flag.amazonRatingCaution.replace("{rating}", amazonRating || "—");
+      case "amazonFewReviews":
+        return g.flag.amazonFewReviews.replace("{reviews}", amazonReviews || "—");
+      case "amazonReviewsCaution":
+        return g.flag.amazonReviewsCaution.replace("{reviews}", amazonReviews || "—");
       default:
         return "";
     }
@@ -773,32 +825,42 @@ function DemandGateStep({
 
   return (
     <div>
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <div>
-          <label className={labelClass} htmlFor="ws-dg-organic">{g.domainOrganicLabel}</label>
-          <input id="ws-dg-organic" inputMode="decimal" value={domainOrganic}
-            onChange={(e) => setDomainOrganic(e.target.value)} placeholder="12000" className={inputClass} />
+      {/* 域名是可选区块：联盟里很多亚马逊 offer 没有独立站，不勾就不填、不判。 */}
+      <label className="mb-2 flex cursor-pointer items-start gap-2.5">
+        <input
+          type="checkbox"
+          checked={domainEnabled}
+          onChange={(e) => setDomainEnabled(e.target.checked)}
+          className="mt-1 h-4 w-4 accent-ink"
+        />
+        <span>
+          <span className="block text-sm font-medium text-ink">{g.domainToggle}</span>
+          <span className="block text-xs text-ink/55">{g.domainToggleHint}</span>
+        </span>
+      </label>
+      {domainEnabled ? (
+        <div className="grid gap-4 sm:grid-cols-3">
+          <div>
+            <label className={labelClass} htmlFor="ws-dg-organic">{g.domainOrganicLabel}</label>
+            <input id="ws-dg-organic" inputMode="decimal" value={domainOrganic}
+              onChange={(e) => setDomainOrganic(e.target.value)} placeholder="12000" className={inputClass} />
+          </div>
+          <div>
+            <label className={labelClass} htmlFor="ws-dg-paid">{g.domainPaidLabel}</label>
+            <input id="ws-dg-paid" inputMode="decimal" value={domainPaid}
+              onChange={(e) => setDomainPaid(e.target.value)} placeholder="3000" className={inputClass} />
+          </div>
+          <div>
+            <label className={labelClass} htmlFor="ws-dg-trend">{g.paidTrendLabel}</label>
+            <select id="ws-dg-trend" value={paidTrend} onChange={(e) => setPaidTrend(e.target.value)} className={inputClass}>
+              <option value="">{g.paidTrendOptions.none}</option>
+              <option value="up">{g.paidTrendOptions.up}</option>
+              <option value="flat">{g.paidTrendOptions.flat}</option>
+              <option value="down">{g.paidTrendOptions.down}</option>
+            </select>
+          </div>
         </div>
-        <div>
-          <label className={labelClass} htmlFor="ws-dg-paid">{g.domainPaidLabel}</label>
-          <input id="ws-dg-paid" inputMode="decimal" value={domainPaid}
-            onChange={(e) => setDomainPaid(e.target.value)} placeholder="3000" className={inputClass} />
-        </div>
-        <div>
-          <label className={labelClass} htmlFor="ws-dg-trend">{g.paidTrendLabel}</label>
-          <select id="ws-dg-trend" value={paidTrend} onChange={(e) => setPaidTrend(e.target.value)} className={inputClass}>
-            <option value="">{g.paidTrendOptions.none}</option>
-            <option value="up">{g.paidTrendOptions.up}</option>
-            <option value="flat">{g.paidTrendOptions.flat}</option>
-            <option value="down">{g.paidTrendOptions.down}</option>
-          </select>
-        </div>
-        <div>
-          <label className={labelClass} htmlFor="ws-dg-cpc">{g.cpcLabel}</label>
-          <input id="ws-dg-cpc" inputMode="decimal" value={cpc}
-            onChange={(e) => setCpc(e.target.value)} placeholder="0.80" className={inputClass} />
-        </div>
-      </div>
+      ) : null}
 
       {isAmazon ? (
         <div className="mt-4">
@@ -820,6 +882,7 @@ function DemandGateStep({
                 onChange={(e) => setAmazonRating(e.target.value)} placeholder="4.5" className={inputClass} />
             </div>
           </div>
+          <p className="mt-1 text-xs text-ink/55">{g.amazonSalesHint}</p>
         </div>
       ) : null}
 
@@ -885,9 +948,11 @@ function DemandGateStep({
           <span className="text-sm text-ink/70">
             {g.relevantVolume} <b>{fmt(result.relevantVolume, 0)}</b>
             {" · "}
-            {g.requiredVolume} <b>{result.requiredVolume !== null ? fmt(result.requiredVolume, 0) : "—"}</b>
+            {g.floorVolume} <b>3,000</b>
             {" · "}
-            {g.testClicks} <b>{result.testClicksNeeded !== null ? fmt(result.testClicksNeeded, 0) : "—"}</b>
+            {g.scaleVolume} <b>10,000</b>
+            {" · "}
+            {g.estimatedClicks} <b>{result.estimatedClicks !== null ? fmt(result.estimatedClicks, 0) : "—"}</b>
           </span>
         ) : null}
       </div>
@@ -1047,6 +1112,12 @@ export function WorksheetClient({
   const [complianceCounted, setComplianceCounted] = useState(true);
   const [demandGateState, setDemandGateState] = useState<DemandGateState | null>(null);
   const [profitState, setProfitState] = useState<ProfitStepState | null>(null);
+  /* P0-1：流量门（TrafficGate，K4）检测结果。passed 三态：true 通过 /
+     false 不通过 / null unknown（暂无数据，绝不判 fail）。 */
+  const [trafficGate, setTrafficGate] = useState<TrafficGate | null>(null);
+  const [trafficGateLoading, setTrafficGateLoading] = useState(false);
+  const [trafficGateError, setTrafficGateError] = useState<string | null>(null);
+  const gateSeq = useRef(0);
   // offer 盈利字段 → 盈利测算 payout 预填：固定佣金直接用；按比例则 平均价×比例
   const initialPayout = (() => {
     if (!offer) return undefined;
@@ -1093,6 +1164,7 @@ export function WorksheetClient({
     complianceCounted,
     profitState,
     trafficResult,
+    trafficGate,
   });
 
   // 只有 Offer、没有分析结果的快照不算有意义：避免切到新 Offer 时自动保存把旧 Offer 的带结果快照覆盖掉。
@@ -1102,7 +1174,8 @@ export function WorksheetClient({
     s.termsVerdict != null ||
     s.complianceResults != null ||
     s.profitState != null ||
-    s.trafficResult != null;
+    s.trafficResult != null ||
+    s.trafficGate != null;
 
   const applySnapshot = (s: Record<string, unknown>) => {
     if (s.source === "affiliate" || s.source === "amazon" || s.source === "cashback") {
@@ -1131,6 +1204,9 @@ export function WorksheetClient({
     }
     if (s.trafficResult && typeof s.trafficResult === "object") {
       setTrafficResult(s.trafficResult as TrafficPlanResult);
+    }
+    if (s.trafficGate && typeof s.trafficGate === "object") {
+      setTrafficGate(s.trafficGate as TrafficGate);
     }
   };
 
@@ -1213,7 +1289,7 @@ export function WorksheetClient({
     }, 2500);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source, openStep, offer, mName, mNetwork, mUrl, demandGateState, termsVerdict, complianceResults, complianceCounted, profitState, trafficResult]);
+  }, [source, openStep, offer, mName, mNetwork, mUrl, demandGateState, termsVerdict, complianceResults, complianceCounted, profitState, trafficResult, trafficGate]);
 
   const openHistory = async () => {
     setHistoryOpen((o) => !o);
@@ -1320,10 +1396,10 @@ export function WorksheetClient({
           : w.verdict.incomplete;
 
   /* P0-1 一票否决汇总条（只展示已有分析结果的合成，不改任何判定逻辑）：
-     条款 stop（= DO_NOT_RUN）/ 盈利 EPC ≤ CPC 任一命中 → 红条；
-     仅 unknown（条款/盈利尚未分析）且无红条 → 黄条；两者都没有 → 不显示。
-     注意：工作表 ⑤ 是投流决策（TrafficPlanner），不含流量门（TrafficGate）结果，
-     因此流量门不参与本横幅——如需接入，需另行把流量门检测接进工作表。 */
+     条款 stop（= DO_NOT_RUN）/ 盈利 EPC ≤ CPC / 流量门 passed=false 任一命中 → 红条；
+     仅 unknown（条款/盈利/流量门尚未分析或暂无数据）且无红条 → 黄条；两者都没有 → 不显示。
+     流量门 unknown（passed=null，暂无数据）绝不判 fail，只进黄条。
+     注意：工作表 ⑤ 是投流决策（TrafficPlanner），与流量门（TrafficGate）是两回事。 */
   const profitVeto = useMemo(() => {
     const inp = profitState?.inputs;
     if (!inp) return null;
@@ -1354,9 +1430,17 @@ export function WorksheetClient({
         .replace("{cpc}", fmt(profitVeto.cpc)),
     );
   }
+  if (trafficGate?.passed === false) {
+    vetoReasons.push(
+      w.vetoBanner.trafficGateFail.replace("{reason}", trafficGate.reason),
+    );
+  }
   const vetoUnknowns: string[] = [];
   if (termsVerdict === null) vetoUnknowns.push(w.vetoBanner.termsUnknown);
   if (profitState === null) vetoUnknowns.push(w.vetoBanner.profitUnknown);
+  if (trafficGate === null || trafficGate.passed === null) {
+    vetoUnknowns.push(w.vetoBanner.trafficGateUnknown);
+  }
 
   const toggleStep = (n: number) => setOpenStep((o) => (o === n ? 0 : n));
 
@@ -1649,7 +1733,6 @@ export function WorksheetClient({
       >
         <DemandGateStep
           onChange={setDemandGateState}
-          initialPayout={initialPayout}
           initialValues={demandGateState?.inputs}
           offerId={offer?.id ?? null}
           offerName={offer?.name ?? ""}

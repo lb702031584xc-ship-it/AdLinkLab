@@ -83,6 +83,13 @@ function decimalToString(value: DecimalLike | null | undefined): string | undefi
   return value.toString();
 }
 
+/** Prisma Decimal → JS number（Offer 钱字段）；非法值返回 undefined，不编造。 */
+function decimalToNumber(value: DecimalLike | null | undefined): number | undefined {
+  if (value == null) return undefined;
+  const n = Number(value.toString());
+  return Number.isFinite(n) ? n : undefined;
+}
+
 function toTenant(row: {
   id: string;
   name: string;
@@ -330,6 +337,14 @@ function toOffer(row: {
   priority: number;
   startsAt: Date | null;
   endsAt: Date | null;
+  commissionValue?: DecimalLike | null;
+  commissionType?: string | null;
+  avgPrice?: DecimalLike | null;
+  pickedAt?: Date | null;
+  brandName?: string | null;
+  brandNameSource?: string | null;
+  brandNameConfidence?: number | null;
+  festivalTheme?: string | null;
   idempotencyScope: string | null;
   idempotencyKey: string | null;
   createdAt: Date;
@@ -348,6 +363,14 @@ function toOffer(row: {
     priority: row.priority,
     startsAt: row.startsAt ?? undefined,
     endsAt: row.endsAt ?? undefined,
+    commissionValue: decimalToNumber(row.commissionValue),
+    commissionType: row.commissionType ?? undefined,
+    avgPrice: decimalToNumber(row.avgPrice),
+    pickedAt: row.pickedAt ?? undefined,
+    brandName: row.brandName ?? undefined,
+    brandNameSource: row.brandNameSource ?? undefined,
+    brandNameConfidence: row.brandNameConfidence ?? undefined,
+    festivalTheme: row.festivalTheme ?? undefined,
     idempotencyScope: row.idempotencyScope ?? undefined,
     idempotencyKey: row.idempotencyKey ?? undefined,
     createdAt: row.createdAt,
@@ -1176,6 +1199,14 @@ export class PrismaOfferRepository implements OfferRepository {
             priority: data.priority ?? 100,
             startsAt: data.startsAt ?? null,
             endsAt: data.endsAt ?? null,
+            commissionValue: data.commissionValue ?? null,
+            commissionType: data.commissionType ?? null,
+            avgPrice: data.avgPrice ?? null,
+            pickedAt: data.pickedAt ?? null,
+            brandName: data.brandName ?? null,
+            brandNameSource: data.brandNameSource ?? null,
+            brandNameConfidence: data.brandNameConfidence ?? null,
+            festivalTheme: data.festivalTheme ?? null,
             idempotencyScope: data.idempotencyScope ?? null,
             idempotencyKey: data.idempotencyKey ?? null,
             archivedAt: data.archivedAt ?? null,

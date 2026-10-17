@@ -122,6 +122,36 @@ export function roiAtCpc(epc: number, cpc: number): number | null {
   return (epc - cpc) / cpc;
 }
 
+/**
+ * P1-1 — 公式 A：按出单成本建议 CPC。
+ *   建议 CPC = 价格 × 佣金比例 ÷ 预期点击出单数
+ * （GREENVINES 验算：100 × 15% ÷ 50 = $0.30）。
+ * 分母来源：优先用实测 CVR（预期点击出单数 = 1 / 实测 CVR）；无实测时
+ * 调用方传入讲师假设 50，并必须在 UI 打“假设 50 估算”角标（见 P0-2）。
+ * 本函数只算数，不决定分母来源——假设标注是调用方的责任。
+ * commissionRatePct: 佣金比例（百分比，如 15 表示 15%）。
+ */
+export function suggestCpcByClicksToOrder(args: {
+  price: number;
+  commissionRatePct: number;
+  clicksToOrder: number;
+}): number | null {
+  const { price, commissionRatePct, clicksToOrder } = args;
+  if (!Number.isFinite(price) || price <= 0) return null;
+  if (!Number.isFinite(commissionRatePct) || commissionRatePct <= 0) return null;
+  if (!Number.isFinite(clicksToOrder) || clicksToOrder <= 0) return null;
+  return (price * (commissionRatePct / 100)) / clicksToOrder;
+}
+
+/** P1-1 — 公式 A 的分母：实测 CVR → 预期点击出单数（1 / CVR）。CVR 无效时 null。 */
+export function clicksToOrderFromCvr(cvrF: number): number | null {
+  if (!Number.isFinite(cvrF) || cvrF <= 0 || cvrF >= 1) return null;
+  return 1 / cvrF;
+}
+
+/** P1-1 — 公式 A 默认假设分母（讲师经验：50 点击出一单，非实测）。 */
+export const ASSUMED_CLICKS_TO_ORDER = 50;
+
 /** Suggested test clicks for statistical confidence. */
 export function testBudgetClicks(cvrF: number): number | null {
   if (!Number.isFinite(cvrF) || cvrF <= 0 || cvrF >= 1) return null;

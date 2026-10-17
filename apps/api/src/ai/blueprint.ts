@@ -18,7 +18,13 @@
  */
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@adlinklab/database";
-import { AiError, chatJson } from "./llm.js";
+import {
+  AiError,
+  chatJson,
+  chatJsonAccounting,
+  chatJsonValidatedAccounting,
+  type LlmUsage,
+} from "./llm.js";
 import {
   buildTermsPrompt,
   PROMPT_VERSION,
@@ -38,6 +44,8 @@ import {
   type BrandPolicy,
   type TrafficMode,
 } from "./traffic-planner.js";
+import { estimateCostCents } from "./pricing.js";
+import { recordAiUsage } from "./usage.js";
 
 export interface BlueprintInput {
   offerName: string;
@@ -58,6 +66,10 @@ export interface BlueprintInput {
   keywordCount?: number;
   /** 用户已选的关键词（来自关键词页/手动输入）：推演优先评估它们，再补充。 */
   seedKeywords?: string[];
+  /** P1-15：节日主题 slug（只影响 RSA 文案）。 */
+  festivalTheme?: string;
+  /** P1-15：用户填写的真实最大折扣百分比；未提供时不编造。 */
+  discountPct?: number;
 }
 
 export interface BlueprintDeps {
@@ -232,11 +244,22 @@ export async function generateBlueprint(
   deps: BlueprintDeps,
   input: BlueprintInput
 ): Promise<OfferBlueprint> {
-  const chat = deps.chatJsonImpl ?? chatJson;
   const llmArgs = {
     baseUrl: deps.baseUrl,
     model: deps.model,
     apiKey: deps.apiKey,
+  };
+  // P0-6 — blueprint 内部 2–4 次 LLM 调用的 usage 在此累加，落盘时透传到
+  // AiAnalysis + AiUsageDaily（与 P0-6 记账一致）。注入替身时 usage 为 0。
+  const totalUsage: LlmUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+  let totalLatencyMs = 0;
+  let llmCalls = 0;
+  const absorb = (u: LlmUsage, latencyMs: number) => {
+    totalUsage.promptTokens += u.promptTokens;
+    totalUsage.completionTokens += u.completionTokens;
+    totalUsage.totalTokens += u.totalTokens;
+    totalLatencyMs += latencyMs;
+    llmCalls += 1;
   };
   const payout = computeBlueprintPayout(input);
   const language = input.language;
@@ -248,11 +271,13 @@ export async function generateBlueprint(
     terms.skipped = false;
     try {
       const { system, user } = buildTermsPrompt(termsText.slice(0, 12_000), language);
-      terms.result = await chatJsonValidatedShim(
-        chat,
+      const called = await chatJsonValidatedAccounting(
         { ...llmArgs, system, user },
-        validateTermsShape
+        validateTermsShape,
+        deps.chatJsonImpl
       );
+      absorb(called.usage, called.latencyMs);
+      terms.result = called.data;
     } catch (e) {
       terms.error = llmErrorMessage(e);
     }
@@ -282,13 +307,18 @@ export async function generateBlueprint(
       .filter(Boolean)
       .slice(0, 50);
     const { system, user } = buildKeywordPrompt(input.offerName, count, language, seeds);
-    const raw = (await chat({
-      ...llmArgs,
-      system:
-        system +
-        '\nReturn JSON: {"keywords":[{"keyword":"...","reason":"...","source":"user|ai"}]}',
-      user,
-    })) as {
+    const called = await chatJsonAccounting(
+      {
+        ...llmArgs,
+        system:
+          system +
+          '\nReturn JSON: {"keywords":[{"keyword":"...","reason":"...","source":"user|ai"}]}',
+        user,
+      },
+      deps.chatJsonImpl
+    );
+    absorb(called.usage, called.latencyMs);
+    const raw = called.data as {
       keywords?: Array<{ keyword?: unknown; reason?: unknown; source?: unknown }>;
     };
     keywords.items = mergeKeywordItems(seeds, raw.keywords ?? [], count, language);
@@ -312,11 +342,13 @@ export async function generateBlueprint(
           .join("\n")
           .slice(0, 12_000);
     const url = (input.offerUrl ?? "").trim() || "https://blueprint.local/offer";
-    const draft = await chatJsonValidatedShim(
-      chat,
-      { ...llmArgs, ...buildAdPlanPrompt({ url, pageText, language, copyStyle: "affiliate" }) },
-      validateAdPlanUrlDraft
+    const called = await chatJsonValidatedAccounting(
+      { ...llmArgs, ...buildAdPlanPrompt({ url, pageText, language, copyStyle: "affiliate", festivalTheme: input.festivalTheme, discountPct: input.discountPct }) },
+      validateAdPlanUrlDraft,
+      deps.chatJsonImpl
     );
+    absorb(called.usage, called.latencyMs);
+    const draft = called.data;
     adPlan.plan = finalizeAdPlan([draft], {
       planId: randomUUID(),
       tenantId: deps.tenantId,
@@ -344,13 +376,18 @@ export async function generateBlueprint(
       keywords: keywords.items.map((k) => ({ keyword: k.keyword })),
       negativeKeywords: [],
     });
-    const raw = (await chat({
-      ...llmArgs,
-      system: system + '\nReturn JSON: {"report": "<markdown report>"}',
-      user,
-    })) as { report?: unknown };
+    const raw = await chatJsonAccounting(
+      {
+        ...llmArgs,
+        system: system + '\nReturn JSON: {"report": "<markdown report>"}',
+        user,
+      },
+      deps.chatJsonImpl
+    );
+    absorb(raw.usage, raw.latencyMs);
+    const reportData = raw.data as { report?: unknown };
     traffic.report =
-      typeof raw?.report === "string" ? raw.report : JSON.stringify(raw);
+      typeof reportData?.report === "string" ? reportData.report : JSON.stringify(reportData);
     traffic.combo = profile.key;
   } catch (e) {
     traffic.error = llmErrorMessage(e);
@@ -465,8 +502,12 @@ export async function generateBlueprint(
   };
 
   // 持久化：复用 ai_analyses 历史（inputKind="blueprint"）
-  // P0-6 — model/promptVersion 已知；tokens/cost 未透传（blueprint 内部
-  // 多次 LLM 调用走本地 shim），保持 null 不编造，见跟进项。
+  // P0-6 — 内部 2–4 次 LLM 调用的 usage 已累加，透传记账（不编造）。
+  const blueprintCostCents = estimateCostCents(
+    deps.model,
+    totalUsage.promptTokens,
+    totalUsage.completionTokens
+  );
   await deps.prisma.aiAnalysis.create({
     data: {
       id: randomUUID(),
@@ -482,33 +523,26 @@ export async function generateBlueprint(
       result: JSON.parse(JSON.stringify(blueprint)) as never,
       model: deps.model,
       promptVersion: PROMPT_VERSION,
+      tokensIn: totalUsage.promptTokens,
+      tokensOut: totalUsage.completionTokens,
+      costCents: blueprintCostCents,
+      latencyMs: totalLatencyMs,
       status: "success",
     },
   });
+  // AiUsageDaily 日汇总：calls = 本次实际发起的 LLM 调用次数。
+  if (llmCalls > 0) {
+    await recordAiUsage(deps.prisma, {
+      tenantId: deps.tenantId,
+      model: deps.model,
+      tokensIn: totalUsage.promptTokens,
+      tokensOut: totalUsage.completionTokens,
+      costCents: blueprintCostCents,
+      calls: llmCalls,
+    });
+  }
 
   return blueprint;
-}
-
-/** chatJsonValidated 的轻量本地封装（保持与 routes/ai.ts 一致的错误语义）。 */
-async function chatJsonValidatedShim<T>(
-  chat: typeof chatJson,
-  args: Parameters<typeof chatJson>[0],
-  validate: (obj: unknown) => T
-): Promise<T> {
-  let raw: unknown;
-  try {
-    raw = await chat(args);
-  } catch (e) {
-    if (e instanceof AiError) throw e;
-    throw new AiError("LLM request failed");
-  }
-  try {
-    return validate(raw);
-  } catch (e) {
-    throw new AiError(
-      e instanceof Error ? `LLM response validation failed: ${e.message}` : "LLM response validation failed"
-    );
-  }
 }
 
 export interface OfferMeta {

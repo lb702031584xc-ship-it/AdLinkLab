@@ -8,6 +8,7 @@ import { useI18n } from "@/i18n/I18nProvider";
 import { coachCheckAction, type CoachFinding } from "@/lib/api/coach-actions";
 import { CoachGate, hasCoachBlock } from "@/components/coach/coach-gate";
 import { CapturePicker } from "@/components/ai/capture-picker";
+import { extractBrandName } from "@/lib/brand-extract";
 
 const inputClassName =
   "w-full rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm focus:border-signal focus:outline-none";
@@ -16,6 +17,26 @@ const labelClassName = "mb-1 block text-sm font-medium text-ink/70";
 const OFFER_STATUSES = ["ACTIVE", "PAUSED", "ARCHIVED"] as const;
 
 const OFFER_SOURCES = ["affiliate", "amazon", "cashback"] as const;
+
+/** P1-15：节日主题选项（value = slug；label 为英文节日名，中英通用）。 */
+const FESTIVAL_THEME_OPTIONS = [
+  { value: "none", label: "无节日主题" },
+  { value: "valentines", label: "Valentine's Day（情人节）" },
+  { value: "easter", label: "Easter（复活节）" },
+  { value: "mothers-day", label: "Mother's Day（母亲节）" },
+  { value: "fathers-day", label: "Father's Day（父亲节）" },
+  { value: "independence-day", label: "Independence Day（美国独立日）" },
+  { value: "back-to-school", label: "Back to School（返校季）" },
+  { value: "labor-day", label: "Labor Day（美国劳动节）" },
+  { value: "halloween", label: "Halloween（万圣节）" },
+  { value: "thanksgiving", label: "Thanksgiving（感恩节）" },
+  { value: "black-friday", label: "Black Friday（黑色星期五）" },
+  { value: "cyber-monday", label: "Cyber Monday（网络星期一）" },
+  { value: "prime-day", label: "Amazon Prime Day" },
+  { value: "prime-big-deal-days", label: "Prime Big Deal Days" },
+  { value: "christmas", label: "Christmas（圣诞节）" },
+  { value: "new-year", label: "New Year（新年）" },
+] as const;
 
 function toIsoInput(value: string): string | undefined {
   if (!value) return undefined;
@@ -42,6 +63,14 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
   const [pickedAt, setPickedAt] = useState(() => new Date().toISOString().slice(0, 10));
   const [startsAt, setStartsAt] = useState("");
   const [endsAt, setEndsAt] = useState("");
+  /* P1-2：品牌名（自动提取仅建议；用户手动改过后不再被自动提取覆盖）。 */
+  const [brandName, setBrandName] = useState("");
+  const [brandSource, setBrandSource] = useState<string | null>(null);
+  const [brandConfidence, setBrandConfidence] = useState<number | null>(null);
+  const [brandManual, setBrandManual] = useState(false);
+  const [brandExtractNote, setBrandExtractNote] = useState<string | null>(null);
+  /* P1-15：节日主题（只影响 RSA 文案，不改变盈利/条款判定）。 */
+  const [festivalTheme, setFestivalTheme] = useState("none");
   const [error, setError] = useState<string | null>(null);
   const [coachFindings, setCoachFindings] = useState<CoachFinding[]>([]);
   const { t } = useI18n();
@@ -73,6 +102,14 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
         commissionType: commissionValue.trim() !== "" ? commissionType : undefined,
         avgPrice: avgPrice.trim() !== "" && Number.isFinite(ap) ? ap : undefined,
         pickedAt: toIsoInput(pickedAt),
+        brandName: brandName.trim() || undefined,
+        brandNameSource:
+          brandName.trim() && brandSource ? brandSource : undefined,
+        brandNameConfidence:
+          brandName.trim() && brandConfidence !== null
+            ? brandConfidence
+            : undefined,
+        festivalTheme: festivalTheme !== "none" ? festivalTheme : undefined,
       });
       if (!result.ok) {
         setError(result.error);
@@ -116,6 +153,94 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
           onChange={(e) => setName(e.target.value)}
           placeholder={f.namePlaceholder}
         />
+      </div>
+      {/* P1-2：品牌名 + 自动提取（低置信度提示确认，不覆盖人工填写）。 */}
+      <div>
+        <label htmlFor="offer-brand" className={labelClassName}>
+          品牌名
+        </label>
+        <div className="flex gap-2">
+          <input
+            id="offer-brand"
+            className={inputClassName}
+            value={brandName}
+            onChange={(e) => {
+              setBrandName(e.target.value);
+              setBrandManual(true);
+              setBrandSource("manual");
+              setBrandConfidence(1);
+              setBrandExtractNote(null);
+            }}
+            placeholder="如 Anker（用于品牌词/流量门检测）"
+          />
+          <button
+            type="button"
+            className="shrink-0 rounded-lg border border-ink/15 px-3 py-2 text-sm text-ink/70 hover:bg-ink/5"
+            onClick={() => {
+              if (brandManual && brandName.trim()) {
+                setBrandExtractNote("已手动填写品牌名，自动提取不会覆盖。");
+                return;
+              }
+              const r = extractBrandName({ title: name, url: destinationUrl });
+              if (!r) {
+                setBrandExtractNote("无法从 Offer 名称/URL 提取品牌名，请手动填写。");
+                return;
+              }
+              setBrandName(r.brandName);
+              setBrandSource(r.source);
+              setBrandConfidence(r.confidence);
+              setBrandExtractNote(
+                r.confidence < 0.6
+                  ? "置信度较低，请确认品牌名是否正确。"
+                  : null
+              );
+            }}
+          >
+            自动提取
+          </button>
+        </div>
+        {brandSource ? (
+          <p className="mt-1 text-xs text-ink/50">
+            来源：
+            {brandSource === "manual"
+              ? "人工填写"
+              : brandSource === "auto_extracted"
+                ? "自动提取"
+                : "域名回退"}
+            {brandConfidence !== null
+              ? ` · 置信度 ${Math.round(brandConfidence * 100)}%`
+              : null}
+          </p>
+        ) : null}
+        {brandConfidence !== null && brandConfidence < 0.6 ? (
+          <p className="mt-1 text-xs text-amber-700">
+            ⚠️ 置信度低于 60%，请确认品牌名是否正确。
+          </p>
+        ) : null}
+        {brandExtractNote ? (
+          <p className="mt-1 text-xs text-ink/55">{brandExtractNote}</p>
+        ) : null}
+      </div>
+      {/* P1-15：节日主题（只影响 RSA 文案）。 */}
+      <div>
+        <label htmlFor="offer-festival" className={labelClassName}>
+          节日主题
+        </label>
+        <select
+          id="offer-festival"
+          className={inputClassName}
+          value={festivalTheme}
+          onChange={(e) => setFestivalTheme(e.target.value)}
+        >
+          {FESTIVAL_THEME_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <p className="mt-1 text-xs text-ink/50">
+          选节日后，生成 RSA 时会用节日 urgency 话术；节日不改变盈利/条款判定。折扣必须来自你填写的真实优惠，不编造。
+        </p>
       </div>
       <div>
         <label htmlFor="offer-network" className={labelClassName}>

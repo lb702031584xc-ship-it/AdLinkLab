@@ -81,6 +81,10 @@ export async function createOfferAction(input: {
   commissionType?: string;
   avgPrice?: number;
   pickedAt?: string;
+  brandName?: string;
+  brandNameSource?: string;
+  brandNameConfidence?: number;
+  festivalTheme?: string;
 }) {
   return attempt(() => entityApi.offers.create(input), ["/offers"]);
 }

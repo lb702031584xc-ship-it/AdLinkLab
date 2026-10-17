@@ -158,6 +158,33 @@ const DRAFT_JSON_SPEC = `{
 "path2": "<display path segment or null>"
 }`;
 
+/** P1-15：节日主题 slug → 展示名（prompt 用）。只影响文案，不改变判定。 */
+export const FESTIVAL_THEME_LABELS: Record<string, string> = {
+  valentines: "Valentine's Day",
+  easter: "Easter",
+  "mothers-day": "Mother's Day",
+  "fathers-day": "Father's Day",
+  "independence-day": "Independence Day",
+  "back-to-school": "Back to School",
+  "labor-day": "Labor Day",
+  halloween: "Halloween",
+  thanksgiving: "Thanksgiving",
+  "black-friday": "Black Friday",
+  "cyber-monday": "Cyber Monday",
+  "prime-day": "Amazon Prime Day",
+  "prime-big-deal-days": "Prime Big Deal Days",
+  christmas: "Christmas",
+  "new-year": "New Year",
+};
+
+/** 规范化节日主题输入：未知值 → undefined（不渲染节日段落）。 */
+export function normalizeFestivalThemeInput(input: unknown): string | undefined {
+  if (typeof input !== "string") return undefined;
+  const v = input.trim().toLowerCase();
+  if (!v || v === "none") return undefined;
+  return FESTIVAL_THEME_LABELS[v] ? v : undefined;
+}
+
 export interface AdPlanPromptInput {
 url: string;
 pageText: string;
@@ -170,6 +197,13 @@ referenceAds?: SerpReferenceAd[];
 serpPageText?: string;
 /** 用户提供的当前优惠（如 "Up to 30% Off"）——真实来源，写进 RSA；没有就不编造。 */
 promotion?: string;
+/** P1-15：节日主题 slug（如 black-friday）。只影响文案，不改变判定。 */
+festivalTheme?: string;
+/**
+ * P1-15：用户填写的真实最大折扣百分比（如 81 = 81% off）。提供时 RSA
+ * 必须体现该折扣；未提供时绝不编造折扣数字。
+ */
+discountPct?: number;
 }
 
 /** 规范化 copyStyle 输入，非法值回退到 affiliate（安全口吻）。 */
@@ -229,6 +263,35 @@ promotionSection.push(
 ""
 );
 }
+// P1-15：节日主题文案（补充，不替换现有生成）。
+// 节日只影响文案：用节日 urgency 话术 + 促销钩子；折扣必须来自用户
+// 填写的真实值（discountPct），没有就不编造折扣数字。
+const festivalSection: string[] = [];
+const festivalTheme = normalizeFestivalThemeInput(input.festivalTheme);
+const festivalLabel = festivalTheme
+? FESTIVAL_THEME_LABELS[festivalTheme]
+: undefined;
+const discountPct =
+typeof input.discountPct === "number" &&
+Number.isFinite(input.discountPct) &&
+input.discountPct > 0 &&
+input.discountPct < 100
+? Math.round(input.discountPct)
+: undefined;
+if (festivalLabel) {
+festivalSection.push(
+`Festival theme (chosen by the user): ${festivalLabel}.`,
+"- Use festival urgency wording in headlines/descriptions (e.g. limited-time festival sale, ends soon) — but ONLY festival wording, never fake deadlines or countdowns the offer does not state.",
+...(discountPct !== undefined
+? [
+`- The user provided a REAL maximum discount of ${discountPct}% off for this festival. It MUST appear in at least 2 headlines and 1 description (e.g. "Up to ${discountPct}% Off"). Do NOT change the number; do NOT invent any other discount.`,
+]
+: [
+"- No discount was provided for this festival: do NOT invent a discount percentage. Use festival urgency wording only.",
+]),
+""
+);
+}
 // 专家模式参考材料：结构化成功广告列表，和/或插件抓取的 SERP 原文。
 // 两者都没有时不渲染参考段落（专家规则仍生效）。
 const referenceSection: string[] = [];
@@ -276,6 +339,7 @@ DRAFT_JSON_SPEC,
 "- Promotional hooks: scan the page text for REAL promotional signals (discount %, sale price vs list price, coupon code, free-shipping threshold, warranty, star rating / review count) and use the strongest 1-2 in headlines/descriptions. NEVER invent a discount, price, or percentage the page does not state and the user did not provide. If the page states both a sale price and a list price, you may compute the discount % from those two real numbers.",
 ...styleRules,
 ...promotionSection,
+...festivalSection,
 ...referenceSection,
 ].join("\n");
 

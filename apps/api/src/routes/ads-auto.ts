@@ -42,6 +42,7 @@ import {
   createPlanStore,
   finalizeAdPlan,
   normalizeCopyStyle,
+  normalizeFestivalThemeInput,
   normalizeUserKeywords,
   validateAdPlanUrlDraft,
   type AdPlan,
@@ -199,6 +200,10 @@ export async function registerAdsAutoRoutes(
       fxRate?: unknown;
       /** 可选：用户提供的当前优惠（如 "Up to 30% Off"），写进 RSA；非 string 忽略。 */
       promotion?: unknown;
+      /** P1-15：节日主题 slug（如 black-friday）；未提供时回退到 Offer 的 festivalTheme。 */
+      festivalTheme?: unknown;
+      /** P1-15：用户填写的真实最大折扣百分比（如 81）；未提供时不编造。 */
+      discountPct?: unknown;
     };
   }>("/api/v1/ads/auto-create", async (request) => {
     const info = await requireSession(deps, request);
@@ -244,6 +249,25 @@ export async function registerAdsAutoRoutes(
       typeof body.promotion === "string" && body.promotion.trim()
         ? body.promotion.trim().slice(0, 200)
         : undefined;
+    // P1-15：节日主题（请求参数优先；未提供时回退到 Offer 的 festivalTheme）。
+    // 折扣必须来自用户填写的真实值，未提供时不编造。
+    let festivalTheme = normalizeFestivalThemeInput(body.festivalTheme);
+    let discountPct: number | undefined;
+    if (
+      typeof body.discountPct === "number" &&
+      Number.isFinite(body.discountPct) &&
+      body.discountPct > 0 &&
+      body.discountPct < 100
+    ) {
+      discountPct = Math.round(body.discountPct);
+    }
+    if (!festivalTheme && offerId) {
+      const offerRow = await prisma.offer.findFirst({
+        where: { id: offerId, tenantId: info.tenantId },
+        select: { festivalTheme: true },
+      });
+      festivalTheme = normalizeFestivalThemeInput(offerRow?.festivalTheme);
+    }
 
     const settings = await readLlmSettings(prisma);
     if (!(settings.baseUrl && settings.model && settings.apiKeyEnc)) {
@@ -352,6 +376,9 @@ export async function registerAdsAutoRoutes(
               serpPageText: serpPageText || undefined,
               // 用户提供的当前优惠（没提供时不渲染 promotion 段落）。
               promotion,
+              // P1-15：节日主题 + 真实折扣（只影响文案）。
+              festivalTheme,
+              discountPct,
             }),
           },
           validateAdPlanUrlDraft,

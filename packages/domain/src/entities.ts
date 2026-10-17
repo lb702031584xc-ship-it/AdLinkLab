@@ -131,6 +131,14 @@ export interface Offer extends Timestamps, SoftDeleteFields {
   avgPrice?: number;
   /** 挑选日期（选品时记录） */
   pickedAt?: Date;
+  /** P1-2：品牌名（自动提取仅建议，人工填写优先） */
+  brandName?: string;
+  /** P1-2：品牌名来源 manual | auto_extracted | domain_fallback */
+  brandNameSource?: string;
+  /** P1-2：品牌提取置信度 0-1；<0.6 需人工确认 */
+  brandNameConfidence?: number;
+  /** P1-15：节日主题（只影响 RSA 文案，不改变判定） */
+  festivalTheme?: string;
   /** Idempotency for create — scope e.g. OFFER_CREATE */
   idempotencyScope?: string;
   idempotencyKey?: string;
