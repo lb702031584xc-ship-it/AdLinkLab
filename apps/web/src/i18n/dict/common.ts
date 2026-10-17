@@ -59,6 +59,7 @@ export const zh = {
       cashbackOffers: "返利 Offer",
       cashbackRotations: "轮换配置",
       rotationScript: "直链轮换 Script",
+      clickMonitor: "点击监测",
     },
   },
   brand: {
@@ -174,6 +175,7 @@ export const en: typeof zh = {
       cashbackOffers: "Cashback Offers",
       cashbackRotations: "Rotation Settings",
       rotationScript: "Direct-Link Rotation Script",
+      clickMonitor: "Click Monitor",
     },
   },
   brand: {

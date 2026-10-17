@@ -144,7 +144,9 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
               phase: ph.creative,
             },
             { href: "/cashback/rotations", label: ni.cashbackRotations, phase: ph.traffic },
+            { href: "/ads/auto-create", label: ni.launchAds, phase: ph.traffic },
             { href: "/ads/rotation-script", label: ni.rotationScript, phase: ph.traffic },
+            { href: "/ads/click-monitor", label: ni.clickMonitor, phase: ph.traffic },
             { href: "/campaigns", label: t.common.nav.campaigns, phase: ph.traffic },
             { href: "/monitoring", label: ni.trafficMonitoring, phase: ph.monitor },
             {

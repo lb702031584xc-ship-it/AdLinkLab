@@ -218,3 +218,17 @@ export async function getRotationScript(
     }
   );
 }
+
+/** 生成点击监测 Script：累计点击达到上限时自动暂停广告。 */
+export async function getClickMonitorScript(
+  label: string,
+  maxClicks: number
+): Promise<{ fileName: string; templateVersion: string; source: string }> {
+  return apiFetch<{ fileName: string; templateVersion: string; source: string }>(
+    "/api/v1/ads/click-monitor-script",
+    {
+      method: "POST",
+      body: JSON.stringify({ label, maxClicks }),
+    }
+  );
+}

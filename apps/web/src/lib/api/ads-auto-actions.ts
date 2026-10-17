@@ -7,6 +7,7 @@
 import { EntityApiError } from "./entities-config";
 import {
   confirmAdPlan,
+  getClickMonitorScript,
   getCopyPackText,
   getCreateCampaignScript,
   getRotationScript,
@@ -88,5 +89,18 @@ export async function getRotationScriptAction(
     return { ok: true, data: await getRotationScript(label) };
   } catch (e) {
     return mapError(e, "生成轮换 Script 失败，请稍后重试。");
+  }
+}
+
+export async function getClickMonitorScriptAction(
+  label: string,
+  maxClicks: number
+): Promise<
+  AdsAutoActionResult<{ fileName: string; templateVersion: string; source: string }>
+> {
+  try {
+    return { ok: true, data: await getClickMonitorScript(label, maxClicks) };
+  } catch (e) {
+    return mapError(e, "生成点击监测 Script 失败，请稍后重试。");
   }
 }

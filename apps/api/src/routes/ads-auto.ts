@@ -66,6 +66,11 @@ import {
   validateRotationScriptInput,
   ROTATION_SCRIPT_VERSION,
 } from "../services/script-rotation.js";
+import {
+  buildClickMonitorScript,
+  validateClickMonitorScriptInput,
+  CLICK_MONITOR_SCRIPT_VERSION,
+} from "../services/script-click-monitor.js";
 
 export interface AdsAutoRouteDeps {
   prisma: PrismaClient;
@@ -698,6 +703,35 @@ export async function registerAdsAutoRoutes(
       fileName: `adlinklab-rotation-${safeLabel}.js`,
       templateVersion: ROTATION_SCRIPT_VERSION,
       source: buildRotationScript({ label: safeLabel }),
+    };
+  });
+
+  /**
+   * 点击次数监测 Script 生成。
+   * 输入标签名 + 累计点击上限，返回可直接粘贴到 Google Ads 脚本的 JS 代码。
+   * 累计点击达到上限的广告会被暂停；不传上限则不需要本脚本（广告一直运行）。
+   */
+  app.post<{
+    Body: { label?: unknown; maxClicks?: unknown };
+  }>("/api/v1/ads/click-monitor-script", async (request) => {
+    await requireSession(deps, request);
+    const label =
+      typeof request.body?.label === "string"
+        ? request.body.label.trim()
+        : "";
+    const maxClicks = request.body?.maxClicks;
+    const errors = validateClickMonitorScriptInput({ label, maxClicks });
+    if (errors.length > 0) {
+      throw new ValidationError(errors.join("; "));
+    }
+    const safeLabel = label.replace(/["\\]/g, "");
+    return {
+      fileName: `adlinklab-click-monitor-${safeLabel}.js`,
+      templateVersion: CLICK_MONITOR_SCRIPT_VERSION,
+      source: buildClickMonitorScript({
+        label: safeLabel,
+        maxClicks: maxClicks as number,
+      }),
     };
   });
 }
