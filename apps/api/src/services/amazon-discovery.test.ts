@@ -38,6 +38,8 @@ const MOCK_THRESHOLDS: TrafficThresholds = {
   officialSiteMonthlyVisits: 50000,
   brandInterest: 30,
   keywordInterest: 30,
+  organicTrafficMin: 1000,
+  paidTrafficWarnRatio: 0.05,
 };
 
 const okGate = (asin: string): TrafficGateResult => ({

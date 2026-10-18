@@ -1552,14 +1552,22 @@ export function WorksheetClient({
   if (trafficGate === null || trafficGate.passed === null) {
     vetoUnknowns.push(w.vetoBanner.trafficGateUnknown);
   }
+  /* 流量门 caution 档（有数据支撑的警告，非否决）：单独琥珀条展示，
+     不进红条（不 kill），优先级低于一票否决、高于"未确认项"。 */
+  const cautionReasons: string[] = [];
+  if (trafficGate?.caution) cautionReasons.push(trafficGate.caution);
 
   const toggleStep = (n: number) => setOpenStep((o) => (o === n ? 0 : n));
 
   /* P0-1：流量门检测（第 ① 步内）。brand 取 Offer 名；domain 取 Offer URL 的
-     hostname；keywords 取需求验证里已填的 SEMrush 关键词（前 5 个）。 */
+     hostname；keywords 取需求验证里已填的 SEMrush 关键词（前 5 个）。
+     extra 可带手动值：品牌名 / 手动月访问量 / SEMrush 域名概览三字段。 */
   const runTrafficGateCheck = (extra?: {
     brand?: string;
     manualMonthlyVisits?: number;
+    organicTraffic?: number;
+    paidTraffic?: number;
+    paidKeywords?: number;
   }) => {
     const seq = ++gateSeq.current;
     setTrafficGateLoading(true);
@@ -1583,6 +1591,9 @@ export function WorksheetClient({
       domain,
       keywords,
       manualMonthlyVisits: extra?.manualMonthlyVisits,
+      organicTraffic: extra?.organicTraffic,
+      paidTraffic: extra?.paidTraffic,
+      paidKeywords: extra?.paidKeywords,
     }).then((g) => {
       if (seq !== gateSeq.current) return;
       setTrafficGateLoading(false);
@@ -1615,6 +1626,16 @@ export function WorksheetClient({
           <p className="mt-1 text-xs text-red-700">{w.vetoBanner.caliber}</p>
           <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-red-800">
             {vetoReasons.map((r, i) => (
+              <li key={i}>{r}</li>
+            ))}
+          </ul>
+        </div>
+      ) : cautionReasons.length > 0 ? (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 p-5" role="alert">
+          <p className="text-base font-bold text-amber-800">{w.vetoBanner.titleCaution}</p>
+          <p className="mt-1 text-xs text-amber-700">{w.vetoBanner.caliber}</p>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-amber-800">
+            {cautionReasons.map((r, i) => (
               <li key={i}>{r}</li>
             ))}
           </ul>
@@ -1902,19 +1923,11 @@ export function WorksheetClient({
         open={openStep === 1}
         onToggle={() => toggleStep(1)}
       >
-        <DemandGateStep
-          onChange={setDemandGateState}
-          initialValues={demandGateState?.inputs}
-          offerId={offer?.id ?? null}
-          offerName={offer?.name ?? ""}
-          offerDescription={offer ? `${offer.name} ${offer.network}` : ""}
-          isAmazon={offer?.source === "amazon"}
-          key={offer?.id ?? "manual"}
-        />
-
-        {/* P0-1：流量门检测（与需求验证同属第 ① 步“有没有量”，但判定口径不同：
-            流量门看官网/品牌/关键词热度三信号，unknown 不判 fail）。 */}
-        <div className="mt-5 border-t border-ink/10 pt-4">
+        {/* P0-1：流量门检测（第 ① 步最顶部：先看到流量门，再看关键词；
+            与需求验证同属"有没有量"，但判定口径不同：
+            流量门看官网/品牌/关键词热度三信号，unknown 不判 fail）。
+            手动点检测（配额考虑，不自动跑）。 */}
+        <div className="mb-5 border-b border-ink/10 pb-4">
           {!trafficGate && !trafficGateLoading ? (
             <div>
               <button
@@ -1940,6 +1953,16 @@ export function WorksheetClient({
             />
           ) : null}
         </div>
+
+        <DemandGateStep
+          onChange={setDemandGateState}
+          initialValues={demandGateState?.inputs}
+          offerId={offer?.id ?? null}
+          offerName={offer?.name ?? ""}
+          offerDescription={offer ? `${offer.name} ${offer.network}` : ""}
+          isAmazon={offer?.source === "amazon"}
+          key={offer?.id ?? "manual"}
+        />
       </StepCard>
 
       {/* Step ② terms */}

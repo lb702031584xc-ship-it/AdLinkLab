@@ -231,6 +231,7 @@ async function attachTrafficGates(
             "流量门评估异常：" + (e instanceof Error ? e.message : String(e)),
           officialSite: null,
           signals: [],
+          caution: null,
         };
       }
     }

@@ -7,7 +7,7 @@ import {
   getTrafficThresholds,
   saveTrafficThresholds,
 } from "./thresholds.js";
-import { DEFAULT_TRAFFIC_THRESHOLDS } from "./types.js";
+import { DEFAULT_TRAFFIC_THRESHOLDS, type TrafficThresholds } from "./types.js";
 
 function makeFakePrisma(initial: Record<string, string> = {}) {
   const store = new Map<string, string>(Object.entries(initial));
@@ -61,6 +61,8 @@ describe("getTrafficThresholds", () => {
       officialSiteMonthlyVisits: 50000,
       brandInterest: 40,
       keywordInterest: 25,
+      organicTrafficMin: 1000,
+      paidTrafficWarnRatio: 0.05,
     });
   });
 
@@ -101,11 +103,15 @@ describe("saveTrafficThresholds", () => {
       officialSiteMonthlyVisits: 100000,
       brandInterest: 30,
       keywordInterest: 20,
+      organicTrafficMin: 2000,
+      paidTrafficWarnRatio: 0.1,
     });
     expect(saved).toEqual({
       officialSiteMonthlyVisits: 100000,
       brandInterest: 30,
       keywordInterest: 20,
+      organicTrafficMin: 2000,
+      paidTrafficWarnRatio: 0.1,
     });
     expect(aiSetting.upsert).toHaveBeenCalled();
     expect(JSON.parse(store.get("traffic.thresholds") ?? "")).toEqual(saved);
@@ -113,12 +119,17 @@ describe("saveTrafficThresholds", () => {
 
   it("非法阈值抛错且不写入", async () => {
     const { prisma, store, aiSetting } = makeFakePrisma();
-    const badCases = [
-      { officialSiteMonthlyVisits: 0, brandInterest: 25, keywordInterest: 25 },
-      { officialSiteMonthlyVisits: -1, brandInterest: 25, keywordInterest: 25 },
-      { officialSiteMonthlyVisits: 50000, brandInterest: 0, keywordInterest: 25 },
-      { officialSiteMonthlyVisits: 50000, brandInterest: 101, keywordInterest: 25 },
-      { officialSiteMonthlyVisits: 50000, brandInterest: 25, keywordInterest: NaN },
+    const badCases: TrafficThresholds[] = [
+      { officialSiteMonthlyVisits: 0, brandInterest: 25, keywordInterest: 25, organicTrafficMin: 1000, paidTrafficWarnRatio: 0.05 },
+      { officialSiteMonthlyVisits: -1, brandInterest: 25, keywordInterest: 25, organicTrafficMin: 1000, paidTrafficWarnRatio: 0.05 },
+      { officialSiteMonthlyVisits: 50000, brandInterest: 0, keywordInterest: 25, organicTrafficMin: 1000, paidTrafficWarnRatio: 0.05 },
+      { officialSiteMonthlyVisits: 50000, brandInterest: 101, keywordInterest: 25, organicTrafficMin: 1000, paidTrafficWarnRatio: 0.05 },
+      { officialSiteMonthlyVisits: 50000, brandInterest: 25, keywordInterest: NaN, organicTrafficMin: 1000, paidTrafficWarnRatio: 0.05 },
+      { officialSiteMonthlyVisits: 50000, brandInterest: 25, keywordInterest: 25, organicTrafficMin: 0, paidTrafficWarnRatio: 0.05 },
+      { officialSiteMonthlyVisits: 50000, brandInterest: 25, keywordInterest: 25, organicTrafficMin: -100, paidTrafficWarnRatio: 0.05 },
+      { officialSiteMonthlyVisits: 50000, brandInterest: 25, keywordInterest: 25, organicTrafficMin: 1000, paidTrafficWarnRatio: 0 },
+      { officialSiteMonthlyVisits: 50000, brandInterest: 25, keywordInterest: 25, organicTrafficMin: 1000, paidTrafficWarnRatio: 1 },
+      { officialSiteMonthlyVisits: 50000, brandInterest: 25, keywordInterest: 25, organicTrafficMin: 1000, paidTrafficWarnRatio: 1.5 },
     ];
     for (const t of badCases) {
       await expect(saveTrafficThresholds(prisma, t)).rejects.toThrow();

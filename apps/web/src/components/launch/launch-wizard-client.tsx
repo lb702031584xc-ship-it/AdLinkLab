@@ -12,7 +12,7 @@ import type { LaunchDict } from "@/i18n/dict/launch";
 import type { Offer } from "@/lib/api/entities";
 import type { AiAnalysis } from "@/lib/api/ai";
 import type { TrafficGate } from "@/lib/api/amazon-types";
-import { TrafficGateCard } from "@/components/traffic/traffic-gate-card";
+import { TrafficGateCard, type TrafficGateRecheckInput } from "@/components/traffic/traffic-gate-card";
 import type { LanderTemplate } from "@/lib/api/lander";
 import type { AdPlan } from "@/lib/api/ads-auto";
 import type {
@@ -128,8 +128,8 @@ export function LaunchWizardClient({ dict: d, offers, initialChecklists, lang, i
     };
   }, [step, analysisId, analyses, activeAnalysis?.merchant, activeOffer?.name]);
 
-  /** 流量门手动区"重新检测"：品牌名/手动月访问量至少提供一个。 */
-  function recheckGate(input: { brand?: string; manualMonthlyVisits?: number }) {
+  /** 流量门手动区"重新检测"：品牌名/手动月访问量/SEMrush 三字段，至少提供一个。 */
+  function recheckGate(input: TrafficGateRecheckInput) {
     const base = lastGateInput.current;
     let alive = true;
     setGateLoading(true);
@@ -137,6 +137,9 @@ export function LaunchWizardClient({ dict: d, offers, initialChecklists, lang, i
       brand: input.brand || base.brand,
       keywords: base.keywords,
       manualMonthlyVisits: input.manualMonthlyVisits,
+      organicTraffic: input.organicTraffic,
+      paidTraffic: input.paidTraffic,
+      paidKeywords: input.paidKeywords,
     }).then((g) => {
       if (!alive) return;
       setGateLoading(false);
@@ -527,17 +530,16 @@ export function LaunchWizardClient({ dict: d, offers, initialChecklists, lang, i
               </select>
             </div>
           )}
-          {analyses.length > 0 && (
-            <div className="mt-4">
-              <TrafficGateCard
-                gate={gate}
-                loading={gateLoading}
-                dict={d.trafficGate}
-                onRecheck={recheckGate}
-                recheckBusy={gateLoading}
-              />
-            </div>
-          )}
+          {/* 流量门卡片始终渲染：无历史分析记录时显示"尚未检测"空状态 + 检测按钮，不隐藏。 */}
+          <div className="mt-4">
+            <TrafficGateCard
+              gate={gate}
+              loading={gateLoading}
+              dict={d.trafficGate}
+              onRecheck={recheckGate}
+              recheckBusy={gateLoading}
+            />
+          </div>
           {activeAnalysis?.analysis && (
             <dl className="mt-4 grid grid-cols-2 gap-2 text-sm md:grid-cols-4">
               <div className="rounded-lg bg-ink/5 p-3">

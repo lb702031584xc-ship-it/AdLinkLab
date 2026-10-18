@@ -21,6 +21,12 @@ export interface TrafficGateInput {
   geo?: string;
   /** 用户手动输入的月访问量（正整数）；后端以它为准判定 */
   manualMonthlyVisits?: number;
+  /** SEMrush 域名概览手动值：自然流量（正整数） */
+  organicTraffic?: number;
+  /** SEMrush 域名概览手动值：付费流量（非负整数，0 允许） */
+  paidTraffic?: number;
+  /** SEMrush 域名概览手动值：付费关键词数（非负整数，0 允许） */
+  paidKeywords?: number;
 }
 
 export type TrafficGateActionResult<T> =

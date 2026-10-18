@@ -38,6 +38,8 @@ const THRESHOLDS: TrafficThresholds = {
   officialSiteMonthlyVisits: 50000,
   brandInterest: 25,
   keywordInterest: 25,
+  organicTrafficMin: 1000,
+  paidTrafficWarnRatio: 0.05,
 };
 
 const fakePrisma = {} as unknown as PrismaClient;
@@ -319,6 +321,162 @@ describe("evaluateTrafficGate", () => {
     await expect(
       evaluateTrafficGate(baseInput())
     ).resolves.toBeDefined();
+  });
+
+  it("付费为零规则：自然流量 2200 + 付费 0 → fail（直接 PK）", async () => {
+    const res = await evaluateTrafficGate(
+      baseInput({
+        manualMonthlyVisits: 80000,
+        organicTraffic: 2200,
+        paidTraffic: 0,
+        paidKeywords: 0,
+      })
+    );
+    expect(res.passed).toBe(false);
+    expect(res.reason).toContain("直接 PK");
+    expect(res.reason).toContain("付费流量为 0");
+    expect(res.reason).toContain("2,200");
+    const sig = res.signals.find((s) =>
+      s.label.includes("付费流量为零检查")
+    );
+    expect(sig).toMatchObject({ passed: false, threshold: 1000 });
+  });
+
+  it("付费为零规则：自然流量 2200 + 付费 100 → 不触发（有人在投）", async () => {
+    const res = await evaluateTrafficGate(
+      baseInput({
+        manualMonthlyVisits: 80000,
+        organicTraffic: 2200,
+        paidTraffic: 100,
+      })
+    );
+    expect(res.passed).toBe(true);
+    const sig = res.signals.find((s) =>
+      s.label.includes("付费流量为零检查")
+    );
+    expect(sig).toMatchObject({ passed: true });
+  });
+
+  it("付费为零规则：organic 未知 + 付费 0 → 不触发（绝不因没数据误杀）", async () => {
+    const res = await evaluateTrafficGate(
+      baseInput({ manualMonthlyVisits: 80000, paidTraffic: 0 })
+    );
+    expect(res.passed).toBe(true);
+    expect(
+      res.signals.find((s) => s.label.includes("付费流量为零检查"))
+    ).toBeUndefined();
+    expect(res.reason).not.toContain("直接 PK");
+  });
+
+  it("付费为零规则：自然流量 500（低于阈值）+ 付费 0 → 不触发", async () => {
+    const res = await evaluateTrafficGate(
+      baseInput({
+        manualMonthlyVisits: 80000,
+        organicTraffic: 500,
+        paidTraffic: 0,
+      })
+    );
+    expect(res.passed).toBe(true);
+    expect(
+      res.signals.find((s) => s.label.includes("付费流量为零检查"))
+    ).toBeUndefined();
+  });
+
+  it("付费为零规则：自然流量达标但付费未知 → 不加信号（不判 fail）", async () => {
+    const res = await evaluateTrafficGate(
+      baseInput({ manualMonthlyVisits: 80000, organicTraffic: 2200 })
+    );
+    expect(res.passed).toBe(true);
+    expect(
+      res.signals.find((s) => s.label.includes("付费流量为零检查"))
+    ).toBeUndefined();
+  });
+
+  it("付费为零规则：自定义阈值 organicTrafficMin 生效", async () => {
+    const res = await evaluateTrafficGate(
+      baseInput({
+        manualMonthlyVisits: 80000,
+        organicTraffic: 2200,
+        paidTraffic: 0,
+        thresholds: { ...THRESHOLDS, organicTrafficMin: 5000 },
+      })
+    );
+    expect(res.passed).toBe(true);
+    expect(
+      res.signals.find((s) => s.label.includes("付费流量为零检查"))
+    ).toBeUndefined();
+  });
+
+  it("caution 档：自然流量 2200 + 付费 80（<5%）→ passed 但 caution（不 kill）", async () => {
+    const res = await evaluateTrafficGate(
+      baseInput({
+        manualMonthlyVisits: 80000,
+        organicTraffic: 2200,
+        paidTraffic: 80,
+      })
+    );
+    expect(res.passed).toBe(true);
+    expect(res.caution).toContain("谨慎测试");
+    expect(res.caution).toContain("小预算");
+    expect(res.caution).toContain("2,200");
+    expect(res.caution).toContain("80");
+    // 判定依据说明（中英）要带上
+    expect(res.caution).toContain("clickstream");
+    const sig = res.signals.find((s) =>
+      s.label.includes("付费流量为零检查")
+    );
+    expect(sig).toMatchObject({ passed: true });
+  });
+
+  it("caution 档：付费恰好 = 5% 时不触发（严格小于才警告）", async () => {
+    const res = await evaluateTrafficGate(
+      baseInput({
+        manualMonthlyVisits: 80000,
+        organicTraffic: 2000,
+        paidTraffic: 100,
+      })
+    );
+    expect(res.passed).toBe(true);
+    expect(res.caution).toBeNull();
+  });
+
+  it("caution 档：付费充足（≥5%）→ 无警告", async () => {
+    const res = await evaluateTrafficGate(
+      baseInput({
+        manualMonthlyVisits: 80000,
+        organicTraffic: 2200,
+        paidTraffic: 500,
+      })
+    );
+    expect(res.passed).toBe(true);
+    expect(res.caution).toBeNull();
+  });
+
+  it("caution 档：自定义比例阈值生效", async () => {
+    const res = await evaluateTrafficGate(
+      baseInput({
+        manualMonthlyVisits: 80000,
+        organicTraffic: 2200,
+        paidTraffic: 150,
+        thresholds: { ...THRESHOLDS, paidTrafficWarnRatio: 0.1 },
+      })
+    );
+    expect(res.passed).toBe(true);
+    expect(res.caution).toContain("谨慎测试");
+    expect(res.caution).toContain("10%");
+  });
+
+  it("kill 档 reason 带判定依据说明（中英）", async () => {
+    const res = await evaluateTrafficGate(
+      baseInput({
+        manualMonthlyVisits: 80000,
+        organicTraffic: 2200,
+        paidTraffic: 0,
+      })
+    );
+    expect(res.passed).toBe(false);
+    expect(res.reason).toContain("clickstream");
+    expect(res.reason).toContain("购买意图");
   });
 });
 

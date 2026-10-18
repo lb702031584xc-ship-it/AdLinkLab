@@ -27,6 +27,8 @@ const THRESHOLDS: TrafficThresholds = {
   officialSiteMonthlyVisits: 50000,
   brandInterest: 25,
   keywordInterest: 25,
+  organicTrafficMin: 1000,
+  paidTrafficWarnRatio: 0.05,
 };
 
 const CANNED_RESULT = {

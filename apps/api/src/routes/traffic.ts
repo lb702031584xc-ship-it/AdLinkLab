@@ -74,7 +74,7 @@ const num = (v: unknown, name: string): number | undefined => {
   return n;
 };
 
-/** 校验 PUT body：各字段可选，提供时 officialSiteMonthlyVisits 为正数、heat 类 0-100 */
+/** 校验 PUT body：各字段可选，提供时 officialSiteMonthlyVisits/organicTrafficMin 为正数、heat 类 0-100 */
 function validateThresholdPatch(body: unknown): Partial<TrafficThresholds> {
   const o = (body ?? {}) as Record<string, unknown>;
   const patch: Partial<TrafficThresholds> = {};
@@ -85,6 +85,22 @@ function validateThresholdPatch(body: unknown): Partial<TrafficThresholds> {
       throw new ValidationError("officialSiteMonthlyVisits 必须为正数");
     }
     patch.officialSiteMonthlyVisits = visits;
+  }
+
+  const organicMin = num(o.organicTrafficMin, "organicTrafficMin");
+  if (organicMin !== undefined) {
+    if (organicMin <= 0) {
+      throw new ValidationError("organicTrafficMin 必须为正数");
+    }
+    patch.organicTrafficMin = organicMin;
+  }
+
+  const warnRatio = num(o.paidTrafficWarnRatio, "paidTrafficWarnRatio");
+  if (warnRatio !== undefined) {
+    if (warnRatio <= 0 || warnRatio >= 1) {
+      throw new ValidationError("paidTrafficWarnRatio 必须在 (0, 1) 之间");
+    }
+    patch.paidTrafficWarnRatio = warnRatio;
   }
 
   for (const name of ["brandInterest", "keywordInterest"] as const) {
@@ -111,6 +127,9 @@ function validateGateInput(body: unknown): {
   keywords: string[];
   geo: string;
   manualMonthlyVisits: number | null;
+  organicTraffic: number | null;
+  paidTraffic: number | null;
+  paidKeywords: number | null;
 } {
   const o = (body ?? {}) as Record<string, unknown>;
   const optString = (v: unknown, name: string): string | null => {
@@ -155,7 +174,30 @@ function validateGateInput(body: unknown): {
   if (!brand && !title && !domain && keywords.length === 0 && manualMonthlyVisits === null) {
     throw new ValidationError("brand、title、domain、keywords、manualMonthlyVisits 至少提供一个");
   }
-  return { brand, title, domain, keywords, geo: optString(o.geo, "geo") ?? "US", manualMonthlyVisits };
+
+  // SEMrush 域名概览手动值：organicTraffic 正整数；paidTraffic/paidKeywords 非负整数（0 允许）。
+  // 非法值直接 400；缺失则为 null（付费为零规则不触发，绝不误杀）。
+  const optPosInt = (v: unknown, name: string): number | null => {
+    if (v === undefined || v === null || v === "") return null;
+    const n = Number(v);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0 || n > 1e12) {
+      throw new ValidationError(`${name} 必须是 1~1000000000000 的正整数`);
+    }
+    return n;
+  };
+  const optNonNegInt = (v: unknown, name: string): number | null => {
+    if (v === undefined || v === null || v === "") return null;
+    const n = Number(v);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0 || n > 1e12) {
+      throw new ValidationError(`${name} 必须是 0~1000000000000 的非负整数`);
+    }
+    return n;
+  };
+  const organicTraffic = optPosInt(o.organicTraffic, "organicTraffic");
+  const paidTraffic = optNonNegInt(o.paidTraffic, "paidTraffic");
+  const paidKeywords = optNonNegInt(o.paidKeywords, "paidKeywords");
+
+  return { brand, title, domain, keywords, geo: optString(o.geo, "geo") ?? "US", manualMonthlyVisits, organicTraffic, paidTraffic, paidKeywords };
 }
 
 /** /gate 限流：20 次/分钟/tenant。 */
@@ -251,6 +293,8 @@ export function registerTrafficRoutes(
       officialSiteMonthlyVisits?: unknown;
       brandInterest?: unknown;
       keywordInterest?: unknown;
+      organicTrafficMin?: unknown;
+      paidTrafficWarnRatio?: unknown;
     };
   }>("/api/v1/traffic/thresholds", async (request) => {
     await requireSession(deps, request);
@@ -276,6 +320,9 @@ export function registerTrafficRoutes(
       keywords?: unknown;
       geo?: unknown;
       manualMonthlyVisits?: unknown;
+      organicTraffic?: unknown;
+      paidTraffic?: unknown;
+      paidKeywords?: unknown;
     };
   }>("/api/v1/traffic/gate", async (request) => {
     const info = await requireSession(deps, request);
@@ -297,6 +344,9 @@ export function registerTrafficRoutes(
       domain: input.domain,
       geo: input.geo,
       manualMonthlyVisits: input.manualMonthlyVisits,
+      organicTraffic: input.organicTraffic,
+      paidTraffic: input.paidTraffic,
+      paidKeywords: input.paidKeywords,
     });
   });
 

@@ -62,12 +62,33 @@ export interface TrafficGateCardDict {
   ocrReviewNote: string;
   /** 识别失败 */
   ocrFailed: string;
+  /** SEMrush 自然流量输入框标签 */
+  semrushOrganicLabel: string;
+  /** SEMrush 自然流量输入框 placeholder */
+  semrushOrganicPlaceholder: string;
+  /** SEMrush 付费流量输入框标签 */
+  semrushPaidLabel: string;
+  /** SEMrush 付费流量输入框 placeholder */
+  semrushPaidPlaceholder: string;
+  /** SEMrush 付费关键词数输入框标签 */
+  semrushPaidKeywordsLabel: string;
+  /** SEMrush 付费关键词数输入框 placeholder */
+  semrushPaidKeywordsPlaceholder: string;
+  /** SEMrush 三字段说明小字 */
+  semrushHint: string;
 }
 
 /** 手动重判输入：品牌名（可选）+ 手动月访问量（可选），至少填一个。 */
 export interface TrafficGateRecheckInput {
   brand?: string;
   manualMonthlyVisits?: number;
+  /**
+   * SEMrush 域名概览手动值（全部可选）：自然流量 / 付费流量 / 付费关键词数。
+   * organicTraffic + paidTraffic 都填时参与"付费为零规则"判定。
+   */
+  organicTraffic?: number;
+  paidTraffic?: number;
+  paidKeywords?: number;
 }
 
 function badgeClass(passed: boolean | null): string {
@@ -135,14 +156,18 @@ export function TrafficGateCard({
   onRecheck?: (input: TrafficGateRecheckInput) => void;
   recheckBusy?: boolean;
 }) {
-  // 手动区默认展开条件：unknown（暂无数据）时展开，其他时候折叠。
+  // 手动区默认展开条件：未检测（gate=null）或 unknown（暂无数据）时展开，其他时候折叠。
   const [manualOpen, setManualOpen] = useState<boolean | null>(null);
-  const open = manualOpen ?? gate?.passed === null;
+  const open = manualOpen ?? (gate == null || gate.passed === null);
   const [brand, setBrand] = useState("");
   const [visits, setVisits] = useState("");
   const [manualError, setManualError] = useState<string | null>(null);
   const [ocr, setOcr] = useState<OcrMetrics | null>(null);
   const [ocrBusy, setOcrBusy] = useState(false);
+  // SEMrush 域名概览手动值（全部可选）：自然流量 / 付费流量 / 付费关键词数
+  const [semrushOrganic, setSemrushOrganic] = useState("");
+  const [semrushPaid, setSemrushPaid] = useState("");
+  const [semrushPaidKeywords, setSemrushPaidKeywords] = useState("");
   const [ocrError, setOcrError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
@@ -180,16 +205,44 @@ export function TrafficGateCard({
       }
       v = n;
     }
-    if (!b && v === undefined) {
+    // SEMrush 三字段：organic 正整数；paid/paidKeywords 非负整数（0 允许）
+    const parsePosInt = (raw: string): number | undefined | "invalid" => {
+      const t = raw.trim();
+      if (!t) return undefined;
+      const n = Number(t);
+      if (!Number.isInteger(n) || n <= 0 || n > 1e12) return "invalid";
+      return n;
+    };
+    const parseNonNegInt = (raw: string): number | undefined | "invalid" => {
+      const t = raw.trim();
+      if (!t) return undefined;
+      const n = Number(t);
+      if (!Number.isInteger(n) || n < 0 || n > 1e12) return "invalid";
+      return n;
+    };
+    const organic = parsePosInt(semrushOrganic);
+    const paid = parseNonNegInt(semrushPaid);
+    const paidKw = parseNonNegInt(semrushPaidKeywords);
+    if (organic === "invalid" || paid === "invalid" || paidKw === "invalid") {
+      setManualError(d.manualInvalid);
+      return;
+    }
+    if (!b && v === undefined && organic === undefined && paid === undefined) {
       setManualError(d.manualInvalid);
       return;
     }
     setManualError(null);
-    onRecheck({ ...(b ? { brand: b } : {}), ...(v !== undefined ? { manualMonthlyVisits: v } : {}) });
+    onRecheck({
+      ...(b ? { brand: b } : {}),
+      ...(v !== undefined ? { manualMonthlyVisits: v } : {}),
+      ...(organic !== undefined ? { organicTraffic: organic } : {}),
+      ...(paid !== undefined ? { paidTraffic: paid } : {}),
+      ...(paidKw !== undefined ? { paidKeywords: paidKw } : {}),
+    });
   }
 
   const manualSection =
-    onRecheck && gate ? (
+    onRecheck ? (
       <div className="mt-3 rounded-lg border border-dashed border-ink/20 p-3">
         <button
           type="button"
@@ -225,6 +278,49 @@ export function TrafficGateCard({
               />
             </div>
             <p className="text-xs text-ink/50">{d.manualHint}</p>
+            <div className="rounded-lg bg-ink/[0.03] p-2">
+              <p className="mb-2 text-xs font-medium text-ink/70">
+                {d.semrushHint}
+              </p>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                <div>
+                  <label className="mb-1 block text-xs text-ink/60">
+                    {d.semrushOrganicLabel}
+                  </label>
+                  <input
+                    className="w-full rounded-lg border border-ink/15 bg-white px-3 py-1.5 text-sm text-ink"
+                    placeholder={d.semrushOrganicPlaceholder}
+                    value={semrushOrganic}
+                    onChange={(e) => setSemrushOrganic(e.target.value)}
+                    inputMode="numeric"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs text-ink/60">
+                    {d.semrushPaidLabel}
+                  </label>
+                  <input
+                    className="w-full rounded-lg border border-ink/15 bg-white px-3 py-1.5 text-sm text-ink"
+                    placeholder={d.semrushPaidPlaceholder}
+                    value={semrushPaid}
+                    onChange={(e) => setSemrushPaid(e.target.value)}
+                    inputMode="numeric"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs text-ink/60">
+                    {d.semrushPaidKeywordsLabel}
+                  </label>
+                  <input
+                    className="w-full rounded-lg border border-ink/15 bg-white px-3 py-1.5 text-sm text-ink"
+                    placeholder={d.semrushPaidKeywordsPlaceholder}
+                    value={semrushPaidKeywords}
+                    onChange={(e) => setSemrushPaidKeywords(e.target.value)}
+                    inputMode="numeric"
+                  />
+                </div>
+              </div>
+            </div>
             <div>
               <input
                 ref={fileRef}
@@ -308,6 +404,8 @@ export function TrafficGateCard({
           </span>
         </div>
         <p className="mt-2 text-sm text-ink/50">{d.notChecked}</p>
+        {/* 无数据时也给手动区：无历史分析记录也能点"检测"。 */}
+        {manualSection}
       </section>
     );
   }

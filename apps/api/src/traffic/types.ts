@@ -53,6 +53,12 @@ export interface TrafficGateResult {
   reason: string;
   officialSite: OfficialSiteInfo | null;
   signals: TrafficSignal[];
+  /**
+   * 警告（非否决）：有数据支撑的 caution 档说明，null 表示无警告。
+   * 例如付费流量极少（>0 但 < 自然流量 × paidTrafficWarnRatio）→
+   * 谨慎测试、小预算验证。caution 不改变 passed（不 kill）。
+   */
+  caution: string | null;
 }
 
 /** 流量门阈值（AiSetting `traffic.thresholds` 明文 JSON 存储） */
@@ -63,12 +69,26 @@ export interface TrafficThresholds {
   brandInterest: number;
   /** 核心关键词热度阈值（Google Trends 免费 0-100 相对值） */
   keywordInterest: number;
+  /**
+   * 自然流量门槛（SEMrush 域名概览"自然流量"，用户手动输入）。
+   * 付费为零规则用：自然流量 >= 该值 且 付费流量 == 0 → 流量门直接判 fail
+   * （同行已验证付费跑不正）。默认 1000。
+   */
+  organicTrafficMin: number;
+  /**
+   * 付费流量预警比例（0,1）：自然流量达标时，
+   * 0 < 付费流量 < 自然流量 × 该比例 → caution 档（不 kill），
+   * reason 提示"付费流量极少，谨慎测试、小预算验证"。默认 0.05。
+   */
+  paidTrafficWarnRatio: number;
 }
 
 export const DEFAULT_TRAFFIC_THRESHOLDS: TrafficThresholds = {
   officialSiteMonthlyVisits: 50000,
   brandInterest: 25,
   keywordInterest: 25,
+  organicTrafficMin: 1000,
+  paidTrafficWarnRatio: 0.05,
 };
 
 /**

@@ -47,6 +47,19 @@ export interface EvaluateTrafficGateInput {
    * 不再 unknown；只对比"官网月访问量阈值"这一档。
    */
   manualMonthlyVisits?: number | null;
+  /**
+   * SEMrush 域名概览手动输入（用户自己看 SEMrush 填，全部可选）：
+   * - organicTraffic：自然流量（月访问量）
+   * - paidTraffic：付费流量（月访问量，可为 0）
+   * - paidKeywords：付费关键词数（可为 0）
+   * 付费为零规则：organicTraffic >= thresholds.organicTrafficMin 且
+   * paidTraffic === 0 → 流量门直接判 fail（同行已验证付费跑不正）。
+   * 数据不足（organic 未知/低于阈值，或 paid 未知）时不触发判定，
+   * 绝不因"没数据"误杀。未来可接 SEMrush 官方 API 或插件抓取自动填。
+   */
+  organicTraffic?: number | null;
+  paidTraffic?: number | null;
+  paidKeywords?: number | null;
 }
 
 /** 中英文停用词（标题分词/品牌提取时过滤）。 */
@@ -124,6 +137,124 @@ function describeSignal(s: TrafficSignal): string {
   return `${s.label}：${v}（阈值 ${t}）`;
 }
 
+/** 付费为零规则的信号标签（reason 组装时用它识别，走专用 fail 文案）。 */
+const PAID_ZERO_SIGNAL_LABEL =
+  "付费流量为零检查（SEMrush 域名概览，用户手动输入）";
+
+/** 归一化：正整数（>=1）才有效，否则 null。 */
+function normPositiveInt(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) && v > 0
+    ? Math.floor(v)
+    : null;
+}
+
+/** 归一化：非负整数（0 允许）才有效，否则 null。 */
+function normNonNegInt(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) && v >= 0
+    ? Math.floor(v)
+    : null;
+}
+
+/**
+ * 判定依据说明（中英）：付费存在=购买意图确认（行业经验）；
+ * SEMrush 流量为 clickstream 建模估算值（非精确数），阈值仅作方向性判断。
+ */
+const BASIS_NOTE =
+  "依据：付费存在=购买意图确认（行业经验）；" +
+  "SEMrush 流量为 clickstream 建模估算值，阈值仅作方向性判断。" +
+  "(Basis: paid presence confirms purchase intent (industry experience); " +
+  "SEMrush traffic is clickstream-modeled estimates — thresholds are directional only.)";
+
+/**
+ * 付费为零规则（用户经验规则，确定性判定，不走 LLM）：
+ * - kill 档：自然流量 >= organicTrafficMin 且 付费流量 === 0 → fail
+ *   （自然流量很好但没人投付费，说明同行已验证付费跑不正，直接 PK）。
+ * - caution 档：自然流量达标 且 0 < 付费流量 < 自然流量 × warnRatio → 警告
+ *   （付费投入微弱，谨慎测试、小预算验证；不 kill）。
+ * 数据不足（organic 未知/低于阈值，或 paid 未知）时返回 null——
+ * 不加判定信号，绝不因"没数据"误杀（unknown 语义不变）。
+ * 未来可接 SEMrush 官方 API 或插件抓取自动填这三个值。
+ */
+function evaluatePaidZeroRule(
+  organicTraffic: unknown,
+  paidTraffic: unknown,
+  paidKeywords: unknown,
+  organicTrafficMin: number,
+  warnRatio: number
+): {
+  signal: TrafficSignal;
+  organic: number;
+  paid: number;
+  paidKw: number | null;
+  caution: string | null;
+} | null {
+  const organic = normPositiveInt(organicTraffic);
+  const paid = normNonNegInt(paidTraffic);
+  if (organic === null || organic < organicTrafficMin || paid === null) {
+    return null;
+  }
+  const paidKw = normNonNegInt(paidKeywords);
+  const kill = paid === 0;
+  const cautionHit = !kill && paid < organic * warnRatio;
+  const caution = cautionHit
+    ? paidZeroCautionReason(organic, paid, warnRatio)
+    : null;
+  return {
+    organic,
+    paid,
+    paidKw,
+    caution,
+    signal: {
+      source: "manual",
+      label: PAID_ZERO_SIGNAL_LABEL,
+      value: organic,
+      threshold: organicTrafficMin,
+      passed: kill ? false : true,
+      note:
+        `自然流量 ${fmtInt(organic)}（阈值 ${fmtInt(organicTrafficMin)}），` +
+        `付费流量 ${fmtInt(paid)}` +
+        (paidKw !== null ? `，付费关键词 ${fmtInt(paidKw)}` : "") +
+        (cautionHit
+          ? `；付费不到自然流量的 ${Math.round(warnRatio * 100)}%，判 caution（不 kill）。`
+          : "") +
+        `数据来源：SEMrush 域名概览（用户手动输入，非系统实测）。`,
+    },
+  };
+}
+
+/** 付费为零规则 kill 档命中时的专用 fail 文案（中英，附判定依据）。 */
+function paidZeroFailReason(
+  organic: number,
+  paidKw: number | null
+): string {
+  const kwPart = paidKw !== null ? `（付费关键词 ${fmtInt(paidKw)}）` : "";
+  return (
+    `自然流量 ${fmtInt(organic)} 但付费流量为 0${kwPart}——` +
+    `同行已验证付费跑不正，直接 PK，不进入下一步` +
+    ` (Organic traffic ${fmtInt(organic)} but paid traffic is 0 — ` +
+    `competitors have proven paid doesn't convert; kill it, don't go further.)` +
+    ` ${BASIS_NOTE}`
+  );
+}
+
+/** 付费为零规则 caution 档命中时的专用警告文案（中英，附判定依据）。 */
+function paidZeroCautionReason(
+  organic: number,
+  paid: number,
+  warnRatio: number
+): string {
+  const pct = Math.round(warnRatio * 100);
+  return (
+    `付费流量极少（不到自然流量的 ${pct}%）：` +
+    `自然流量 ${fmtInt(organic)}，付费流量 ${fmtInt(paid)}——` +
+    `同行付费投入微弱，谨慎测试、小预算验证` +
+    ` (Paid traffic is minimal (<${pct}% of organic): ` +
+    `organic ${fmtInt(organic)}, paid ${fmtInt(paid)} — ` +
+    `competitors invest little in paid; test cautiously with a small budget.)` +
+    ` ${BASIS_NOTE}`
+  );
+}
+
 async function evaluate(
   input: EvaluateTrafficGateInput
 ): Promise<TrafficGateResult> {
@@ -142,6 +273,20 @@ async function evaluate(
     rawManual > 0
       ? Math.floor(rawManual)
       : null;
+
+  // ---- 付费为零规则（用户经验规则）：自然流量达标但付费为 0 → 直接 fail；
+  // 付费极少（>0 但 < 自然流量 × warnRatio）→ caution（不 kill） ----
+  // 数据不足时不加信号，不影响其他判定（unknown 语义不变）。
+  const paidZero = evaluatePaidZeroRule(
+    input.organicTraffic,
+    input.paidTraffic,
+    input.paidKeywords,
+    thresholds.organicTrafficMin,
+    thresholds.paidTrafficWarnRatio
+  );
+  if (paidZero) {
+    signals.push(paidZero.signal);
+  }
 
   // ---- 官网判定 ----
   // 规则：电商平台域名（amazon/ebay/walmart…）永远不能视为品牌官网。
@@ -332,14 +477,19 @@ async function evaluate(
     reason =
       `流量门未通过：${decisive
         .filter((s) => s.passed === false)
-        .map(describeSignal)
+        .map((s) =>
+          // 付费为零规则命中时用专用文案（含中英），而不是通用 describeSignal。
+          s.label === PAID_ZERO_SIGNAL_LABEL && paidZero
+            ? paidZeroFailReason(paidZero.organic, paidZero.paidKw)
+            : describeSignal(s)
+        )
         .join("；")}。` +
       (providedDomain && !isMarketplaceDomain(providedDomain)
         ? "官网域名由调用方提供，跳过自动检测。"
         : "");
   }
 
-  return { passed, reason, officialSite, signals };
+  return { passed, reason, officialSite, signals, caution: paidZero?.caution ?? null };
 }
 
 /**
@@ -359,6 +509,7 @@ export async function evaluateTrafficGate(
         (e instanceof Error ? e.message : String(e)),
       officialSite: null,
       signals: [],
+      caution: null,
     };
   }
 }

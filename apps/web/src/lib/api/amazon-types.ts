@@ -52,4 +52,10 @@ export interface TrafficGate {
   reason: string;
   officialSite: TrafficGateOfficialSite | null;
   signals: TrafficGateSignal[];
+  /**
+   * 警告（非否决）：有数据支撑的 caution 档说明，null 表示无警告。
+   * 例如付费流量极少（>0 但 < 自然流量 × paidTrafficWarnRatio）。
+   * caution 不改变 passed（不 kill）。
+   */
+  caution: string | null;
 }
