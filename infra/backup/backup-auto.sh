@@ -62,7 +62,10 @@ let s = "";
 process.stdin.on("data", (c) => { s += c; });
 process.stdin.on("end", () => {
   try {
-    const j = JSON.parse(s);
+    // pnpm run 会在 JSON 前打印 "> pkg@version script path" 横幅行，且
+    // backup:create 输出的是多行 pretty-print JSON，不能对整段 JSON.parse：
+    // 从第一个 { 到最后一个 } 截取 JSON 再解析（同时容忍首尾杂行）。
+    const j = JSON.parse(s.slice(s.indexOf("{"), s.lastIndexOf("}") + 1));
     const id = j?.metadata?.backupId ?? j?.backupId;
     if (typeof id !== "string" || !id) process.exit(2);
     process.stdout.write(id);
