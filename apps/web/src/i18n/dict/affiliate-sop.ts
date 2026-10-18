@@ -1,5 +1,8 @@
 /** 联盟新手 7 天 SOP — i18n dict */
 
+/** 新手 SOP 赛道：联盟 / 亚马逊 / 返利 */
+export type SopLane = "affiliate" | "amazon" | "cashback";
+
 export interface SopDay {
   day: number;
   title: string;
@@ -7,6 +10,10 @@ export interface SopDay {
   checks: string[];
   profitTip: string;
   links: { label: string; href: string }[];
+  /** 按赛道补充的一句话说明（可选，未填赛道则不显示）。 */
+  laneNote?: Partial<Record<SopLane, string>>;
+  /** 按赛道的工具链接覆盖（可选，未填赛道则用默认 links）。 */
+  laneLinks?: Partial<Record<SopLane, { label: string; href: string }[]>>;
 }
 
 export interface AffiliateSopDict {
@@ -21,13 +28,18 @@ export interface AffiliateSopDict {
   profitTipLabel: string;
   toolsLabel: string;
   complete: string;
+  lane: {
+    title: string;
+    desc: string;
+    options: { key: SopLane; label: string; desc: string }[];
+  };
   days: SopDay[];
 }
 
 export const zh: AffiliateSopDict = {
-  pageTitle: "联盟新手 7 天 SOP",
+  pageTitle: "新手 7 天 SOP",
   pageDesc:
-    "7 天从 0 到跑出第一单：选联盟 → 完善资料 → 选 Offer → 配链接监控 → 落地页 → Google Ads 首测 → 看数据优化。每天照着 checklist 做。",
+    "7 天从 0 到跑出第一单：Day 1 先选赛道（联盟 / 亚马逊 / 返利），再按每天 checklist 走。选品 → 完善资料 → 选 Offer → 配链接监控 → 落地页 → 首测 → 看数据优化。",
   progress: "完成进度",
   reset: "重置进度",
   resetConfirm: "确定要清空所有勾选进度吗？",
@@ -37,6 +49,15 @@ export const zh: AffiliateSopDict = {
   profitTipLabel: "💰 盈利加速建议",
   toolsLabel: "用到的工具",
   complete: "🎉 7 天完成！你已经跑通了完整链路，继续优化放大吧。",
+  lane: {
+    title: "选你的赛道",
+    desc: "不同赛道选品和流量打法不同，后面几天的提示和工具链接会跟着变。可随时切换，进度不丢。",
+    options: [
+      { key: "affiliate", label: "联盟营销", desc: "推广联盟 Offer，拿佣金" },
+      { key: "amazon", label: "亚马逊", desc: "亚马逊选品 + 站内外流量" },
+      { key: "cashback", label: "返利网", desc: "返利商品 + 内容/社媒流量" },
+    ],
+  },
   days: [
     {
       day: 1,
@@ -85,6 +106,21 @@ export const zh: AffiliateSopDict = {
         { label: "一键推演报告", href: "/ai/blueprint" },
         { label: "条款解析", href: "/ai/terms" },
       ],
+      laneNote: {
+        affiliate: "联盟 Offer 重点看：佣金率、Cookie 有效期、结算周期。",
+        amazon: "亚马逊选品重点看：评分 ≥4.3、评论数、价格带，用选品发现的自动评分先筛一遍。",
+        cashback: "返利商品重点看：佣金比例和商家结算信誉，优先白名单商家。",
+      },
+      laneLinks: {
+        amazon: [
+          { label: "选品发现", href: "/amazon/discovery" },
+          { label: "一键推演报告", href: "/ai/blueprint" },
+        ],
+        cashback: [
+          { label: "Offer 列表", href: "/offers" },
+          { label: "一键推演报告", href: "/ai/blueprint" },
+        ],
+      },
     },
     {
       day: 4,
@@ -135,6 +171,11 @@ export const zh: AffiliateSopDict = {
         { label: "投广告", href: "/ads/auto-create" },
         { label: "关键词包", href: "/keywords/starter" },
       ],
+      laneNote: {
+        affiliate: "联盟赛道：Google Ads 小预算首测，落地页指向自己的页面。",
+        amazon: "亚马逊赛道：站内广告在卖家后台开；站外同样可以用 Google Ads 把流量导到自己的落地页再跳转。",
+        cashback: "返利赛道：流量以内容/社媒为主，付费测试同样从小预算开始，先验证转化再放大。",
+      },
     },
     {
       day: 7,
@@ -159,9 +200,9 @@ export const zh: AffiliateSopDict = {
 };
 
 export const en: AffiliateSopDict = {
-  pageTitle: "Affiliate 7-Day Starter SOP",
+  pageTitle: "7-Day Starter SOP",
   pageDesc:
-    "From 0 to your first conversion in 7 days: pick networks → complete profile → choose offers → set up link monitoring → landing pages → first Google Ads test → analyze & optimize. Follow the checklist each day.",
+    "From 0 to your first conversion in 7 days: pick your track on Day 1 (Affiliate / Amazon / Cashback), then follow the daily checklist. Pick products → complete profile → choose offers → set up link monitoring → landing pages → first traffic test → analyze & optimize.",
   progress: "Progress",
   reset: "Reset progress",
   resetConfirm: "Clear all checked progress?",
@@ -171,6 +212,15 @@ export const en: AffiliateSopDict = {
   profitTipLabel: "💰 Profit acceleration tips",
   toolsLabel: "Tools you'll use",
   complete: "🎉 7 days done! You've run the full loop — keep optimizing and scaling.",
+  lane: {
+    title: "Pick your track",
+    desc: "Product selection and traffic playbooks differ by track — tips and tool links on later days follow your pick. Switch anytime; progress is kept.",
+    options: [
+      { key: "affiliate", label: "Affiliate", desc: "Promote network offers, earn commissions" },
+      { key: "amazon", label: "Amazon", desc: "Amazon picking + on/off-site traffic" },
+      { key: "cashback", label: "Cashback", desc: "Cashback products + content/social traffic" },
+    ],
+  },
   days: [
     {
       day: 1,
@@ -219,6 +269,21 @@ export const en: AffiliateSopDict = {
         { label: "Blueprint Report", href: "/ai/blueprint" },
         { label: "Terms Parser", href: "/ai/terms" },
       ],
+      laneNote: {
+        affiliate: "For network offers, focus on: commission rate, cookie duration, payout cycle.",
+        amazon: "For Amazon picking, focus on: rating ≥ 4.3, review count, price band — pre-screen with Discovery's auto score.",
+        cashback: "For cashback products, focus on: commission rate and merchant payout reputation — prefer whitelisted merchants.",
+      },
+      laneLinks: {
+        amazon: [
+          { label: "Product Discovery", href: "/amazon/discovery" },
+          { label: "Blueprint Report", href: "/ai/blueprint" },
+        ],
+        cashback: [
+          { label: "Offers", href: "/offers" },
+          { label: "Blueprint Report", href: "/ai/blueprint" },
+        ],
+      },
     },
     {
       day: 4,
@@ -269,6 +334,11 @@ export const en: AffiliateSopDict = {
         { label: "Create Ads", href: "/ads/auto-create" },
         { label: "Keyword Packs", href: "/keywords/starter" },
       ],
+      laneNote: {
+        affiliate: "Affiliate track: small-budget Google Ads first test, point ads at your own landing page.",
+        amazon: "Amazon track: on-site ads run in Seller Central; off-site traffic can also go through Google Ads to your landing page.",
+        cashback: "Cashback track: traffic is mostly content/social — still start paid tests small, scale only after conversions prove out.",
+      },
     },
     {
       day: 7,

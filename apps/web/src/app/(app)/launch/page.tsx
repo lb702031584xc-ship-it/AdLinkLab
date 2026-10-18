@@ -1,30 +1,18 @@
-import { getLang } from "@/i18n/lang";
-import { zh, en } from "@/i18n/dict/launch";
-import { LaunchWizardClient } from "@/components/launch/launch-wizard-client";
-import { entityApi } from "@/lib/api/entities";
-import { listLaunchChecklists } from "@/lib/api/launch";
+import { redirect } from "next/navigation";
 
-export const dynamic = "force-dynamic";
-
-/** Offer 上线一条龙向导：server component 拉数据，client 组件做步骤切换。 */
-export default async function LaunchPage({
+/**
+ * /launch 已下线：投放统一由自动化广告（/ads/auto-create）承接。
+ * 保留路由做服务端跳转，外部书签/旧链接不会 404（?offerId= 原样透传）。
+ */
+export default async function LaunchRedirectPage({
   searchParams,
 }: {
   searchParams: Promise<{ offerId?: string }>;
 }) {
   const sp = await searchParams;
-  const lang = await getLang();
-  const [offersPage, checklists] = await Promise.all([
-    entityApi.offers.list(1, 50),
-    listLaunchChecklists(),
-  ]);
-  return (
-    <LaunchWizardClient
-      dict={lang === "en" ? en : zh}
-      offers={offersPage.items}
-      initialChecklists={checklists}
-      lang={lang}
-      initialOfferId={typeof sp.offerId === "string" ? sp.offerId : ""}
-    />
-  );
+  const target =
+    typeof sp.offerId === "string" && sp.offerId
+      ? `/ads/auto-create?offerId=${encodeURIComponent(sp.offerId)}`
+      : "/ads/auto-create";
+  redirect(target);
 }

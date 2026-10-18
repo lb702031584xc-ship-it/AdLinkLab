@@ -352,7 +352,7 @@ export const zh: AmazonManualGuideDict = {
       ],
       tools: [
         { label: "Keepa（免费版）", href: "https://keepa.com", external: true },
-        { label: "去热销日历看季节性", href: "/amazon/trends" },
+        { label: "去热销日历看季节性", href: "/amazon/discovery?tab=trends" },
       ],
     },
     {
@@ -602,7 +602,7 @@ export const en: AmazonManualGuideDict = {
       ],
       tools: [
         { label: "Keepa (free)", href: "https://keepa.com", external: true },
-        { label: "Check seasonality in Hot-selling calendar", href: "/amazon/trends" },
+        { label: "Check seasonality in Hot-selling calendar", href: "/amazon/discovery?tab=trends" },
       ],
     },
     {

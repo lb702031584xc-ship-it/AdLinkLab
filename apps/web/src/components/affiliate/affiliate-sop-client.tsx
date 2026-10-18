@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import type { AffiliateSopDict } from "@/i18n/dict/affiliate-sop";
+import type { AffiliateSopDict, SopLane } from "@/i18n/dict/affiliate-sop";
 
 const LS_KEY = "adlinklab-affiliate-sop-checks";
+const LANE_KEY = "adlinklab-sop-lane";
 
 function loadChecks(): Record<string, boolean> {
   try {
@@ -15,6 +16,17 @@ function loadChecks(): Record<string, boolean> {
   }
 }
 
+function loadLane(): SopLane {
+  try {
+    const raw = localStorage.getItem(LANE_KEY);
+    if (raw === "amazon" || raw === "cashback" || raw === "affiliate")
+      return raw;
+  } catch {
+    /* ignore */
+  }
+  return "affiliate";
+}
+
 /** 联盟新手 7 天 SOP：每天目标 + checklist + 盈利建议 + 工具链接，进度存 localStorage */
 export function AffiliateSopClient({
   dict,
@@ -23,10 +35,12 @@ export function AffiliateSopClient({
   lang: string;
 }) {
   const [checks, setChecks] = useState<Record<string, boolean>>({});
+  const [lane, setLane] = useState<SopLane>("affiliate");
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
     setChecks(loadChecks());
+    setLane(loadLane());
     setReady(true);
   }, []);
 
@@ -39,6 +53,15 @@ export function AffiliateSopClient({
       }
     }
   }, [checks, ready]);
+
+  const pickLane = (l: SopLane) => {
+    setLane(l);
+    try {
+      localStorage.setItem(LANE_KEY, l);
+    } catch {
+      /* ignore */
+    }
+  };
 
   const total = dict.days.reduce((n, d) => n + d.checks.length, 0);
   const done = Object.values(checks).filter(Boolean).length;
@@ -86,6 +109,8 @@ export function AffiliateSopClient({
           (_, i) => checks[`d${day.day}-c${i}`]
         ).length;
         const dayComplete = dayDone === day.checks.length;
+        const laneNote = day.laneNote?.[lane];
+        const dayLinks = day.laneLinks?.[lane] ?? day.links;
         return (
           <section
             key={day.day}
@@ -103,6 +128,43 @@ export function AffiliateSopClient({
               <span className="font-medium">{dict.goalLabel}：</span>
               {day.goal}
             </p>
+
+            {day.day === 1 && (
+              <div className="mt-4 rounded-lg border border-ink/10 bg-ink/[0.02] p-4">
+                <p className="text-sm font-semibold text-ink">
+                  {dict.lane.title}
+                </p>
+                <p className="mt-1 text-xs text-ink/60">{dict.lane.desc}</p>
+                <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                  {dict.lane.options.map((o) => (
+                    <button
+                      key={o.key}
+                      type="button"
+                      onClick={() => pickLane(o.key)}
+                      className={`rounded-lg border p-3 text-left transition-colors ${
+                        lane === o.key
+                          ? "border-signal bg-signal/10"
+                          : "border-ink/10 bg-white hover:border-ink/30"
+                      }`}
+                    >
+                      <span className="block text-sm font-semibold text-ink">
+                        {lane === o.key ? "● " : "○ "}
+                        {o.label}
+                      </span>
+                      <span className="mt-1 block text-xs text-ink/60">
+                        {o.desc}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {laneNote && (
+              <p className="mt-3 rounded-lg bg-sky-50 px-3 py-2 text-sm text-sky-900">
+                {laneNote}
+              </p>
+            )}
 
             <h3 className="mt-4 text-sm font-semibold text-ink">
               {dict.checklistLabel} ({dayDone}/{day.checks.length})
@@ -137,7 +199,7 @@ export function AffiliateSopClient({
 
             <div className="mt-3 flex flex-wrap gap-2">
               <span className="text-xs text-ink/50">{dict.toolsLabel}：</span>
-              {day.links.map((l) => (
+              {dayLinks.map((l) => (
                 <Link
                   key={l.href}
                   href={l.href}

@@ -60,7 +60,6 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         {
           title: s.start,
                     items: [
-            { href: "/launch", label: `① ${t.launch.title}` },
             { href: "/dashboard", label: t.common.nav.dashboard },
             { href: "/quickstart", label: t.quickstart.pageTitle },
           ],
@@ -123,10 +122,8 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
                 ]
               : []),
             { href: "/amazon/discovery", label: ni.amazonDiscovery, phase: ph.selection },
-            { href: "/amazon/trends", label: ni.amazonTrends, phase: ph.selection },
             { href: "/amazon/pipeline", label: ni.amazonPipeline, phase: ph.selection },
             { href: "/amazon/combo", label: ni.amazonCombo, phase: ph.analysis },
-            { href: "/amazon/watch", label: ni.amazonWatch, phase: ph.analysis },
             { href: "/ai/analyze", label: t.ai.nav.analyze, phase: ph.analysis },
             { href: "/offers", label: ni.amazonImportAffiliate, phase: ph.analysis },
             {
@@ -201,7 +198,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         {
           title: s.reports,
                     items: [
-            { href: "/reports/launch", label: ni.launchArchive, phase: ph.monitor },
+            { href: "/reports", label: ni.launchArchive, phase: ph.monitor },
             { href: "/tracking-links", label: t.common.nav.trackingLinks },
             { href: "/clicks", label: t.common.nav.clicks },
             { href: "/conversions", label: t.common.nav.conversions },

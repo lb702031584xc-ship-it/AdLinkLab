@@ -1,18 +1,18 @@
-import { getLang } from "@/i18n/lang";
-import { zh, en } from "@/i18n/dict/launch-archive";
-import { LaunchArchiveClient } from "@/components/reports/launch-archive-client";
+import { redirect } from "next/navigation";
 
-export const dynamic = "force-dynamic";
-
-/** 投放报表（投放档案）：确认计划后自动建档，填官方推荐/实际表现，看诊断、按时间筛选、下载 CSV。 */
-export default async function LaunchArchivePage({
+/**
+ * /reports/launch（投放报表）已并入数据报表总入口 /reports 页签。
+ * 保留路由做服务端跳转，旧书签/旧链接不会 404（?offerId= 原样透传）。
+ */
+export default async function LaunchArchiveRedirectPage({
   searchParams,
 }: {
-  searchParams: Promise<{ offerId?: string }>;
+  searchParams?: Promise<{ offerId?: string }>;
 }) {
-  const lang = await getLang();
-  const sp = await searchParams;
-  return (
-    <LaunchArchiveClient dict={lang === "en" ? en : zh} initialOfferId={sp.offerId ?? null} />
-  );
+  const sp = (await searchParams) ?? {};
+  const target =
+    typeof sp.offerId === "string" && sp.offerId
+      ? `/reports?tab=launch&offerId=${encodeURIComponent(sp.offerId)}`
+      : "/reports?tab=launch";
+  redirect(target);
 }

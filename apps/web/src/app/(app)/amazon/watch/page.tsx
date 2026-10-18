@@ -1,13 +1,9 @@
-import { getLang } from "@/i18n/lang";
-import { zh, en } from "@/i18n/dict/amazon-watch";
-import { AsinWatchClient } from "@/components/amazon/asin-watch-client";
-
-export const dynamic = "force-dynamic";
+import { redirect } from "next/navigation";
 
 /**
- * 需求监控（第十批）：ASIN 跟踪 + 每日快照 + 异动通知。
+ * /amazon/watch（需求监控）已并入 /amazon/discovery 页签。
+ * 保留路由做服务端跳转，旧书签/旧链接不会 404。
  */
-export default async function AmazonWatchPage() {
-  const lang = await getLang();
-  return <AsinWatchClient dict={lang === "en" ? en : zh} />;
+export default function AmazonWatchRedirectPage() {
+  redirect("/amazon/discovery?tab=watch");
 }

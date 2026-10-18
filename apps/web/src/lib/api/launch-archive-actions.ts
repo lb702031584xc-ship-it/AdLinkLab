@@ -225,7 +225,7 @@ export async function getLaunchArchiveAction(id: string) {
 export async function createLaunchArchiveAction(input: LaunchArchiveCreateInput) {
   return attempt(
     () => apiFetch<LaunchArchive>("/api/v1/launch-archives", { method: "POST", body: JSON.stringify(input) }),
-    ["/reports/launch"]
+    ["/reports"]
   );
 }
 
@@ -237,7 +237,7 @@ export async function updateLaunchArchiveAction(id: string, input: LaunchArchive
         method: "PATCH",
         body: JSON.stringify(input),
       }),
-    ["/reports/launch"]
+    ["/reports"]
   );
 }
 
@@ -245,7 +245,7 @@ export async function updateLaunchArchiveAction(id: string, input: LaunchArchive
 export async function deleteLaunchArchiveAction(id: string) {
   return attempt(
     () => apiFetch<unknown>(`/api/v1/launch-archives/${encodeURIComponent(id)}`, { method: "DELETE" }),
-    ["/reports/launch"]
+    ["/reports"]
   );
 }
 

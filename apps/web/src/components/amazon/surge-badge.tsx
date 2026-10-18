@@ -25,7 +25,7 @@ export function SurgeBadge({ label }: { label: string }) {
 
   return (
     <Link
-      href="/amazon/watch"
+      href="/amazon/discovery?tab=watch"
       className="inline-flex items-center gap-1 rounded-full bg-red-100 px-3 py-1 text-sm font-semibold text-red-700 hover:bg-red-200"
     >
       🔥 {label}：{count}

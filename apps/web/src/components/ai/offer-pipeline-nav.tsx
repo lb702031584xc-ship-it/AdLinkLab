@@ -27,7 +27,7 @@ const STEPS: Array<{ key: PipelineStep; href: (offerId: string) => string }> = [
   { key: "keywords", href: (id) => `/keywords/starter?tab=launch&offerId=${encodeURIComponent(id)}` },
   { key: "lander", href: (id) => `/landing-pages?offerId=${encodeURIComponent(id)}` },
   { key: "planner", href: (id) => `/ai/traffic-planner?offerId=${encodeURIComponent(id)}` },
-  { key: "launch", href: (id) => `/launch?offerId=${encodeURIComponent(id)}` },
+  { key: "launch", href: (id) => `/ads/auto-create?offerId=${encodeURIComponent(id)}` },
 ];
 
 export interface PipelineOffer {

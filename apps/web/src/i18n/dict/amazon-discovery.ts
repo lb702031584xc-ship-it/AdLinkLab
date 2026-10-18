@@ -61,6 +61,9 @@ export interface AmazonDiscoveryDict {
   expand: string;
   collapse: string;
   sendToPipeline: string;
+  tabDiscovery: string;
+  tabTrends: string;
+  tabWatch: string;
 }
 
 export const zh: AmazonDiscoveryDict = {
@@ -133,6 +136,9 @@ export const zh: AmazonDiscoveryDict = {
   expand: "展开",
   collapse: "收起",
   sendToPipeline: "送入流水线",
+  tabDiscovery: "选品",
+  tabTrends: "趋势",
+  tabWatch: "监控",
 };
 
 export const en: AmazonDiscoveryDict = {
@@ -205,4 +211,7 @@ export const en: AmazonDiscoveryDict = {
   expand: "Expand",
   collapse: "Collapse",
   sendToPipeline: "Send to pipeline",
+  tabDiscovery: "Discovery",
+  tabTrends: "Trends",
+  tabWatch: "Watch",
 };
