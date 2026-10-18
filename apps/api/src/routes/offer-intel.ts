@@ -131,6 +131,7 @@ interface ImportItem {
   name?: unknown;
   network?: unknown;
   destinationUrl?: unknown;
+  affiliateUrl?: unknown;
   merchantId?: unknown;
   category?: unknown;
   geoAllow?: unknown;
@@ -145,6 +146,7 @@ function normalizeImportItem(
   name: string;
   network: string;
   destinationUrl: string;
+  affiliateUrl: string | null;
   merchantId: string | null;
   category: string | null;
   geoAllow: string[];
@@ -170,6 +172,7 @@ function normalizeImportItem(
     name,
     network,
     destinationUrl,
+    affiliateUrl: asTrimmedString(item.affiliateUrl) ?? null,
     merchantId: merchantId ?? null,
     category: asTrimmedString(item.category) ?? null,
     geoAllow: Array.isArray(item.geoAllow)
@@ -308,6 +311,7 @@ export async function registerOfferIntelRoutes(
         name: r.name,
         network: r.network,
         destinationUrl: r.destinationurl ?? r.destination_url ?? r.url,
+        affiliateUrl: r.affiliateurl ?? r.affiliate_url,
         merchantId: r.merchantid ?? r.merchant_id,
         category: r.category,
         cookieDays: r.cookiedays ?? r.cookie_days,
@@ -343,6 +347,7 @@ export async function registerOfferIntelRoutes(
           name: it.name,
           network: it.network,
           destinationUrl: it.destinationUrl,
+          affiliateUrl: it.affiliateUrl,
           merchantId: it.merchantId,
           category: it.category,
           geoAllow: it.geoAllow,

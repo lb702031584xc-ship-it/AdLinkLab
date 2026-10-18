@@ -18,6 +18,7 @@ import {
 import { getLang } from "@/i18n/lang";
 import { getDictionary } from "@/i18n/dictionaries";
 import { OfferScoreCell } from "@/components/offers/offer-score-cell";
+import OfferLinks from "@/components/entities/offer-links";
 import { OfferDeleteButton } from "@/components/offers/offer-delete-button";
 import {
   OfferSelectionProvider,
@@ -408,15 +409,14 @@ export default async function OffersPage({
     {
       header: t.entities.offers.columns.destinationUrl,
       render: (o) => (
-        <a
-          href={o.destinationUrl}
-          target="_blank"
-          rel="noreferrer"
-          title={o.destinationUrl}
-          className="text-signal hover:underline"
-        >
-          {truncate(o.destinationUrl, 40)}
-        </a>
+        <OfferLinks
+          affiliateUrl={o.affiliateUrl}
+          destinationUrl={o.destinationUrl}
+          affiliateLabel={t.entities.offers.affiliateUrlLabel}
+          destinationLabel={t.entities.offers.destinationUrlLabel}
+          openLabel={t.entities.offers.openLink}
+          className="flex-col items-start gap-y-1"
+        />
       ),
     },
     {

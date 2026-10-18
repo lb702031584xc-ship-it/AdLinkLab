@@ -27,7 +27,7 @@ export default async function AiBlueprintPage({
       const o = await entityApi.offers.get(sp.offerId);
       initialOffer = {
         id: o.id, name: o.name, network: o.network,
-        destinationUrl: o.destinationUrl,
+        destinationUrl: o.destinationUrl, affiliateUrl: o.affiliateUrl,
         commissionValue: o.commissionValue, commissionType: o.commissionType,
         avgPrice: o.avgPrice,
       };
@@ -40,7 +40,7 @@ export default async function AiBlueprintPage({
     const data = await entityApi.offers.list(1, 200);
     offers = (data.items ?? []).map((o) => ({
       id: o.id, name: o.name, network: o.network,
-      destinationUrl: o.destinationUrl,
+      destinationUrl: o.destinationUrl, affiliateUrl: o.affiliateUrl,
       commissionValue: o.commissionValue, commissionType: o.commissionType,
       avgPrice: o.avgPrice,
     }));

@@ -442,6 +442,8 @@ model Offer {
   /// Offer 来源：affiliate（联盟）| amazon（亚马逊选品）| cashback（返利网）
   source           String      @default("affiliate") @map("source")
   destinationUrl   String      @map("destination_url")
+  /// 联盟链接：联盟后台给的带参跟踪链接（可空；为空时只用最终链接）
+  affiliateUrl     String?     @map("affiliate_url")
   status           OfferStatus @default(ACTIVE)
   /// Lower number = higher priority (Phase 5)
   priority         Int         @default(100)

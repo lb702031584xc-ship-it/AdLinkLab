@@ -86,6 +86,9 @@ export const zh = {
   offers: {
     description: "Offer 目标地址与渠道分配。",
     newOffer: "新建 Offer",
+    affiliateUrlLabel: "联盟链接",
+    destinationUrlLabel: "最终链接",
+    openLink: "↗ 直达",
     tabs: {
       affiliate: "联盟",
       amazon: "亚马逊",
@@ -573,6 +576,9 @@ export const zh = {
       source: "来源",
       destinationUrl: "目标 URL",
       destinationUrlPlaceholder: "https://example.com/landing",
+      affiliateUrl: "联盟链接",
+      affiliateUrlHint: "联盟后台给的带参跟踪链接（选填）；为空时只用目标 URL",
+      affiliateUrlPlaceholder: "https://network.com/click?aff_id=xxx",
       status: "状态",
       priority: "优先级",
       startsAt: "开始时间（可选）",
@@ -710,6 +716,9 @@ export const en: typeof zh = {
   offers: {
     description: "Offer destinations and network assignments.",
     newOffer: "New Offer",
+    affiliateUrlLabel: "Affiliate link",
+    destinationUrlLabel: "Final URL",
+    openLink: "↗ Open",
     tabs: {
       affiliate: "Affiliate",
       amazon: "Amazon",
@@ -1198,6 +1207,9 @@ export const en: typeof zh = {
       source: "Source",
       destinationUrl: "Destination URL",
       destinationUrlPlaceholder: "https://example.com/landing",
+      affiliateUrl: "Affiliate link",
+      affiliateUrlHint: "Tracking link with params from the network backend (optional); falls back to the destination URL when empty",
+      affiliateUrlPlaceholder: "https://network.com/click?aff_id=xxx",
       status: "Status",
       priority: "Priority",
       startsAt: "Starts At (optional)",

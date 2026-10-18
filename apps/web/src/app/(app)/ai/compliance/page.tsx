@@ -26,7 +26,7 @@ export default async function AiCompliancePage({
   if (sp.offerId) {
     try {
       const o = await entityApi.offers.get(sp.offerId);
-      initialOffer = { id: o.id, name: o.name, network: o.network, destinationUrl: o.destinationUrl };
+      initialOffer = { id: o.id, name: o.name, network: o.network, destinationUrl: o.destinationUrl, affiliateUrl: o.affiliateUrl };
     } catch {
       /* invalid id */
     }
@@ -34,7 +34,7 @@ export default async function AiCompliancePage({
   let offers: ComplianceOffer[] = [];
   try {
     const data = await entityApi.offers.list(1, 200);
-    offers = (data.items ?? []).map((o) => ({ id: o.id, name: o.name, network: o.network, destinationUrl: o.destinationUrl }));
+    offers = (data.items ?? []).map((o) => ({ id: o.id, name: o.name, network: o.network, destinationUrl: o.destinationUrl, affiliateUrl: o.affiliateUrl }));
   } catch {
     /* page still renders */
   }

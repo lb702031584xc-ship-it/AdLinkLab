@@ -33,6 +33,7 @@ export interface ManualOffer {
   name: string;
   network: string;
   url: string;
+  affiliateUrl?: string;
 }
 
 export function getManualOffer(): ManualOffer | null {
@@ -46,6 +47,8 @@ export function getManualOffer(): ManualOffer | null {
       name: parsed.name.trim(),
       network: typeof parsed.network === "string" ? parsed.network.trim() : "",
       url: typeof parsed.url === "string" ? parsed.url.trim() : "",
+      affiliateUrl:
+        typeof parsed.affiliateUrl === "string" ? parsed.affiliateUrl.trim() : "",
     };
   } catch {
     return null;
@@ -62,6 +65,7 @@ export function setManualOffer(manual: ManualOffer | null): void {
           name: manual.name.trim(),
           network: manual.network.trim(),
           url: manual.url.trim(),
+          affiliateUrl: (manual.affiliateUrl ?? "").trim(),
         })
       );
     } else {

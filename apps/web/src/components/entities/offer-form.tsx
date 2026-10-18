@@ -56,6 +56,8 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
       : "affiliate"
   );
   const [destinationUrl, setDestinationUrl] = useState("");
+  /** 联盟链接：联盟后台给的带参跟踪链接（选填）。 */
+  const [affiliateUrl, setAffiliateUrl] = useState("");
   const [status, setStatus] = useState<string>("ACTIVE");
   const [priority, setPriority] = useState("100");
   const [commissionValue, setCommissionValue] = useState("");
@@ -103,6 +105,7 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
         network: network.trim(),
         source,
         destinationUrl: destinationUrl.trim(),
+        affiliateUrl: affiliateUrl.trim() || undefined,
         status,
         priority: Number.isFinite(priorityNum) ? Math.floor(priorityNum) : 100,
         startsAt: toIsoInput(startsAt),
@@ -302,6 +305,32 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
           }}
           placeholder={f.destinationUrlPlaceholder}
         />
+        <div className="mt-3">
+          <label htmlFor="offer-affiliate-url" className={labelClassName}>
+            {f.affiliateUrl}
+            <span className="ml-1 text-xs font-normal text-ink/50">（{f.affiliateUrlHint}）</span>
+          </label>
+          <div className="flex items-center gap-2">
+            <input
+              id="offer-affiliate-url"
+              type="url"
+              className={inputClassName}
+              value={affiliateUrl}
+              onChange={(e) => setAffiliateUrl(e.target.value)}
+              placeholder={f.affiliateUrlPlaceholder}
+            />
+            {affiliateUrl.trim() ? (
+              <a
+                href={affiliateUrl.trim()}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-signal/10 px-2.5 py-1 text-xs font-medium text-signal transition hover:bg-signal/20"
+              >
+                ↗ 直达
+              </a>
+            ) : null}
+          </div>
+        </div>
         <CapturePicker
           onPick={(c) => {
             if (c.finalUrl) setDestinationUrl(c.finalUrl);

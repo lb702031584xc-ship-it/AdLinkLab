@@ -28,6 +28,7 @@ export interface LaunchDetail {
     name: string;
     network: string;
     destinationUrl: string;
+    affiliateUrl?: string | null;
   } | null;
   trackingLink: {
     id: string;

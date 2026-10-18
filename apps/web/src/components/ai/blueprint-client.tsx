@@ -9,6 +9,7 @@ import { loadWorkStateAction } from "@/lib/api/work-state-actions";
 import { useWorkState } from "@/lib/use-work-state";
 import { getLastOfferId, setLastOfferId } from "@/lib/current-offer";
 import { useI18n } from "@/i18n/I18nProvider";
+import OfferLinks from "@/components/entities/offer-links";
 import { zh as bpZh, en as bpEn, type AiBlueprintDict } from "@/i18n/dict/ai-blueprint";
 import {
   generateBlueprintAction,
@@ -148,6 +149,7 @@ export interface BlueprintOffer {
   name: string;
   network?: string | null;
   destinationUrl: string;
+  affiliateUrl?: string | null;
   commissionValue?: string | number | null;
   commissionType?: string | null;
   avgPrice?: string | number | null;
@@ -181,6 +183,8 @@ export function BlueprintClient({
   const [currency, setCurrency] = useState("USD");
   const [targetMarket, setTargetMarket] = useState("US");
   const [offerUrl, setOfferUrl] = useState(initialOffer?.destinationUrl ?? "");
+  /** 当前选中 offer 的联盟链接（展示 + 一键直达；抓取分析仍用目标 URL）。 */
+  const [offerAffUrl, setOfferAffUrl] = useState(initialOffer?.affiliateUrl ?? "");
   const [termsText, setTermsText] = useState("");
   /** 你的关键词：手动输入或从该 offer 的关键词页导入，推演优先评估它们。 */
   const [seedKeywords, setSeedKeywords] = useState("");
@@ -246,6 +250,7 @@ export function BlueprintClient({
     setSelectedOfferNetwork(o.network ?? null);
     setOfferName(o.name);
     setOfferUrl(o.destinationUrl);
+    setOfferAffUrl(o.affiliateUrl ?? "");
     if (o.avgPrice != null) setAvgPrice(String(o.avgPrice));
     if (o.commissionType === "fixed" || o.commissionType === "percentage")
       setCommissionType(o.commissionType);
@@ -632,6 +637,11 @@ export function BlueprintClient({
               🧩 {d.form.extBtn}
             </button>
           </div>
+          {offerAffUrl.trim() ? (
+            <div className="mt-1.5">
+              <OfferLinks affiliateUrl={offerAffUrl} destinationUrl={offerUrl} />
+            </div>
+          ) : null}
           {showExtHelp ? (
             <div className="mt-2 rounded-lg border border-ink/10 bg-ink/[0.02] p-3 text-xs leading-6 text-ink/70">
               <p className="font-medium text-ink">{d.form.extHelpTitle}</p>

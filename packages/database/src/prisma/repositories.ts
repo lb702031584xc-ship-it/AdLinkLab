@@ -356,6 +356,7 @@ function toOffer(row: {
   network: string;
   source: string;
   destinationUrl: string;
+  affiliateUrl: string | null;
   status: string;
   priority: number;
   startsAt: Date | null;
@@ -382,6 +383,7 @@ function toOffer(row: {
     network: row.network,
     source: row.source,
     destinationUrl: row.destinationUrl,
+    affiliateUrl: row.affiliateUrl ?? undefined,
     status: row.status as Offer["status"],
     priority: row.priority,
     startsAt: row.startsAt ?? undefined,
@@ -1227,6 +1229,7 @@ export class PrismaOfferRepository implements OfferRepository {
             network: data.network,
             source: data.source ?? "affiliate",
             destinationUrl: data.destinationUrl,
+            affiliateUrl: data.affiliateUrl ?? null,
             status: data.status,
             priority: data.priority ?? 100,
             startsAt: data.startsAt ?? null,

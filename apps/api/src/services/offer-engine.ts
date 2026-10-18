@@ -100,6 +100,8 @@ export class OfferService {
     /** Offer 来源：affiliate | amazon | cashback（默认 affiliate） */
     source?: string;
     destinationUrl: string;
+    /** 联盟链接：联盟后台给的带参跟踪链接（可空；空字符串按 null 处理） */
+    affiliateUrl?: string | null;
     status?: OfferStatus;
     priority?: number;
     startsAt?: Date;
@@ -128,6 +130,10 @@ export class OfferService {
       throw new ValidationError("source must be affiliate, amazon or cashback");
     }
     assertSafeRedirectUrl(input.destinationUrl);
+    const affiliateUrl = input.affiliateUrl?.trim() || null;
+    if (affiliateUrl) {
+      assertSafeRedirectUrl(affiliateUrl);
+    }
 
     if (input.idempotencyKey) {
       const existing = await this.offers.findByIdempotencyKey(
@@ -162,6 +168,7 @@ export class OfferService {
           network: input.network.trim(),
           source: input.source ?? "affiliate",
           destinationUrl: input.destinationUrl.trim(),
+          affiliateUrl,
           status: input.status ?? "DRAFT",
           priority: input.priority ?? 100,
           startsAt: input.startsAt,
@@ -224,6 +231,8 @@ export class OfferService {
       name?: string;
       network?: string;
       destinationUrl?: string;
+      /** 联盟链接（可空；空字符串按 null 处理） */
+      affiliateUrl?: string | null;
       priority?: number;
       startsAt?: Date | null;
       endsAt?: Date | null;
@@ -238,6 +247,13 @@ export class OfferService {
     if (data.destinationUrl) {
       assertSafeRedirectUrl(data.destinationUrl);
     }
+    const affiliateUrl =
+      data.affiliateUrl === undefined
+        ? undefined
+        : data.affiliateUrl?.trim() || null;
+    if (affiliateUrl) {
+      assertSafeRedirectUrl(affiliateUrl);
+    }
     validateBrandFields(data);
 
     return this.unitOfWork.transaction(async (ctx) => {
@@ -245,6 +261,7 @@ export class OfferService {
         name: data.name ?? existing.name,
         network: data.network ?? existing.network,
         destinationUrl: data.destinationUrl ?? existing.destinationUrl,
+        affiliateUrl: affiliateUrl === undefined ? existing.affiliateUrl : affiliateUrl,
         priority: data.priority ?? existing.priority,
         brandName: data.brandName?.trim() || existing.brandName,
         brandNameSource: data.brandNameSource ?? existing.brandNameSource,

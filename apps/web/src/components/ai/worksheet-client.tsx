@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useDict } from "@/i18n/use-dict";
 import { EntityPageHeader } from "@/components/entities/ui";
+import OfferLinks from "@/components/entities/offer-links";
 import { calcProfit, ASSUMED_CLICKS_TO_ORDER, clicksToOrderFromCvr, normalizeReturnRatio, suggestCpcByClicksToOrder } from "@/lib/profit-calc";
 import { getLastOfferId, getManualOffer, setLastOfferId, setManualOffer } from "@/lib/current-offer";
 import {
@@ -35,6 +36,8 @@ export interface WorksheetOffer {
   name: string;
   network: string;
   destinationUrl: string;
+  /** 联盟链接：联盟后台给的带参跟踪链接（可空）。 */
+  affiliateUrl?: string | null;
   commissionValue?: string | number | null;
   commissionType?: string | null;
   avgPrice?: string | number | null;
@@ -1102,6 +1105,8 @@ export function WorksheetClient({
   const [mName, setMName] = useState("");
   const [mNetwork, setMNetwork] = useState("");
   const [mUrl, setMUrl] = useState("");
+  /** 手动 offer 的联盟链接（选填）。 */
+  const [mAffUrl, setMAffUrl] = useState("");
 
   const applyManualOffer = () => {
     const name = mName.trim();
@@ -1117,6 +1122,7 @@ export function WorksheetClient({
       name,
       network: mNetwork.trim(),
       destinationUrl: mUrl.trim(),
+      affiliateUrl: mAffUrl.trim() || null,
     });
     setOfferSession((n) => n + 1);
     setManualOpen(false);
@@ -1135,6 +1141,7 @@ export function WorksheetClient({
         name: offer.name,
         network: offer.network ?? "",
         url: offer.destinationUrl ?? "",
+        affiliateUrl: offer.affiliateUrl ?? "",
       });
       setLastOfferId(null);
       return;
@@ -1145,10 +1152,11 @@ export function WorksheetClient({
         name: mName.trim(),
         network: mNetwork.trim(),
         url: mUrl.trim(),
+        affiliateUrl: mAffUrl.trim(),
       });
       setLastOfferId(null);
     }
-  }, [offer, mName, mNetwork, mUrl]);
+  }, [offer, mName, mNetwork, mUrl, mAffUrl]);
 
   const [termsVerdict, setTermsVerdict] = useState<"go" | "caution" | "stop" | null>(null);
   const [complianceResults, setComplianceResults] = useState<AiUrlCheckResult[] | null>(null);
@@ -1337,6 +1345,7 @@ export function WorksheetClient({
                 name: manual.name,
                 network: manual.network,
                 destinationUrl: manual.url,
+                affiliateUrl: manual.affiliateUrl || null,
               });
               const res = await loadWorkStateAction("ai-worksheet", null);
               if (!cancelled && res.ok && res.data.state && snapshotMeaningful(res.data.state)) {
@@ -1688,12 +1697,11 @@ export function WorksheetClient({
                 <p className="mt-1 truncate text-lg font-semibold text-ink">{offer.name}</p>
                 <p className="mt-0.5 text-sm text-ink/60">
                   {offer.network}
-                  {offer.destinationUrl ? (
-                    <>
-                      {" · "}
-                      <span className="break-all font-mono text-xs">{offer.destinationUrl}</span>
-                    </>
-                  ) : null}
+                  {" · "}
+                  <OfferLinks
+                    affiliateUrl={offer.affiliateUrl}
+                    destinationUrl={offer.destinationUrl}
+                  />
                 </p>
                 {offer.id && (
                   <Link
@@ -1808,6 +1816,24 @@ export function WorksheetClient({
               placeholder={w.offerUrlPh ?? "目标 URL"}
               className="rounded-lg border border-ink/15 bg-white px-3 py-1.5 text-sm outline-none focus:border-signal"
             />
+            <div className="flex items-center gap-2">
+              <input
+                value={mAffUrl}
+                onChange={(e) => setMAffUrl(e.target.value)}
+                placeholder="联盟链接（选填）"
+                className="flex-1 rounded-lg border border-ink/15 bg-white px-3 py-1.5 text-sm outline-none focus:border-signal"
+              />
+              {mAffUrl.trim() ? (
+                <a
+                  href={mAffUrl.trim()}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-signal/10 px-2.5 py-1 text-xs font-medium text-signal transition hover:bg-signal/20"
+                >
+                  ↗ 直达
+                </a>
+              ) : null}
+            </div>
             <div className="sm:col-span-3">
               <button
                 type="button"

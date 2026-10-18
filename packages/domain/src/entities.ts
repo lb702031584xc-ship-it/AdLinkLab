@@ -142,6 +142,8 @@ export interface Offer extends Timestamps, SoftDeleteFields {
   /** Offer 来源：affiliate（联盟）| amazon（亚马逊选品）| cashback（返利网）；缺省视为 affiliate */
   source?: string;
   destinationUrl: string;
+  /** 联盟链接：联盟后台给的带参跟踪链接（可空）。 */
+  affiliateUrl?: string | null;
   status: OfferStatus;
   /** Lower number = higher priority (default 100) */
   priority: number;

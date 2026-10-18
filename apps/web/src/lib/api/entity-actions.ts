@@ -100,6 +100,7 @@ export async function createOfferAction(input: {
   network: string;
   source?: string;
   destinationUrl: string;
+  affiliateUrl?: string;
   status?: string;
   priority?: number;
   startsAt?: string;
@@ -122,6 +123,7 @@ export async function updateOfferAction(
     name?: string;
     network?: string;
     destinationUrl?: string;
+    affiliateUrl?: string;
     priority?: number;
     startsAt?: string | null;
     endsAt?: string | null;

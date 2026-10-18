@@ -7,6 +7,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { EntityPageHeader } from "@/components/entities/ui";
+import OfferLinks from "@/components/entities/offer-links";
 import type { LaunchDict } from "@/i18n/dict/launch";
 import type { Offer } from "@/lib/api/entities";
 import type { AiAnalysis } from "@/lib/api/ai";
@@ -597,9 +598,12 @@ export function LaunchWizardClient({ dict: d, offers, initialChecklists, lang, i
           <h3 className="text-base font-semibold text-ink">{d.trackingTitle}</h3>
           <p className="mt-1 text-sm text-ink/60">{d.trackingHint}</p>
           {activeOffer && (
-            <p className="mt-2 break-all font-mono text-xs text-ink/55">
-              {activeOffer.destinationUrl}
-            </p>
+            <div className="mt-2">
+              <OfferLinks
+                affiliateUrl={activeOffer.affiliateUrl}
+                destinationUrl={activeOffer.destinationUrl}
+              />
+            </div>
           )}
           <div className="mt-3 max-w-md space-y-3">
             <div>

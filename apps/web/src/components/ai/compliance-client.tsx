@@ -27,6 +27,7 @@ export interface ComplianceOffer {
   name: string;
   network?: string | null;
   destinationUrl: string;
+  affiliateUrl?: string | null;
 }
 
 export function ComplianceClient({
@@ -78,13 +79,14 @@ export function ComplianceClient({
   });
 
   /* 选了 offer：链接框只显示该 offer 的数据（不再把旧内容带过来）。
-     没快照时只放该 offer 的目标 URL，域名重置为自有域名。 */
+     联盟链接和目标 URL 各占一行，都参与跳转链检查（联盟链接是投放实际用的）。 */
   const applyOfferUrl = (o: ComplianceOffer) => {
     setSelectedOfferId(o.id);
     setSelectedOfferName(o.name);
     setSelectedOfferNetwork(o.network ?? null);
     setDomains(initialOwnedDomains.join(", "));
-    setUrlsText(o.destinationUrl ? o.destinationUrl.trim() : "");
+    const urls = [o.affiliateUrl?.trim(), o.destinationUrl?.trim()].filter(Boolean);
+    setUrlsText(urls.join("\n"));
   };
 
   useEffect(() => {

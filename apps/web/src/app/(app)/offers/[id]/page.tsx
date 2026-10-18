@@ -22,6 +22,7 @@ import { OfferIntelTabs } from "@/components/offers/offer-intel-tabs";
 import { TestStopLossSection } from "@/components/offers/test-stop-loss";
 import { ClickProfitCard } from "@/components/offers/click-profit-card";
 import { OfferAutoStatusSection } from "@/components/offers/offer-auto-status-section";
+import OfferLinks from "@/components/entities/offer-links";
 import { getLang } from "@/i18n/lang";
 import { getDictionary } from "@/i18n/dictionaries";
 
@@ -107,14 +108,13 @@ export default async function OfferDetailPage({
           {
             label: d.labels.destinationUrl,
             value: (
-              <a
-                href={offer.destinationUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="break-all text-signal hover:underline"
-              >
-                {offer.destinationUrl}
-              </a>
+              <OfferLinks
+                affiliateUrl={offer.affiliateUrl}
+                destinationUrl={offer.destinationUrl}
+                affiliateLabel={t.entities.offers.affiliateUrlLabel}
+                destinationLabel={t.entities.offers.destinationUrlLabel}
+                openLabel={t.entities.offers.openLink}
+              />
             ),
           },
           { label: d.labels.startsAt, value: formatDateTime(offer.startsAt) },

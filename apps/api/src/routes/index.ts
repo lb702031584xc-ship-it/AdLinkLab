@@ -454,6 +454,7 @@ export async function registerRoutes(
       network: string;
       source?: string;
       destinationUrl: string;
+      affiliateUrl?: string | null;
       status?: OfferStatus;
       priority?: number;
       startsAt?: string;
@@ -477,6 +478,7 @@ export async function registerRoutes(
       network: request.body.network,
       source: request.body.source,
       destinationUrl: request.body.destinationUrl,
+      affiliateUrl: request.body.affiliateUrl,
       status: request.body.status,
       priority: request.body.priority,
       startsAt: request.body.startsAt
@@ -504,6 +506,7 @@ export async function registerRoutes(
       name?: string;
       network?: string;
       destinationUrl?: string;
+      affiliateUrl?: string | null;
       priority?: number;
       startsAt?: string | null;
       endsAt?: string | null;
@@ -522,6 +525,7 @@ export async function registerRoutes(
         name: request.body.name,
         network: request.body.network,
         destinationUrl: request.body.destinationUrl,
+        affiliateUrl: request.body.affiliateUrl,
         priority: request.body.priority,
         brandName: request.body.brandName,
         brandNameSource: request.body.brandNameSource,

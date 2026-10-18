@@ -116,6 +116,8 @@ export interface Offer {
   /** Offer 来源：affiliate | amazon | cashback */
   source: string;
   destinationUrl: string;
+  /** 联盟链接：联盟后台给的带参跟踪链接（可空）。 */
+  affiliateUrl: string | null;
   status: string;
   priority: number;
   startsAt?: string;
@@ -498,6 +500,7 @@ export const entityApi = {
       network: string;
       source?: string;
       destinationUrl: string;
+      affiliateUrl?: string;
       status?: string;
       priority?: number;
       startsAt?: string;
@@ -510,6 +513,7 @@ export const entityApi = {
         name?: string;
         network?: string;
         destinationUrl?: string;
+        affiliateUrl?: string;
         priority?: number;
         startsAt?: string | null;
         endsAt?: string | null;
