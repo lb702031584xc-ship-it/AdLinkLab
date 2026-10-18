@@ -23,6 +23,7 @@ export const zh = {
       FAILED: "失败",
     },
     skippedNote: "以下黑名单账号本次同步已跳过，未消耗请求：",
+    skippedLowCommission: "低佣金跳过（<$8 未入库）",
   },
   grant: {
     title: "需要管理员授权才能同步",
@@ -59,6 +60,19 @@ export const zh = {
       "在你自己的浏览器登录联盟后台 → F12 → Network → 复制 Cookie；只粘贴 Cookie，不要填账号密码，更不要在聊天里发",
     riskText:
       "登录态采集风险提示：使用登录态（Cookie）自动采集商品数据，可能违反 YeahPromos/PartnerBoost 服务条款中关于自动化访问的条款，存在账号被警告、限流或封禁的风险。请仅采集您自己账号可见的商品数据，不要高频抓取。如该联盟日后提供官方商品 API，请优先切换为官方 API 模式。继续即代表您已了解并自行承担该风险。",
+    credTitle: "登录账号",
+    credUsername: "用户名",
+    credUsernamePh: "联盟后台登录用户名",
+    credPassword: "密码",
+    credPasswordPh: "不修改请留空；保存后加密存储，永不回显",
+    credValidDays: "有效期（天）",
+    credValidDaysHint: "默认 30 天；过期后同步自动跳过并提示重新登录",
+    credSave: "保存登录账号",
+    credSaved: "登录账号已保存",
+    credExpiresAt: "到期时间",
+    credUsernameEmpty: "未设置",
+    credPasswordSet: "已设置（加密存储）",
+    credPasswordEmpty: "未设置",
   },
   preset: {
     title: "筛选预设",
@@ -270,6 +284,7 @@ export const en = {
       FAILED: "Failed",
     },
     skippedNote: "Skipped blacklisted accounts in this sync (no requests wasted):",
+    skippedLowCommission: "Skipped: commission <$8 (not stored)",
   },
   grant: {
     title: "Admin grant required to sync",
@@ -306,7 +321,20 @@ export const en = {
     cookieGuide:
       "Log in to the network backend in your own browser → F12 → Network → copy the Cookie; paste the Cookie only, never your account password, and never share it in chat",
     riskText:
-      "登录态采集风险提示：使用登录态（Cookie）自动采集商品数据，可能违反 YeahPromos/PartnerBoost 服务条款中关于自动化访问的条款，存在账号被警告、限流或封禁的风险。请仅采集您自己账号可见的商品数据，不要高频抓取。如该联盟日后提供官方商品 API，请优先切换为官方 API 模式。继续即代表您已了解并自行承担该风险。",
+      "Session-collection risk notice: auto-collecting product data with a login session (Cookie) may violate the network's terms on automated access, risking account warnings, rate limits or bans. Only collect product data visible to your own account; do not scrape at high frequency. If the network later offers an official product API, switch to official API mode. Proceeding means you understand and accept the risk yourself.",
+    credTitle: "Login account",
+    credUsername: "Username",
+    credUsernamePh: "Network backend login username",
+    credPassword: "Password",
+    credPasswordPh: "Leave blank to keep unchanged; stored encrypted, never shown",
+    credValidDays: "Valid days",
+    credValidDaysHint: "Default 30 days; expired sessions are skipped with a re-login prompt",
+    credSave: "Save login account",
+    credSaved: "Login account saved",
+    credExpiresAt: "Expires at",
+    credUsernameEmpty: "Not set",
+    credPasswordSet: "Set (encrypted)",
+    credPasswordEmpty: "Not set",
   },
   preset: {
     title: "Screening preset",

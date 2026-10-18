@@ -501,6 +501,8 @@ export async function registerCatalogRoutes(
           sessionUpdatedAt: new Date(),
           sessionError: null,
           sessionExpireStrikes: 0,
+          // 粘贴 Cookie = 一次新的登录确认：刷新 lastLoginAt，用于有效期预检。
+          lastLoginAt: new Date(),
         },
       });
       await writeCatalogAudit(prisma, {
@@ -529,6 +531,70 @@ export async function registerCatalogRoutes(
       status: network.sessionStatus ?? "NEVER",
       updatedAt: network.sessionUpdatedAt?.toISOString() ?? null,
     };
+  });
+
+  /* ── 登录账号（用户名/密码/有效期；密码只写不读，绝不回显） ── */
+
+  app.post<{
+    Body: {
+      networkId?: unknown;
+      username?: unknown;
+      password?: unknown;
+      sessionValidDays?: unknown;
+    };
+  }>("/api/v1/catalog/session-credentials", async (request) => {
+    const info = await requireSession(deps, request);
+    const networkId = assertId(request.body?.networkId, "networkId");
+    const network = await findNetwork(prisma, info.tenantId, networkId);
+    // B6：保存登录账号同样要求授权（whitelist=kind）。
+    const grant = await requireActiveGrant(prisma, {
+      tenantId: info.tenantId,
+      userId: info.id,
+      capability: "catalog-sync",
+      whitelistValue: network.kind,
+    });
+    const body = request.body ?? {};
+    const data: Record<string, unknown> = {
+      sessionUpdatedAt: new Date(),
+      sessionExpireStrikes: 0,
+    };
+    if (body.username !== undefined) {
+      const username =
+        typeof body.username === "string" ? body.username.trim() : "";
+      if (username.length > 200) throw new ValidationError("用户名过长（上限 200）");
+      data.sessionUsername = username || null;
+    }
+    if (typeof body.password === "string" && body.password) {
+      // 密码 8KB 上限与其他凭证一致；加密存储，绝不明文落库/日志。
+      if (body.password.length > 8192) {
+        throw new ValidationError("密码过长（上限 8KB）");
+      }
+      const pepper = assertNetworkApiPepperConfigured();
+      data.sessionPasswordRef = encryptApiKey(body.password, pepper);
+    }
+    if (body.sessionValidDays !== undefined && body.sessionValidDays !== null) {
+      const days = Number(body.sessionValidDays);
+      if (!Number.isInteger(days) || days < 1 || days > 365) {
+        throw new ValidationError("有效期天数必须为 1–365 的整数");
+      }
+      data.sessionValidDays = days;
+    }
+    // 保存账号信息 = 一次新的登录确认：刷新 lastLoginAt。
+    data.lastLoginAt = new Date();
+    await prisma.affiliateNetwork.update({
+      where: { id: network.id },
+      data: data as never,
+    });
+    await writeCatalogAudit(prisma, {
+      tenantId: info.tenantId,
+      grantId: grant.id,
+      actorId: info.id,
+      // 绝不记用户名/密码内容，只记动作。
+      action: "CATALOG_SESSION_CREDENTIALS_SAVED",
+      detail: { kind: network.kind, networkId: network.id },
+    });
+    await incrementGrantUsage(prisma, grant);
+    return { saved: true };
   });
 
   /* ── 批量建 Offer ── */

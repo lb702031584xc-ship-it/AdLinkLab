@@ -92,6 +92,58 @@ function SectionFailed({ d, error }: { d: Dict; error: string | null }) {
   );
 }
 
+/* ---------- 关键词 AI 判断行：irrelevant / risky 标红/警告 ---------- */
+function KeywordCheckRow({
+  k,
+  d,
+}: {
+  k: BlueprintResult["keywords"]["items"][number];
+  d: Dict;
+}) {
+  const v = k.check?.verdict ?? "unchecked";
+  const label =
+    v === "relevant"
+      ? d.keywords.verdictRelevant
+      : v === "irrelevant"
+        ? d.keywords.verdictIrrelevant
+        : v === "risky"
+          ? d.keywords.verdictRisky
+          : d.keywords.verdictUnchecked;
+  const badgeCls =
+    v === "relevant"
+      ? "bg-emerald-50 text-emerald-700"
+      : v === "irrelevant"
+        ? "bg-amber-50 text-amber-800"
+        : v === "risky"
+          ? "bg-red-50 text-red-700"
+          : "bg-ink/5 text-ink/50";
+  const rowCls =
+    v === "risky"
+      ? "border-t border-red-200 bg-red-50/40"
+      : v === "irrelevant"
+        ? "border-t border-amber-200 bg-amber-50/40"
+        : "border-t border-ink/10";
+  return (
+    <tr className={rowCls}>
+      <td className="py-1 pr-3 font-mono text-xs">{k.matchType === "exact" ? `[${k.keyword}]` : `"${k.keyword}"`}</td>
+      <td className="py-1 pr-3 text-ink/70">{k.matchType}</td>
+      <td className="py-1 pr-3 text-ink/70">{k.source === "user" ? d.keywords.sourceUser : d.keywords.sourceAi}</td>
+      <td className="py-1 pr-3 text-ink/70">{k.reason}</td>
+      <td className="py-1">
+        <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${badgeCls}`}>
+          {v === "risky" ? "⛔ " : v === "irrelevant" ? "⚠️ " : ""}
+          {label}
+        </span>
+        {k.check?.reason ? (
+          <span className="mt-0.5 block text-xs text-ink/55" title={k.check.reason}>
+            {k.check.reason}
+          </span>
+        ) : null}
+      </td>
+    </tr>
+  );
+}
+
 function buildMarkdownExport(bp: BlueprintResult): string {
   const L: string[] = [];
   L.push(`# ${bp.offer.name} —— 投放推演报告`);
@@ -118,8 +170,13 @@ function buildMarkdownExport(bp: BlueprintResult): string {
   L.push(`> ${bp.profit.note}`);
   L.push("");
   L.push("## 3. 关键词计划");
-  for (const k of bp.keywords.items)
-    L.push(`- ${k.matchType === "exact" ? `[${k.keyword}]` : `"${k.keyword}"`} —— ${k.reason}`);
+  for (const k of bp.keywords.items) {
+    const checkNote =
+      k.check && k.check.verdict !== "unchecked"
+        ? `【AI判断：${k.check.verdict}${k.check.reason ? `——${k.check.reason}` : ""}】`
+        : "";
+    L.push(`- ${k.matchType === "exact" ? `[${k.keyword}]` : `"${k.keyword}"`} —— ${k.reason}${checkNote}`);
+  }
   L.push("");
   L.push("## 4. 广告文案");
   for (const ag of bp.adPlan.plan?.adGroups ?? []) {
@@ -865,21 +922,18 @@ export function BlueprintClient({
             {result.keywords.error ? <SectionFailed d={d} error={result.keywords.error} /> : (
               <>
                 <p className="mb-2 text-xs text-ink/55">{d.keywords.hint}</p>
+                <p className="mb-2 text-xs text-ink/45">{d.keywords.verdictHint}</p>
                 <table className="w-full text-sm">
                   <thead><tr className="text-left text-ink/55">
                     <th className="py-1 pr-3 font-medium">{d.keywords.colKeyword}</th>
                     <th className="py-1 pr-3 font-medium">{d.keywords.colMatch}</th>
                     <th className="py-1 pr-3 font-medium">{d.keywords.colSource}</th>
-                    <th className="py-1 font-medium">{d.keywords.colReason}</th>
+                    <th className="py-1 pr-3 font-medium">{d.keywords.colReason}</th>
+                    <th className="py-1 font-medium">{d.keywords.colVerdict}</th>
                   </tr></thead>
                   <tbody>
                     {result.keywords.items.map((k, i) => (
-                      <tr key={i} className="border-t border-ink/10">
-                        <td className="py-1 pr-3 font-mono text-xs">{k.matchType === "exact" ? `[${k.keyword}]` : `"${k.keyword}"`}</td>
-                        <td className="py-1 pr-3 text-ink/70">{k.matchType}</td>
-                        <td className="py-1 pr-3 text-ink/70">{k.source === "user" ? d.keywords.sourceUser : d.keywords.sourceAi}</td>
-                        <td className="py-1 text-ink/70">{k.reason}</td>
-                      </tr>
+                      <KeywordCheckRow key={i} k={k} d={d} />
                     ))}
                   </tbody>
                 </table>

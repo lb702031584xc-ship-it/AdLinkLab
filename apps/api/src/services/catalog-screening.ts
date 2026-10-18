@@ -3,7 +3,11 @@
  *
  * DEFAULT_PRESET 为 P1-30 讲师经验默认值——讲师经验，非普适真理；
  * 用户可在商品库设置页按自己的品类/渠道调整。
+ * minCommissionAmount 默认引用 MIN_COMMISSION_USD（与入库第一道门槛、
+ * 推演/工作表判定共用同一常量）：入库时已拦掉 <$8 的，库内筛选默认不再更严。
  */
+import { MIN_COMMISSION_USD } from "@adlinklab/shared";
+
 export interface ScreeningPreset {
   minReviews?: number | null;
   minCommissionAmount?: number | null;
@@ -16,7 +20,7 @@ export interface ScreeningPreset {
 export const DEFAULT_PRESET = {
   // P1-30 讲师经验默认值（注释标注：讲师经验，非普适真理）。
   minReviews: 0,
-  minCommissionAmount: 10,
+  minCommissionAmount: MIN_COMMISSION_USD,
   minCommissionRate: 10,
   minPrice: 80,
   maxPrice: 150,

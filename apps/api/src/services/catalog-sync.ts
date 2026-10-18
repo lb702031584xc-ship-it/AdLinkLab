@@ -32,7 +32,10 @@ import {
   ConflictError,
   NotFoundError,
   ValidationError,
+  belowMinCommission,
+  estimateCommissionFigure,
 } from "@adlinklab/shared";
+import { getMinCommissionUsd } from "../ai/commission-gate.js";
 import {
   incrementGrantUsage,
   requireActiveGrant,
@@ -109,6 +112,11 @@ export interface CatalogSyncSummary {
   updated: number;
   recommended: number;
   autoCreatedOffers: number;
+  /**
+   * $8 佣金门槛（第一道）跳过的商品数：单次转化佣金明确低于门槛 → 不入库，
+   * 只计数不记明细（避免垃圾数据进库）；总数进审计日志。
+   */
+  skippedLowCommission: number;
   skipped?: boolean;
   skipReason?: string;
 }
@@ -128,6 +136,12 @@ interface NetworkRow {
   sessionRef: string | null;
   sessionListPath: string | null;
   sessionExpireStrikes: number | null;
+  /** 登录态用户名（明文可显示）。 */
+  sessionUsername: string | null;
+  /** 登录态有效期天数（null → 默认 30）。 */
+  sessionValidDays: number | null;
+  /** 上次登录/刷新登录态的时间；sessionExpiresAt = lastLoginAt + validDays。 */
+  lastLoginAt: Date | string | null;
 }
 
 interface ProductRow {
@@ -153,6 +167,44 @@ const toNum = (v: unknown): number | null => {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 };
+
+/** 默认登录态有效期（天）；sessionValidDays 为 null/非法时用它。 */
+export const DEFAULT_SESSION_VALID_DAYS = 30;
+
+/**
+ * 登录态是否已过期：lastLoginAt + validDays <= now。
+ * lastLoginAt 为空（老数据）→ 无法判定 → false，走原有的过期探测逻辑。
+ */
+export function isSessionLoginExpired(
+  lastLoginAt: Date | string | null | undefined,
+  validDays: number | null | undefined
+): boolean {
+  if (!lastLoginAt) return false;
+  const days =
+    typeof validDays === "number" && Number.isFinite(validDays) && validDays > 0
+      ? validDays
+      : DEFAULT_SESSION_VALID_DAYS;
+  const at =
+    lastLoginAt instanceof Date ? lastLoginAt.getTime() : new Date(lastLoginAt).getTime();
+  if (!Number.isFinite(at)) return false;
+  return at + days * 86400000 <= Date.now();
+}
+
+/** 登录态到期时间（展示用）；算不出 → null。 */
+export function sessionExpiresAt(
+  lastLoginAt: Date | string | null | undefined,
+  validDays: number | null | undefined
+): Date | null {
+  if (!lastLoginAt) return null;
+  const days =
+    typeof validDays === "number" && Number.isFinite(validDays) && validDays > 0
+      ? validDays
+      : DEFAULT_SESSION_VALID_DAYS;
+  const at =
+    lastLoginAt instanceof Date ? lastLoginAt.getTime() : new Date(lastLoginAt).getTime();
+  if (!Number.isFinite(at)) return null;
+  return new Date(at + days * 86400000);
+}
 
 /** 官方 API 的 NetworkOffer → SessionProduct（字段缺失 → null，不虚构）。 */
 function offerToSessionProduct(o: NetworkOffer): SessionProduct {
@@ -328,6 +380,7 @@ export async function syncCatalog(
       updated: 0,
       recommended: 0,
       autoCreatedOffers: 0,
+      skippedLowCommission: 0,
       skipped: true,
       skipReason: reason,
     };
@@ -345,6 +398,46 @@ export async function syncCatalog(
       action: "CATALOG_SYNC_INVALID_MODE",
       detail: { kind: net.kind, syncMode: net.syncMode },
     });
+  }
+
+  // 3b. session 模式登录态有效期预检：过期 → 直接跳过，
+  // 不用过期 session 去撞对方服务器（红色提示 + 审计）。
+  if (mode === "session" && isSessionLoginExpired(net.lastLoginAt, net.sessionValidDays)) {
+    const reason = "登录态已过期，请重新登录刷新";
+    await prisma.affiliateNetwork.update({
+      where: { id: net.id },
+      data: {
+        sessionStatus: "EXPIRED",
+        sessionError: reason,
+        sessionUpdatedAt: new Date(),
+      },
+    });
+    await writeCatalogAudit(prisma, {
+      tenantId,
+      grantId: grant.id,
+      actorId: userId,
+      action: "CATALOG_SYNC_SKIPPED_EXPIRED",
+      detail: {
+        kind: net.kind,
+        channel,
+        networkId: net.id,
+        lastLoginAt:
+          net.lastLoginAt instanceof Date
+            ? net.lastLoginAt.toISOString()
+            : net.lastLoginAt,
+        sessionValidDays: net.sessionValidDays ?? DEFAULT_SESSION_VALID_DAYS,
+      },
+    });
+    return {
+      synced: 0,
+      created: 0,
+      updated: 0,
+      recommended: 0,
+      autoCreatedOffers: 0,
+      skippedLowCommission: 0,
+      skipped: true,
+      skipReason: reason,
+    };
   }
 
   const syncStartedAt = new Date();
@@ -600,12 +693,28 @@ export async function syncCatalog(
   }
 
   /* ── 5. upsert ── */
+  // $8 佣金门槛（第一道，与推演/工作表共用同一常量 + 同一 AI 设置覆盖项）：
+  // 单次转化佣金明确低于门槛 → 不入库，只计数。未知（算不出金额）不拦。
+  const minCommission = await getMinCommissionUsd(prisma);
   let created = 0;
   let updated = 0;
+  let skippedLowCommission = 0;
+  const skippedLowCommissionBySource = { reported: 0, estimated: 0 };
   const upserted: ProductRow[] = [];
   for (const p of products) {
     const externalId = (p.externalId ?? "").trim();
     if (!externalId) continue;
+    const { figure, source } = estimateCommissionFigure({
+      amount: toNum(p.commissionAmount),
+      ratePct: toNum(p.commissionRate),
+      price: toNum(p.price),
+    });
+    if (figure != null && belowMinCommission(figure, minCommission)) {
+      skippedLowCommission += 1;
+      if (source === "reported") skippedLowCommissionBySource.reported += 1;
+      else skippedLowCommissionBySource.estimated += 1;
+      continue;
+    }
     const merchantId = await matchMerchantId(prisma, tenantId, net.id, p.brand);
     const data = {
       name: p.name,
@@ -831,6 +940,9 @@ export async function syncCatalog(
       synced: upserted.length,
       created,
       updated,
+      skippedLowCommission,
+      skippedLowCommissionBySource,
+      minCommissionUsd: minCommission,
       recommended,
       autoCreatedOffers,
       disappearedBlacklisted: disappeared.length,
@@ -844,5 +956,6 @@ export async function syncCatalog(
     updated,
     recommended,
     autoCreatedOffers,
+    skippedLowCommission,
   };
 }

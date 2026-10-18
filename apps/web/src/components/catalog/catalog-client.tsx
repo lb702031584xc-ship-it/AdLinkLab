@@ -21,6 +21,7 @@ import {
   recheckBlacklistAction,
   saveScreeningPresetAction,
   saveSessionCookieAction,
+  saveSessionCredentialsAction,
   screenCatalogAction,
   setSyncModeAction,
   syncCatalogAction,
@@ -1259,6 +1260,79 @@ export function CatalogClient({
     setMsg(d.mode.saved);
   }
 
+  // ---- session credentials (username/password/valid days; password write-only) ----
+  const [credModal, setCredModal] = useState<{
+    networkId: string;
+    networkName: string;
+  } | null>(null);
+  const [credUsername, setCredUsername] = useState("");
+  const [credPassword, setCredPassword] = useState("");
+  const [credValidDays, setCredValidDays] = useState("30");
+  const [savingCred, setSavingCred] = useState(false);
+
+  function openCredModal(n: CatalogNetwork) {
+    setCredModal({ networkId: n.id, networkName: n.name });
+    setCredUsername(n.sessionUsername ?? "");
+    setCredPassword("");
+    setCredValidDays(String(n.sessionValidDays ?? 30));
+  }
+
+  async function onSaveCredentials() {
+    if (!credModal || savingCred) return;
+    const networkId = credModal.networkId;
+    const days = Number(credValidDays);
+    if (!Number.isInteger(days) || days < 1 || days > 365) {
+      setMsg(d.mode.credValidDaysHint);
+      return;
+    }
+    setSavingCred(true);
+    setMsg(null);
+    const res = await saveSessionCredentialsAction(networkId, {
+      username: credUsername.trim(),
+      // 留空 = 不修改已保存的密码（后端只在非空时覆盖）。
+      password: credPassword || undefined,
+      sessionValidDays: days,
+    });
+    setSavingCred(false);
+    if (!res.ok) {
+      setMsg(res.error);
+      return;
+    }
+    setCredModal(null);
+    setCredPassword("");
+    setMsg(d.mode.credSaved);
+    // 乐观更新网络列表（到期时间为服务端同口径计算：now + 天数）。
+    const nowMs = Date.now();
+    setNetworks((ns) =>
+      ns.map((n) =>
+        n.id === networkId
+          ? {
+              ...n,
+              sessionUsername: credUsername.trim() || null,
+              sessionPasswordSet: credPassword ? true : n.sessionPasswordSet,
+              sessionValidDays: days,
+              lastLoginAt: new Date(nowMs).toISOString(),
+              sessionExpiresAt: new Date(nowMs + days * 86400000).toISOString(),
+            }
+          : n
+      )
+    );
+  }
+
+  /** 登录态到期信息展示：username 明文；密码永不回显。 */
+  function credInfo(n: CatalogNetwork): string {
+    const u = n.sessionUsername?.trim()
+      ? n.sessionUsername
+      : d.mode.credUsernameEmpty;
+    const pwd = n.sessionPasswordSet
+      ? d.mode.credPasswordSet
+      : d.mode.credPasswordEmpty;
+    const exp = n.sessionExpiresAt
+      ? `${d.mode.credExpiresAt}：${new Date(n.sessionExpiresAt).toLocaleString()}`
+      : "";
+    return `${d.mode.credUsername}：${u} · ${d.mode.credPassword}：${pwd}${exp ? ` · ${exp}` : ""}`;
+  }
+
   // ---- screening preset ----
   const [pMinReviews, setPMinReviews] = useState(initialPreset?.minReviews != null ? String(initialPreset.minReviews) : "");
   const [pMinCommissionAmount, setPMinCommissionAmount] = useState(initialPreset?.minCommissionAmount != null ? String(initialPreset.minCommissionAmount) : "");
@@ -1492,6 +1566,9 @@ export function CatalogClient({
                 synced {syncResult.synced} · created {syncResult.created} ·
                 updated {syncResult.updated} · recommended {syncResult.recommended} ·
                 autoCreatedOffers {syncResult.autoCreatedOffers}
+                {(syncResult.skippedLowCommission ?? 0) > 0 && (
+                  <> · {d.top.skippedLowCommission}：{syncResult.skippedLowCommission}</>
+                )}
               </div>
               {syncResult.skipped && syncResult.skipped.length > 0 && (
                 <div className="mt-2 rounded-lg bg-amber-50 px-4 py-2 text-sm text-amber-900">
@@ -1625,6 +1702,23 @@ export function CatalogClient({
                     </summary>
                     <p className="mt-1">{d.mode.cookieGuide}</p>
                   </details>
+                </div>
+
+                {/* ===== 登录账号（用户名/密码/有效期；密码只写不读） ===== */}
+                <div className="mt-3 border-t border-ink/10 pt-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-medium text-ink">
+                      {d.mode.credTitle}
+                    </span>
+                    <button
+                      className={btnGhost}
+                      style={{ whiteSpace: "nowrap" }}
+                      onClick={() => openCredModal(n)}
+                    >
+                      {d.mode.credSave}
+                    </button>
+                  </div>
+                  <p className="mt-1 text-xs text-ink/60">{credInfo(n)}</p>
                 </div>
               </div>
             );
@@ -1991,6 +2085,74 @@ export function CatalogClient({
       )}
       {tab === "whitelist" && (
         <WhitelistPanel d={d} showMsg={setMsg} />
+      )}
+
+      {/* ===== 登录账号设置弹窗（密码 password 框，永不回显） ===== */}
+      {credModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4">
+          <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+            <h3 className="text-lg font-semibold text-ink">
+              {d.mode.credTitle} · {credModal.networkName}
+            </h3>
+            <div className="mt-4 space-y-3">
+              <label className="block">
+                <span className={labelCls}>{d.mode.credUsername}</span>
+                <input
+                  className={inputCls}
+                  type="text"
+                  autoComplete="off"
+                  placeholder={d.mode.credUsernamePh}
+                  value={credUsername}
+                  onChange={(e) => setCredUsername(e.target.value)}
+                />
+              </label>
+              <label className="block">
+                <span className={labelCls}>{d.mode.credPassword}</span>
+                <input
+                  className={inputCls}
+                  type="password"
+                  autoComplete="new-password"
+                  placeholder={d.mode.credPasswordPh}
+                  value={credPassword}
+                  onChange={(e) => setCredPassword(e.target.value)}
+                />
+              </label>
+              <label className="block">
+                <span className={labelCls}>{d.mode.credValidDays}</span>
+                <input
+                  className={inputCls}
+                  type="number"
+                  min={1}
+                  max={365}
+                  value={credValidDays}
+                  onChange={(e) => setCredValidDays(e.target.value)}
+                />
+                <span className="mt-1 block text-xs text-ink/50">
+                  {d.mode.credValidDaysHint}
+                </span>
+              </label>
+            </div>
+            <div className="mt-5 flex justify-end gap-3">
+              <button
+                className={btnGhost}
+                onClick={() => {
+                  setCredModal(null);
+                  setCredPassword("");
+                }}
+                disabled={savingCred}
+              >
+                {d.mode.cancel}
+              </button>
+              <button
+                className={btnPrimary}
+                onClick={onSaveCredentials}
+                disabled={savingCred}
+              >
+                {savingCred ? d.mode.saving : d.mode.credSave}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ===== 切换 session 模式的风险确认弹窗 ===== */}

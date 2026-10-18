@@ -1094,6 +1094,14 @@ model AffiliateNetwork {
   sessionListPath String? @map("session_list_path")
   /// SESSION_EXPIRED 连续次数；连续 3 次 → 自动进黑名单（network_account）。
   sessionExpireStrikes Int @default(0) @map("session_expire_strikes")
+  /// session 模式登录用户名（明文可显示）。
+  sessionUsername String? @map("session_username")
+  /// session 模式登录密码（AES-256-GCM 加密，复用 network-crypto；绝不明文落库/日志/返回）。
+  sessionPasswordRef String? @map("session_password_ref")
+  /// 登录态有效期天数（null → 默认 30 天，可配）。
+  sessionValidDays Int? @map("session_valid_days")
+  /// 上次登录/刷新登录态的时间；sessionExpiresAt = lastLoginAt + sessionValidDays（计算得出，不存库）。
+  lastLoginAt DateTime? @map("last_login_at") @db.Timestamptz(3)
   status        String    @default("ACTIVE")
   createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)

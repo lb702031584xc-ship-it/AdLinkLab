@@ -19,12 +19,23 @@
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@adlinklab/database";
 import {
+  belowMinCommission,
+  minCommissionStopReason,
+} from "@adlinklab/shared";
+import {
   AiError,
   chatJson,
   chatJsonAccounting,
   chatJsonValidatedAccounting,
   type LlmUsage,
 } from "./llm.js";
+import {
+  buildKeywordCheckPrompt,
+  KEYWORD_CHECK_MAX_KEYWORDS,
+  validateKeywordCheckShape,
+  type KeywordCheckResult,
+} from "./keyword-check.js";
+import { getMinCommissionUsd } from "./commission-gate.js";
 import {
   buildTermsPrompt,
   PROMPT_VERSION,
@@ -89,6 +100,14 @@ export interface BlueprintKeyword {
   matchType: "exact" | "phrase";
   /** user = 用户已选（关键词页/手动），ai = AI 补充。 */
   source?: "user" | "ai";
+  /**
+   * AI 判断（任务1）：关键词生成后自动过一遍 keyword-check
+   * （relevant/irrelevant/risky）；检查失败时为 unchecked，不影响关键词展示。
+   */
+  check?: {
+    verdict: "relevant" | "irrelevant" | "risky" | "unchecked";
+    reason: string | null;
+  };
 }
 
 export interface BlueprintProfit {
@@ -329,6 +348,42 @@ export async function generateBlueprint(
       keywords?: Array<{ keyword?: unknown; reason?: unknown; source?: unknown }>;
     };
     keywords.items = mergeKeywordItems(seeds, raw.keywords ?? [], count, language);
+
+    // 任务1：一键推演的关键词自动过 AI 判断（逐词 relevant/irrelevant/risky）。
+    // fail-soft：检查失败 → 全部标 unchecked，不影响关键词展示；usage 照常记账。
+    if (keywords.items.length > 0) {
+      try {
+        const { system: checkSystem, user: checkUser } = buildKeywordCheckPrompt({
+          productDescription: input.productDescription,
+          offerName: input.offerName,
+          offerUrl: (input.offerUrl ?? "").trim() || undefined,
+          keywords: keywords.items
+            .slice(0, KEYWORD_CHECK_MAX_KEYWORDS)
+            .map((k) => k.keyword),
+          language,
+        });
+        const checked = await chatJsonValidatedAccounting(
+          { ...llmArgs, system: checkSystem, user: checkUser },
+          validateKeywordCheckShape,
+          deps.chatJsonImpl
+        );
+        absorb(checked.usage, checked.latencyMs);
+        const byKeyword = new Map<string, KeywordCheckResult>();
+        for (const r of checked.data.results) {
+          byKeyword.set(r.keyword.toLowerCase(), r);
+        }
+        for (const k of keywords.items) {
+          const r = byKeyword.get(k.keyword.toLowerCase());
+          k.check = r
+            ? { verdict: r.verdict, reason: r.reason }
+            : { verdict: "unchecked", reason: null };
+        }
+      } catch {
+        for (const k of keywords.items) {
+          k.check = { verdict: "unchecked", reason: null };
+        }
+      }
+    }
   } catch (e) {
     keywords.error = llmErrorMessage(e);
   }
@@ -417,6 +472,8 @@ export async function generateBlueprint(
   };
 
   // 7. 综合决策（确定性规则）
+  // 佣金门槛与推演/工作表/商品库三处共用同一常量 + 同一 AI 设置覆盖项。
+  const minCommission = await getMinCommissionUsd(deps.prisma);
   const reasons: string[] = [];
   let level: BlueprintVerdictLevel = "caution";
   const termsVerdict = terms.result?.overallVerdict ?? null;
@@ -447,7 +504,15 @@ export async function generateBlueprint(
           ? "Payout could not be computed — fill in price/commission."
           : "payout 算不出来——请补全价格/佣金。"
       );
+    } else if (belowMinCommission(payout, minCommission)) {
+      // 佣金门槛（经济性）：单次转化佣金过低 → 直接 stop（不值得测试）。
+      // 与条款 stop 区分：reason 明确写经济性原因，不写成政策禁止。
+      level = "stop";
+      reasons.push(
+        minCommissionStopReason(payout, input.currency, minCommission, language)
+      );
     } else if (payout < 5) {
+      // 旧 thin 提示：仅当管理员把门槛调到 5 以下时可达；默认 8 下被上一分支覆盖。
       reasons.push(
         language === "en"
           ? `Payout ${input.currency} ${payout} is thin — break-even CPC leaves almost no room; prefer content/SEO or a higher-payout offer.`

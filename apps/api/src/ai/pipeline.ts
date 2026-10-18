@@ -40,6 +40,12 @@ import {
 import { fetchPage } from "./fetch-page.js";
 import { computeProfitability } from "./profitability.js";
 import {
+  belowMinCommission,
+  MIN_COMMISSION_USD,
+  minCommissionStopReason,
+} from "@adlinklab/shared";
+import { getMinCommissionUsd } from "./commission-gate.js";
+import {
   evaluateCriticalRules,
   type CriticalHit,
   type PolicyRuleName,
@@ -867,6 +873,13 @@ export function synthesizeDecision(args: {
   profit: ProfitAnalystOutput;
   traffic: TrafficAnalystOutput;
   baseProfitThreshold?: number;
+  /**
+   * 佣金门槛（USD，与推演/商品库共用同一常量 + 同一 AI 设置覆盖项）。
+   * 未传时用 MIN_COMMISSION_USD 默认值。
+   */
+  minCommissionUsd?: number;
+  /** 经济性 reason 的语言；默认 en（与现有 reason 语言一致）。 */
+  language?: AnalysisLanguage;
 }): DecisionJson {
   const { trafficMode, risk, profit, traffic } = args;
   const m = profit.model;
@@ -929,6 +942,35 @@ export function synthesizeDecision(args: {
 
   let decision: OfferDecision;
   let confidence: number;
+  // 佣金门槛（经济性）：单次转化佣金低于门槛 → 盈利腿判最弱档（不值得测试）。
+  // 放在政策性 DO_NOT_RUN（critical early-return）之后，与政策禁止区分：
+  // reason 明确写经济性原因。
+  const minCommission = args.minCommissionUsd ?? MIN_COMMISSION_USD;
+  const commission = m.commission;
+  if (typeof commission === "number" && belowMinCommission(commission, minCommission)) {
+    reasons.push(
+      minCommissionStopReason(
+        commission,
+        m.currency ?? "USD",
+        minCommission,
+        args.language ?? "en"
+      )
+    );
+    return {
+      decision: "DO_NOT_RUN",
+      riskScore,
+      profitScore,
+      policyScore: Math.round(policyScore),
+      breakEvenCpc: m.breakEvenCpc,
+      recommendedMaxCpc: m.recommendedMaxCpc,
+      trafficMode,
+      directLink: trafficMode === "DIRECT_LINK",
+      confidence: 0.9,
+      reason: reasons,
+      manualChecks,
+      dataQuality: m.dataQuality,
+    };
+  }
   if (riskScore >= 81) {
     decision = "DO_NOT_RUN";
     confidence = 0.85;
@@ -1138,6 +1180,9 @@ export async function runOfferPipeline(
     risk,
     profit,
     traffic,
+    // 佣金门槛与推演/商品库共用同一常量 + 同一 AI 设置覆盖项（fail-soft → 默认值）。
+    minCommissionUsd: await getMinCommissionUsd(deps.prisma),
+    language: input.language,
   });
   await deps.prisma.offerRiskScore.create({
     data: {

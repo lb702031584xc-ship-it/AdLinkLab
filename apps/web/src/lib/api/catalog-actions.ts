@@ -46,6 +46,16 @@ export interface CatalogNetwork {
   syncMode: SyncMode;
   sessionConfigured: boolean;
   sessionStatus: SessionStatus;
+  /** 登录用户名（明文可显示；未设置 → null）。 */
+  sessionUsername?: string | null;
+  /** 是否已设置登录密码（只返回布尔值，密码永不回显）。 */
+  sessionPasswordSet?: boolean;
+  /** 登录态有效期天数（null → 默认 30）。 */
+  sessionValidDays?: number | null;
+  /** 上次登录/刷新时间（ISO）。 */
+  lastLoginAt?: string | null;
+  /** 登录态到期时间（ISO；算不出 → null）。 */
+  sessionExpiresAt?: string | null;
 }
 
 export interface CatalogProduct {
@@ -89,12 +99,39 @@ export interface SyncResult {
   updated: number;
   recommended: number;
   autoCreatedOffers: number;
+  /** $8 佣金门槛（第一道）跳过的商品数：不入库，只计数。 */
+  skippedLowCommission?: number;
   /** Blacklisted accounts skipped by the sync (no request wasted). Optional until the backend batch lands. */
   skipped?: Array<{
     networkId: string;
     networkName?: string | null;
     reason?: string | null;
   }>;
+}
+
+/**
+ * 保存登录账号（用户名/密码/有效期）。密码只写不读：后端加密存储，
+ * GET 永不回显；留空 = 不修改已保存的密码。
+ */
+export async function saveSessionCredentialsAction(
+  networkId: string,
+  input: { username?: string; password?: string; sessionValidDays?: number }
+) {
+  if (
+    input.password &&
+    new TextEncoder().encode(input.password).length > 8 * 1024
+  ) {
+    return { ok: false as const, error: "密码过长（上限 8KB）" };
+  }
+  return attempt(
+    () =>
+      apiFetch<{ saved: boolean }>("/api/v1/catalog/session-credentials", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ networkId, ...input }),
+      }),
+    ["/catalog"]
+  );
 }
 
 export interface BatchCreateResult {

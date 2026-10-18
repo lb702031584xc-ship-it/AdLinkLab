@@ -706,6 +706,11 @@ export interface BlueprintKeyword {
   reason: string;
   matchType: "exact" | "phrase";
   source?: "user" | "ai";
+  /** AI 判断（关键词生成后自动过 keyword-check；失败时为 unchecked）。 */
+  check?: {
+    verdict: "relevant" | "irrelevant" | "risky" | "unchecked";
+    reason: string | null;
+  };
 }
 
 export interface BlueprintResult {

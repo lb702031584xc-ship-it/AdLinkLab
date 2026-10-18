@@ -385,3 +385,91 @@ describe("networks routes", () => {
     expect(other.statusCode).toBe(404);
   });
 });
+
+describe("GET /api/v1/networks 登录账号字段（密码只写不读）", () => {
+  it("返回用户名明文 + 密码已设置布尔值 + 到期时间，永不回显密码", async () => {
+    const ctx: Ctx = { networks: [], offers: [], pulls: [] };
+    const secret = encryptApiKey("topsecret", PEPPER);
+    ctx.networks.push({
+      id: NETWORK,
+      tenantId: TENANT,
+      name: "YP",
+      kind: "yeahpromos",
+      website: null,
+      apiConfigured: false,
+      apiKeyRef: null,
+      apiBaseUrl: null,
+      lastPullAt: null,
+      pullStatus: "NEVER",
+      pullError: null,
+      status: "ACTIVE",
+      deletedAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      syncMode: "session",
+      sessionRef: null,
+      sessionStatus: "OK",
+      sessionUsername: "myuser",
+      sessionPasswordRef: secret,
+      sessionValidDays: 30,
+      lastLoginAt: new Date("2026-10-01T00:00:00.000Z"),
+    });
+    const app = await buildApp(ctx);
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/networks",
+      headers: headers(),
+    });
+    expect(res.statusCode).toBe(200);
+    const n = res.json().networks[0];
+    // 用户名明文可显示
+    expect(n.sessionUsername).toBe("myuser");
+    // 密码永不回显：只有"是否已设置"布尔值
+    expect(n.sessionPasswordSet).toBe(true);
+    expect(n.sessionPasswordRef).toBeUndefined();
+    expect(n.sessionPassword).toBeUndefined();
+    expect(JSON.stringify(n)).not.toContain("topsecret");
+    // 有效期/到期时间展示
+    expect(n.sessionValidDays).toBe(30);
+    expect(n.lastLoginAt).toBe("2026-10-01T00:00:00.000Z");
+    expect(n.sessionExpiresAt).toBe("2026-10-31T00:00:00.000Z");
+  });
+
+  it("未设置密码 → sessionPasswordSet 为 false", async () => {
+    const ctx: Ctx = { networks: [], offers: [], pulls: [] };
+    ctx.networks.push({
+      id: NETWORK,
+      tenantId: TENANT,
+      name: "YP",
+      kind: "yeahpromos",
+      website: null,
+      apiConfigured: false,
+      apiKeyRef: null,
+      apiBaseUrl: null,
+      lastPullAt: null,
+      pullStatus: "NEVER",
+      pullError: null,
+      status: "ACTIVE",
+      deletedAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      syncMode: "session",
+      sessionRef: null,
+      sessionStatus: "NEVER",
+      sessionUsername: null,
+      sessionPasswordRef: null,
+      sessionValidDays: null,
+      lastLoginAt: null,
+    });
+    const app = await buildApp(ctx);
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/networks",
+      headers: headers(),
+    });
+    const n = res.json().networks[0];
+    expect(n.sessionPasswordSet).toBe(false);
+    expect(n.sessionUsername).toBeNull();
+    expect(n.sessionExpiresAt).toBeNull();
+  });
+});

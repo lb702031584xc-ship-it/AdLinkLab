@@ -35,9 +35,19 @@ function fakePrisma(): PrismaClient {
 }
 
 /** Fake LLM: returns canned shapes based on which prompt it sees. */
-function fakeChat(kind: "ok" | "failKeywords" = "ok") {
+function fakeChat(kind: "ok" | "failKeywords" | "failKeywordCheck" = "ok") {
   return async (args: ChatJsonArgs): Promise<unknown> => {
     const blob = `${args.system ?? ""}\n${args.user ?? ""}`;
+    // 关键词 AI 检查分支（任务1）：必须在 "keyword ideas" 之前判
+    if (blob.includes("keyword reviewer")) {
+      if (kind === "failKeywordCheck") throw new Error("check boom");
+      return {
+        results: [
+          { keyword: "vpn for streaming", verdict: "relevant", reason: "购买意图明确" },
+          { keyword: "best vpn for travel 2026", verdict: "risky", reason: "对比词有政策风险" },
+        ],
+      };
+    }
     // failKeywords 只杀真正的关键词分支：广告 prompt 也含 "keyword ideas" 不能误伤
     if (kind === "failKeywords" && blob.includes("keyword ideas") && !blob.includes('"headlines"')) {
       throw new Error("boom");
@@ -98,7 +108,7 @@ function fakeChat(kind: "ok" | "failKeywords" = "ok") {
   };
 }
 
-function deps(kind: "ok" | "failKeywords" = "ok"): BlueprintDeps {
+function deps(kind: "ok" | "failKeywords" | "failKeywordCheck" = "ok"): BlueprintDeps {
   return {
     prisma: fakePrisma(),
     tenantId: "t1",
@@ -214,5 +224,77 @@ describe("extractOfferMeta", () => {
     expect(meta.description).toBe("Does cool things.");
     expect(meta.price).toBe(49.99);
     expect(meta.currency).toBe("EUR");
+  });
+});
+
+describe("任务1：关键词生成后自动过 AI 判断", () => {
+  it("每个关键词带 verdict：relevant / risky 正确映射", async () => {
+    const bp = await generateBlueprint(deps("ok"), baseInput);
+    expect(bp.keywords.items.length).toBe(2);
+    const [a, b] = bp.keywords.items;
+    expect(a.check?.verdict).toBe("relevant");
+    expect(a.check?.reason).toContain("购买意图");
+    expect(b.check?.verdict).toBe("risky");
+    expect(b.check?.reason).toContain("政策风险");
+  });
+
+  it("fail-soft：检查失败时关键词仍展示且标记 unchecked", async () => {
+    const bp = await generateBlueprint(deps("failKeywordCheck"), baseInput);
+    expect(bp.keywords.error).toBeNull();
+    expect(bp.keywords.items.length).toBe(2);
+    for (const k of bp.keywords.items) {
+      expect(k.check?.verdict).toBe("unchecked");
+    }
+  });
+});
+
+describe("任务2：$8 佣金门槛（经济性 stop）", () => {
+  const fixedInput = (commissionValue: number): BlueprintInput => ({
+    ...baseInput,
+    commissionType: "fixed",
+    commissionValue,
+  });
+
+  it("7.99 → stop，reason 说明经济性原因，不写成政策禁止", async () => {
+    const bp = await generateBlueprint(deps("ok"), fixedInput(7.99));
+    expect(bp.payout).toBeCloseTo(7.99, 2);
+    expect(bp.verdict.level).toBe("stop");
+    const joined = bp.verdict.reasons.join("");
+    expect(joined).toContain("7.99");
+    expect(joined).toContain("不值得测试");
+    expect(joined).toContain("经济性");
+    expect(joined).toContain("非政策禁止");
+    expect(joined).not.toContain("违反政策");
+  });
+
+  it("8.00 → 不判（边界不触发门槛）", async () => {
+    const bp = await generateBlueprint(deps("ok"), fixedInput(8.0));
+    expect(bp.payout).toBeCloseTo(8.0, 2);
+    const joined = bp.verdict.reasons.join("");
+    expect(joined).not.toContain("不值得测试");
+    // 未提供条款文本时最高为 caution，但不是门槛 stop
+    expect(bp.verdict.level).toBe("caution");
+  });
+
+  it("4.00 → 仍是门槛 stop（旧 payout<5 thin 分支 unreachable，reason 不回退到旧文案）", async () => {
+    const bp = await generateBlueprint(deps("ok"), fixedInput(4.0));
+    expect(bp.verdict.level).toBe("stop");
+    const joined = bp.verdict.reasons.join("");
+    expect(joined).toContain("不值得测试");
+    expect(joined).not.toContain("is thin");
+    expect(joined).not.toContain("保本 CPC 几乎没有操作空间，优先考虑内容/SEO");
+  });
+
+  it("英文输出：reason 同样说明经济性", async () => {
+    const bp = await generateBlueprint(deps("ok"), {
+      ...fixedInput(7.99),
+      language: "en",
+    });
+    expect(bp.verdict.level).toBe("stop");
+    const joined = bp.verdict.reasons.join("");
+    expect(joined).toContain("not worth testing");
+    expect(joined).toContain("economic");
+    expect(joined).not.toContain("prohibited");
+    expect(joined).not.toContain("banned");
   });
 });

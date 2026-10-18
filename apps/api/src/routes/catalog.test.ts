@@ -11,7 +11,10 @@ import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@adlinklab/database";
 import { registerCatalogRoutes } from "./catalog.js";
 import {
+  activeGrant,
   makeCatalogFakePrisma,
+  testNetwork,
+  TEST_NETWORK,
   TEST_TENANT,
   TEST_USER,
   type CatalogFakeCtx,
@@ -157,5 +160,93 @@ describe("白名单建议→确认", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().items).toHaveLength(1);
     expect(res.json().items[0].channel).toBe("amazon");
+  });
+});
+
+describe("POST /api/v1/catalog/session-credentials（登录账号）", () => {
+  const NETWORK_KIND = "yeahpromos";
+
+  function setupCtx() {
+    const { ctx } = makeCatalogFakePrisma();
+    ctx.affiliateNetwork.push(
+      testNetwork({ kind: NETWORK_KIND, syncMode: "session" })
+    );
+    ctx.adminGrant.push(activeGrant(NETWORK_KIND));
+    return ctx;
+  }
+
+  it("密码落库是密文（非明文），lastLoginAt 被刷新，审计不记秘密", async () => {
+    const ctx = setupCtx();
+    const { app } = buildApp(ctx, "admin");
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/catalog/session-credentials",
+      payload: {
+        networkId: TEST_NETWORK,
+        username: "myuser",
+        password: "s3cr3t-p@ss",
+        sessionValidDays: 30,
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().saved).toBe(true);
+
+    const row = ctx.affiliateNetwork[0];
+    expect(row.sessionUsername).toBe("myuser");
+    // 密文：enc 前缀 + 不含明文
+    expect(row.sessionPasswordRef).toMatch(/^enc:v1:/);
+    expect(row.sessionPasswordRef).not.toContain("s3cr3t-p@ss");
+    expect(row.sessionValidDays).toBe(30);
+    expect(row.lastLoginAt).toBeInstanceOf(Date);
+
+    // 审计：只记动作，不记用户名/密码内容
+    const audit = ctx.adminGrantAudit.find(
+      (a) => a.action === "CATALOG_SESSION_CREDENTIALS_SAVED"
+    );
+    expect(audit).toBeDefined();
+    const detail = JSON.stringify((audit as Record<string, unknown>).detail);
+    expect(detail).not.toContain("s3cr3t-p@ss");
+    expect(detail).not.toContain("myuser");
+  });
+
+  it("留空密码 → 不覆盖已保存的密文", async () => {
+    const ctx = setupCtx();
+    ctx.affiliateNetwork[0].sessionPasswordRef = "enc:v1:old";
+    const { app } = buildApp(ctx, "admin");
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/catalog/session-credentials",
+      payload: { networkId: TEST_NETWORK, username: "u2" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(ctx.affiliateNetwork[0].sessionPasswordRef).toBe("enc:v1:old");
+    expect(ctx.affiliateNetwork[0].sessionUsername).toBe("u2");
+  });
+
+  it("非法有效期天数 → 400", async () => {
+    const ctx = setupCtx();
+    const { app } = buildApp(ctx, "admin");
+    for (const days of [0, -5, 366, 1.5, "abc"]) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/catalog/session-credentials",
+        payload: { networkId: TEST_NETWORK, sessionValidDays: days },
+      });
+      expect(res.statusCode).toBe(400);
+    }
+  });
+
+  it("无 B6 授权 → 403", async () => {
+    const { ctx } = makeCatalogFakePrisma();
+    ctx.affiliateNetwork.push(
+      testNetwork({ kind: NETWORK_KIND, syncMode: "session" })
+    );
+    const { app } = buildApp(ctx, "admin");
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/catalog/session-credentials",
+      payload: { networkId: TEST_NETWORK, username: "u" },
+    });
+    expect(res.statusCode).toBe(403);
   });
 });

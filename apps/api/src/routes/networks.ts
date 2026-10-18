@@ -127,7 +127,20 @@ export function serializeNetwork(row: {
   sessionRef?: string | null;
   sessionStatus?: string | null;
   sessionListPath?: string | null;
+  /** 登录用户名（明文可显示）。 */
+  sessionUsername?: string | null;
+  /** 是否已设置登录密码（只返回布尔值，绝不回显密码本身）。 */
+  sessionPasswordRef?: string | null;
+  /** 登录态有效期天数（null → 默认 30）。 */
+  sessionValidDays?: number | null;
+  /** 上次登录/刷新时间。 */
+  lastLoginAt?: Date | null;
 }) {
+  const validDays =
+    typeof row.sessionValidDays === "number" && row.sessionValidDays > 0
+      ? row.sessionValidDays
+      : 30;
+  const lastLoginMs = row.lastLoginAt ? new Date(row.lastLoginAt).getTime() : NaN;
   return {
     id: row.id,
     name: row.name,
@@ -145,6 +158,15 @@ export function serializeNetwork(row: {
     sessionConfigured: Boolean(row.sessionRef),
     sessionStatus: row.sessionStatus ?? "NEVER",
     sessionListPath: row.sessionListPath ?? null,
+    // 登录账号（密码只写不读：只返回"是否已设置"，永不回显）。
+    sessionUsername: row.sessionUsername ?? null,
+    sessionPasswordSet: Boolean(row.sessionPasswordRef),
+    sessionValidDays: row.sessionValidDays ?? null,
+    lastLoginAt: row.lastLoginAt ? new Date(row.lastLoginAt).toISOString() : null,
+    sessionExpiresAt:
+      Number.isFinite(lastLoginMs) && row.lastLoginAt
+        ? new Date(lastLoginMs + validDays * 86400000).toISOString()
+        : null,
   };
 }
 

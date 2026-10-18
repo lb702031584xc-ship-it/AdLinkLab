@@ -3,6 +3,7 @@
  * 确定性公式，无 LLM。
  */
 import { describe, expect, it } from "vitest";
+import { MIN_COMMISSION_USD } from "@adlinklab/shared";
 import {
   DEFAULT_PRESET,
   scoreProduct,
@@ -56,7 +57,8 @@ describe("scoreProduct", () => {
   });
 
   it("默认 preset 即讲师经验默认值", () => {
-    expect(DEFAULT_PRESET.minCommissionAmount).toBe(10);
+    // minCommissionAmount 与 $8 佣金门槛共用同一常量（入库第一道 + 库内第二道同口径）
+    expect(DEFAULT_PRESET.minCommissionAmount).toBe(MIN_COMMISSION_USD);
     expect(DEFAULT_PRESET.minCommissionRate).toBe(10);
     expect(DEFAULT_PRESET.minPrice).toBe(80);
     expect(DEFAULT_PRESET.maxPrice).toBe(150);

@@ -138,3 +138,36 @@ Cookie 以 AES-256-GCM 加密存储（`session_ref`），明文永不记日志�
 - 观察期内：中性对待（不拉黑、不加白，数据重新累计，不直接恢复白名单）；
   商品推荐排序时观察期商家的商品不置顶。
 - 手动复检：`POST /api/v1/catalog/blacklist/:id/recheck`（返回验证结果，不自动移除）。
+
+## 佣金门槛（$8）：两道门共用同一常量
+
+单次转化佣金低于 $8 的 offer/商品判定为"不值得测试"（保本 CPC 没有操作空间）。
+阈值定义在 `packages/shared/src/commission-gate.ts` 的 `MIN_COMMISSION_USD`（默认 8），
+三处共用同一常量 + 同一 AI 设置覆盖项（`ai_settings.minCommissionUsd`，无配置时用默认）：
+
+1. **第一道 · 商品库入库过滤**（`catalog-sync.ts` §5）：同步拉取的商品在入库前先过门槛——
+   固定佣金取实报金额（reported），百分比佣金按"价格 × 佣金率"估算（estimated），
+   算不出金额的按"未知"处理**不拦截**，只拦"明确低于 $8"的。被拦的商品不入库、
+   只计数（`skippedLowCommission`），明细不进库，审计日志记总数与来源分布。
+2. **第二道 · 库内筛选预设**（`catalog-screening.ts` P1-30）：`DEFAULT_PRESET.minCommissionAmount`
+   默认引用同一常量（租户可在商品库设置页覆盖）。入库时已拦掉 <$8 的，库内默认不再更严。
+
+另两处判定同样引用该常量（经济性 stop，与政策禁止区分）：
+- 一键推演综合决策（`blueprint.ts` §7）：payout < 门槛 → verdict `stop`；
+- 工作表盈利腿（`pipeline.ts` `synthesizeDecision`）：commission < 门槛 → 最弱档 `DO_NOT_RUN`。
+
+## 登录账号（session 模式）
+
+每个 session 模式的联盟账号可配置登录账号：`session_username`（明文可显示）、
+`session_password_ref`（AES-256-GCM 加密，复用 `network-crypto`，绝不明文落库/日志）、
+`session_valid_days`（有效期天数，默认 30，可配 1–365）。
+
+- `last_login_at` 记录上次保存账号/登录态的时间；
+  `sessionExpiresAt = lastLoginAt + sessionValidDays`（计算得出，不存库）。
+- 同步引擎在 session 模式下先校验有效期：**过期 → 直接跳过该账号同步**，
+  红色提示"登录态已过期，请重新登录刷新"，写审计（`CATALOG_SYNC_SKIPPED_EXPIRED`），
+  不用过期 session 去撞对方服务器。
+- API：`POST /api/v1/catalog/session-credentials`（B6 授权；密码只写不读）；
+  `GET /api/v1/networks` 只返回 `sessionUsername` / `sessionPasswordSet`（布尔）/
+  `sessionValidDays` / `lastLoginAt` / `sessionExpiresAt`，**永不返回密码及任何可逆字段**。
+- Cookie 粘贴方式保留：已有账号密码的用户也可只用 Cookie，不强制二选一。

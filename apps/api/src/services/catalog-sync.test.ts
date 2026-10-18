@@ -382,8 +382,9 @@ describe("syncCatalog 商品处理", () => {
       autoCreateTopN: 50,
     });
     adapter.products = [
-      // 未达门槛（价格 10 < minPrice 80）→ 不应建 Offer
-      sessionProduct({ externalId: "low", name: "Low", price: 10, commissionAmount: 1, commissionRate: 1 }),
+      // 未达筛选门槛（价格 10 < minPrice 80）→ 不应建 Offer；
+      // 佣金 ≥$8 以免被入库第一道门槛拦掉（保留本用例的原测试意图）
+      sessionProduct({ externalId: "low", name: "Low", price: 10, commissionAmount: 20, commissionRate: 15 }),
       // 达门槛但分数较低，稍后加 manual 白名单 → 置顶
       sessionProduct({ externalId: "mid", name: "Mid", price: 100, commissionAmount: 20, commissionRate: 15 }),
       // 达门槛且分数更高（无白名单）
@@ -446,5 +447,124 @@ describe("syncCatalog 商品处理", () => {
     expect(
       ctx.adminGrantAudit.some((a) => a.action === "CATALOG_SYNC_INVALID_MODE")
     ).toBe(true);
+  });
+});
+
+describe("syncCatalog $8 佣金门槛（入库第一道）", () => {
+  it("7.99 固定佣金的商品不入库，只计数；8.00 入库", async () => {
+    const adapter = new FakeSessionAdapter();
+    adapter.products = [
+      sessionProduct({
+        externalId: "low",
+        name: "Low",
+        commissionAmount: 7.99,
+        commissionRate: null,
+      }),
+      sessionProduct({
+        externalId: "ok",
+        name: "Ok",
+        commissionAmount: 8.0,
+        commissionRate: null,
+      }),
+    ];
+    const { deps, ctx } = setup({ sessionAdapter: adapter });
+    const summary = await syncCatalog(deps, input);
+    expect(summary.skippedLowCommission).toBe(1);
+    const names = ctx.networkProduct.map((p) => p.name);
+    expect(names).not.toContain("Low");
+    expect(names).toContain("Ok");
+  });
+
+  it("百分比佣金 × 价格估算低于 $8 → 不入库", async () => {
+    const adapter = new FakeSessionAdapter();
+    // 100 × 5% = $5 估算 → 低于 $8
+    adapter.products = [
+      sessionProduct({
+        externalId: "pct",
+        name: "Pct",
+        commissionAmount: null,
+        commissionRate: 5,
+        price: 100,
+      }),
+    ];
+    const { deps, ctx } = setup({ sessionAdapter: adapter });
+    const summary = await syncCatalog(deps, input);
+    expect(summary.skippedLowCommission).toBe(1);
+    expect(ctx.networkProduct).toHaveLength(0);
+    // 审计记总数 + 来源分布
+    const audit = ctx.adminGrantAudit.find(
+      (a) => a.action === "CATALOG_SYNC_SUCCESS"
+    );
+    expect(audit).toBeDefined();
+    expect((audit as Row).detail.skippedLowCommission).toBe(1);
+    expect((audit as Row).detail.skippedLowCommissionBySource.estimated).toBe(1);
+  });
+
+  it("佣金未知（算不出金额）→ 入库不拦截", async () => {
+    const adapter = new FakeSessionAdapter();
+    adapter.products = [
+      sessionProduct({
+        externalId: "unk",
+        name: "Unknown",
+        commissionAmount: null,
+        commissionRate: null,
+        price: null,
+      }),
+    ];
+    const { deps, ctx } = setup({ sessionAdapter: adapter });
+    const summary = await syncCatalog(deps, input);
+    expect(summary.skippedLowCommission).toBe(0);
+    expect(ctx.networkProduct.map((p) => p.name)).toContain("Unknown");
+  });
+
+  it("过期 session → 跳过同步 + 红色提示 + 审计，不调适配器", async () => {
+    const adapter = new FakeSessionAdapter();
+    adapter.products = [sessionProduct()];
+    const { deps, ctx } = setup({
+      sessionAdapter: adapter,
+      network: {
+        lastLoginAt: new Date(Date.now() - 40 * 86400000),
+        sessionValidDays: 30,
+      },
+    });
+    const summary = await syncCatalog(deps, input);
+    expect(summary.skipped).toBe(true);
+    expect(summary.skipReason).toContain("登录态已过期，请重新登录刷新");
+    expect(adapter.calls).toBe(0);
+    expect(
+      ctx.adminGrantAudit.some((a) => a.action === "CATALOG_SYNC_SKIPPED_EXPIRED")
+    ).toBe(true);
+  });
+
+  it("有效期内的 session → 正常同步", async () => {
+    const adapter = new FakeSessionAdapter();
+    adapter.products = [
+      sessionProduct({ commissionAmount: 20, commissionRate: null }),
+    ];
+    const { deps, ctx } = setup({
+      sessionAdapter: adapter,
+      network: {
+        lastLoginAt: new Date(),
+        sessionValidDays: 30,
+      },
+    });
+    const summary = await syncCatalog(deps, input);
+    expect(summary.skipped).toBeFalsy();
+    expect(adapter.calls).toBe(1);
+    expect(ctx.networkProduct).toHaveLength(1);
+  });
+
+  it("lastLoginAt 为空（老数据）→ 不按过期跳过，走原有探测逻辑", async () => {
+    const adapter = new FakeSessionAdapter();
+    adapter.products = [
+      sessionProduct({ commissionAmount: 20, commissionRate: null }),
+    ];
+    const { deps } = setup({
+      sessionAdapter: adapter,
+      network: { lastLoginAt: null, sessionValidDays: 30 },
+    });
+    const summary = await syncCatalog(deps, input);
+    expect(summary.skipped).toBeFalsy();
+    expect(adapter.calls).toBe(1);
   });
 });
