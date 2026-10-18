@@ -81,6 +81,10 @@ import {
   extractOfferPageWithAi,
   type OfferPageCapture,
 } from "../ai/offer-page-capture-ai.js";
+import {
+  judgeSeasonalityWithAi,
+  type SeasonalityJudgmentInput,
+} from "../ai/seasonality-judgment.js";
 
 /**
  * Phase 11 — AI offer risk analysis (one tenant per user; session auth only).
@@ -1941,6 +1945,75 @@ export async function registerAiRoutes(
     // P0-6 — helper 内部调用未透传 usage，只记 calls=1。
     await trackHelperLlmCall(info.tenantId, settings.model as string);
     return offer;
+  });
+
+  /**
+   * 季节 AI 判断：把已算好的季节信号（实测数）交给 AI 写一句行动建议（布局/观望/放弃）。
+   * 入参就是 /traffic/seasonality 返回的单条结果 + 国家名；AI 只能用传入的实测数，不许编销量/CPC/CVR/payout。
+   * 未配置 AI 时 400（AI_NOT_CONFIGURED），前端显示为“AI 未配置”。
+   */
+  app.post("/api/v1/ai/seasonality-judgment", async (request) => {
+    const info = await requireSession(deps, request);
+    // P0-6 — 配额守门（超限 429）。
+    await enforceAiQuota(prisma, info.tenantId);
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    const keyword = typeof body.keyword === "string" ? body.keyword.trim() : "";
+    if (!keyword) throw new ValidationError("keyword is required");
+    const verdict = typeof body.verdict === "string" ? body.verdict : "";
+    const VERDICTS = [
+      "approaching",
+      "upcoming",
+      "justPassed",
+      "past",
+      "rising",
+      "flat",
+      "insufficient",
+    ];
+    if (!VERDICTS.includes(verdict)) {
+      throw new ValidationError("verdict 无效");
+    }
+    const numOrNull = (v: unknown): number | null => {
+      if (v == null) return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+    const direction =
+      typeof body.direction === "string" ? body.direction : null;
+    const input: SeasonalityJudgmentInput = {
+      keyword,
+      countryLabel:
+        typeof body.countryLabel === "string" && body.countryLabel.trim()
+          ? body.countryLabel.trim()
+          : keyword,
+      verdict,
+      direction,
+      yoyChangePct: numOrNull(body.yoyChangePct),
+      daysToPeak: numOrNull(body.daysToPeak),
+      volume: numOrNull(body.volume),
+      volumeYoyPct: numOrNull(body.volumeYoyPct),
+      score: numOrNull(body.score),
+    };
+    const settings = await readSettings(prisma);
+    if (!isConfigured(settings)) {
+      throw new AppError("AI is not configured", {
+        code: "AI_NOT_CONFIGURED",
+        statusCode: 400,
+      });
+    }
+    const pepper = assertAiSettingsPepperConfigured();
+    const apiKey = decryptSecret(settings.apiKeyEnc as string, pepper);
+    const judgment = await judgeSeasonalityWithAi(
+      {
+        baseUrl: settings.baseUrl as string,
+        model: settings.model as string,
+        apiKey,
+        language: body.language === "en" ? "en" : "zh",
+      },
+      input
+    );
+    // P0-6 — helper 内部调用未透传 usage，只记 calls=1。
+    await trackHelperLlmCall(info.tenantId, settings.model as string);
+    return judgment;
   });
 
   /**

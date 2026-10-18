@@ -24,7 +24,19 @@ const KEYWORD_SUGGESTIONS_URL =
 
 interface HistoricalSearchVolumeItem {
   keyword?: unknown;
-  keyword_info?: { search_volume?: unknown };
+  keyword_info?: {
+    search_volume?: unknown;
+    monthly_searches?: unknown;
+  };
+}
+
+/** DataForSEO 月搜索量历史（用于季节 YoY；月均 + 逐月明细）。 */
+export interface DataForSeoVolumeHistory {
+  keyword: string;
+  /** 月均搜索量（绝对值，付费数据）；null = 无数据/未配置凭证 */
+  volume: number | null;
+  /** 逐月搜索量（有则用于算去年同期 YoY；缺则为空） */
+  monthly: Array<{ year: number; month: number; volume: number }>;
 }
 
 interface KeywordSuggestionItem {
@@ -121,10 +133,25 @@ export class DataForSeoProvider implements TrafficProvider {
   async getKeywordVolume(
     keywords: string[]
   ): Promise<Array<{ keyword: string; volume: number | null }>> {
+    const history = await this.getKeywordVolumeHistory(keywords);
+    return history.map(({ keyword, volume }) => ({ keyword, volume }));
+  }
+
+  /**
+   * 月搜索量（绝对值，付费）+ 逐月明细（用于季节 YoY）。
+   * 按国家：传 location_name（国家名，如 "United Kingdom"），不用数字 code，零错配。
+   * DataForSEO 文档：historical_search_volume 接受 location_name 或 location_code 二选一。
+   * 无凭证 / 请求失败 / 无数据 → volume null、monthly []，绝不抛错。
+   */
+  async getKeywordVolumeHistory(
+    keywords: string[],
+    locationName = "United States",
+    languageCode = "en"
+  ): Promise<DataForSeoVolumeHistory[]> {
     const kws = keywords.map((k) => k.trim()).filter(Boolean);
     const creds = await this.getCredentials();
     if (!creds || kws.length === 0) {
-      return keywords.map((keyword) => ({ keyword, volume: null }));
+      return keywords.map((keyword) => ({ keyword, volume: null, monthly: [] }));
     }
     try {
       const auth = Buffer.from(`${creds.login}:${creds.password}`).toString(
@@ -137,11 +164,15 @@ export class DataForSeoProvider implements TrafficProvider {
           "Content-Type": "application/json",
         },
         body: JSON.stringify([
-          { keywords: kws, location_code: 2840, language_code: "en" },
+          {
+            keywords: kws,
+            location_name: locationName,
+            language_code: languageCode,
+          },
         ]),
       });
       if (!res.ok) {
-        return kws.map((keyword) => ({ keyword, volume: null }));
+        return kws.map((keyword) => ({ keyword, volume: null, monthly: [] }));
       }
       const data = (await res.json()) as {
         tasks?: Array<{ result?: Array<{ items?: HistoricalSearchVolumeItem[] }> }>;
@@ -156,14 +187,33 @@ export class DataForSeoProvider implements TrafficProvider {
         }
       }
       return kws.map((keyword) => {
-        const raw = byKeyword.get(keyword.toLowerCase())?.keyword_info
-          ?.search_volume;
+        const info = byKeyword.get(keyword.toLowerCase())?.keyword_info;
+        const raw = info?.search_volume;
         const volume =
           typeof raw === "number" && Number.isFinite(raw) ? raw : null;
-        return { keyword, volume };
+        const monthly: DataForSeoVolumeHistory["monthly"] = [];
+        const rawMonthly = info?.monthly_searches;
+        if (Array.isArray(rawMonthly)) {
+          for (const m of rawMonthly) {
+            const entry = m as { year?: unknown; month?: unknown; search_volume?: unknown };
+            const year = Number(entry?.year);
+            const month = Number(entry?.month);
+            const v = Number(entry?.search_volume);
+            if (
+              Number.isInteger(year) &&
+              Number.isInteger(month) &&
+              month >= 1 &&
+              month <= 12 &&
+              Number.isFinite(v)
+            ) {
+              monthly.push({ year, month, volume: v });
+            }
+          }
+        }
+        return { keyword, volume, monthly };
       });
     } catch {
-      return kws.map((keyword) => ({ keyword, volume: null }));
+      return kws.map((keyword) => ({ keyword, volume: null, monthly: [] }));
     }
   }
 }

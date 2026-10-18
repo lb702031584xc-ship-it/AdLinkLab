@@ -4,6 +4,7 @@
  * - GET /api/v1/traffic/thresholds — 当前阈值（含默认值合并）
  * - PUT /api/v1/traffic/thresholds — 更新阈值（部分字段）
  * - POST /api/v1/traffic/gate — 通用流量门评估（brand/domain/keywords 三选一）
+ * - POST /api/v1/traffic/seasonality — 季节选品：按国家查关键词季节信号 + 节日窗口
  *
  * 阈值是全局 AiSetting（key: traffic.thresholds），沿用 amazon.paapiEnc
  * 全局键的一致性，不做 tenant 隔离；但仍需 session 认证。
@@ -23,6 +24,21 @@ import {
 } from "../traffic/thresholds.js";
 import { evaluateTrafficGate } from "../traffic/gate.js";
 import type { TrafficThresholds } from "../traffic/types.js";
+import { getKeywordTimeline } from "../traffic/trends.js";
+import {
+  analyzeSeasonality,
+  computeVolumeYoy,
+  getSeasonalWindows,
+  seasonalCountry,
+  seasonalScore,
+  SEASONAL_COUNTRIES,
+  type SeasonalSignal,
+  type SeasonalWindow,
+} from "../traffic/seasonality.js";
+import {
+  DataForSeoProvider,
+  type DataForSeoVolumeHistory,
+} from "../traffic/dataforseo.js";
 
 /** 限流用 Redis 最小接口（ioredis 的 Redis 满足该结构；测试可注入 mock）。 */
 export interface GateRateLimitRedis {
@@ -282,5 +298,88 @@ export function registerTrafficRoutes(
       geo: input.geo,
       manualMonthlyVisits: input.manualMonthlyVisits,
     });
+  });
+
+  /**
+   * 季节选品（按国家）。
+   * 入参 { keywords?: string[]（0-10 个）, country?: string（默认 US）, leadDays?: number（默认 14） }。
+   * 每词返回：Trends 时间线算出的季节信号 + DataForSEO 绝对月搜索量（付费，未配置 → null）。
+   * 顶层返回该国未来 60 天节日/季节窗口。keywords 为空时只返回窗口（不调外部接口，不花钱）。
+   * Trends 被限流时该词 rateLimited=true，信号为 insufficient，其余词不受影响；DataForSEO 失败时 volume=null。
+   */
+  app.post<{
+    Body: {
+      keywords?: unknown;
+      country?: unknown;
+      leadDays?: unknown;
+    };
+  }>("/api/v1/traffic/seasonality", async (request) => {
+    const info = await requireSession(deps, request);
+    const allowed = await checkGateRateLimit(deps.redis, info.tenantId);
+    if (!allowed) {
+      throw new AppError("季节查询频率超限（20 次/分钟），请稍后再试", {
+        code: "RATE_LIMITED",
+        statusCode: 429,
+      });
+    }
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    const country =
+      seasonalCountry(typeof body.country === "string" ? body.country : "") ??
+      SEASONAL_COUNTRIES[0]!;
+    const leadDaysRaw = Number(body.leadDays);
+    const leadDays =
+      Number.isFinite(leadDaysRaw) && leadDaysRaw >= 1 && leadDaysRaw <= 60
+        ? Math.floor(leadDaysRaw)
+        : 14;
+    const nowMs = Date.now();
+    const windows: SeasonalWindow[] = getSeasonalWindows(country.code, nowMs, 60);
+
+    const rawKeywords = body.keywords;
+    const keywords = (
+      Array.isArray(rawKeywords) ? rawKeywords : []
+    )
+      .map((k) => (typeof k === "string" ? k.trim() : ""))
+      .filter(Boolean)
+      .slice(0, 10);
+    if (keywords.length === 0) {
+      return { country: country.code, windows, results: [] };
+    }
+
+    // DataForSEO：一次批量查全部词（按国家名，未配置凭证 → 全部 null）。
+    const provider = new DataForSeoProvider(prisma);
+    const volumeHistory: DataForSeoVolumeHistory[] =
+      await provider.getKeywordVolumeHistory(
+        keywords,
+        country.dataforseoLocation,
+        country.languageCode
+      );
+    const volumeByKeyword = new Map(
+      volumeHistory.map((v) => [v.keyword.toLowerCase(), v])
+    );
+
+    const results = await Promise.all(
+      keywords.map(async (keyword) => {
+        const timeline = await getKeywordTimeline(keyword, country.code);
+        const signal: SeasonalSignal = analyzeSeasonality(
+          timeline.points,
+          nowMs,
+          leadDays
+        );
+        const vol = volumeByKeyword.get(keyword.toLowerCase());
+        const volumeYoyPct = computeVolumeYoy(vol?.monthly ?? [], nowMs);
+        return {
+          keyword,
+          country: country.code,
+          trendsRateLimited: timeline.rateLimited,
+          timeline: timeline.points,
+          signal,
+          volume: vol?.volume ?? null,
+          volumeYoyPct,
+          /** 季节评分（代码按实测信号算，透明分项，不经过 LLM）。 */
+          score: seasonalScore(signal, volumeYoyPct, leadDays),
+        };
+      })
+    );
+    return { country: country.code, windows, results };
   });
 }

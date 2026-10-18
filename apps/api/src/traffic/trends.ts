@@ -118,27 +118,34 @@ export interface TrendsInterestResult {
   rateLimited: boolean;
 }
 
-async function fetchTrendsInterest(
+/** Trends 时间线单点：周粒度，time 为毫秒时间戳，value 为该周相对热度（0-100）。 */
+export interface TrendsTimelinePoint {
+  time: number;
+  value: number;
+}
+
+/** getKeywordTimeline 的返回：周粒度时间线 + 是否被限流。 */
+export interface TrendsTimelineResult {
+  /** 过去 12 个月周粒度时间线（按时间升序）；空 = 无数据 */
+  points: TrendsTimelinePoint[];
+  rateLimited: boolean;
+}
+
+type TrendsFetchOutcome =
+  | { ok: true; data: unknown }
+  | { ok: false; rateLimited: boolean; detail: string };
+
+/** explore → widgetdata 两步取原始 widgetdata JSON（interest 与 timeline 共用）。 */
+async function fetchTrendsWidgetData(
   keywords: string[],
   geo: string,
   fetchImpl: typeof fetch
-): Promise<TrendsInterestResult> {
+): Promise<TrendsFetchOutcome> {
   const comparisonItem = keywords.map((keyword) => ({
     keyword,
     geo,
     time: "today 12-m",
   }));
-
-  const limited = (status: number, stage: string): TrendsInterestResult => {
-    console.warn(
-      `[traffic][trends] ${stage} 被限流：HTTP ${status}（疑似机房 IP 被 Google 限流，免费热度不可用）`
-    );
-    return { value: null, rateLimited: true };
-  };
-  const failed = (detail: string): TrendsInterestResult => {
-    console.warn(`[traffic][trends] 获取失败：${detail}`);
-    return { value: null, rateLimited: false };
-  };
 
   // 1. explore：拿 TIMESERIES widget 的 token
   const exploreUrl =
@@ -152,13 +159,16 @@ async function fetchTrendsInterest(
       headers: { "User-Agent": TRENDS_UA },
     });
   } catch (e) {
-    return failed(`explore 网络异常：${e instanceof Error ? e.message : String(e)}`);
+    return { ok: false, rateLimited: false, detail: `explore 网络异常：${e instanceof Error ? e.message : String(e)}` };
   }
   if (!exploreRes.ok) {
     if (exploreRes.status === 429 || exploreRes.status === 403) {
-      return limited(exploreRes.status, "explore");
+      console.warn(
+        `[traffic][trends] explore 被限流：HTTP ${exploreRes.status}（疑似机房 IP 被 Google 限流，免费热度不可用）`
+      );
+      return { ok: false, rateLimited: true, detail: `explore HTTP ${exploreRes.status}` };
     }
-    return failed(`explore HTTP ${exploreRes.status}`);
+    return { ok: false, rateLimited: false, detail: `explore HTTP ${exploreRes.status}` };
   }
   let exploreJson: { widgets?: TrendsWidget[] };
   try {
@@ -166,13 +176,13 @@ async function fetchTrendsInterest(
       widgets?: TrendsWidget[];
     };
   } catch {
-    return failed("explore 响应 JSON 解析失败");
+    return { ok: false, rateLimited: false, detail: "explore 响应 JSON 解析失败" };
   }
   const widgets = exploreJson?.widgets;
-  if (!Array.isArray(widgets)) return failed("explore 响应无 widgets 数组");
+  if (!Array.isArray(widgets)) return { ok: false, rateLimited: false, detail: "explore 响应无 widgets 数组" };
   const token = widgets.find((w) => w?.id === "TIMESERIES")?.token;
   if (typeof token !== "string" || !token) {
-    return failed("explore 响应无 TIMESERIES token");
+    return { ok: false, rateLimited: false, detail: "explore 响应无 TIMESERIES token" };
   }
 
   // 2. widgetdata/multiline：拿 timeline 数据
@@ -194,21 +204,73 @@ async function fetchTrendsInterest(
       headers: { "User-Agent": TRENDS_UA },
     });
   } catch (e) {
-    return failed(`widgetdata 网络异常：${e instanceof Error ? e.message : String(e)}`);
+    return { ok: false, rateLimited: false, detail: `widgetdata 网络异常：${e instanceof Error ? e.message : String(e)}` };
   }
   if (!dataRes.ok) {
     if (dataRes.status === 429 || dataRes.status === 403) {
-      return limited(dataRes.status, "widgetdata");
+      console.warn(
+        `[traffic][trends] widgetdata 被限流：HTTP ${dataRes.status}（疑似机房 IP 被 Google 限流，免费热度不可用）`
+      );
+      return { ok: false, rateLimited: true, detail: `widgetdata HTTP ${dataRes.status}` };
     }
-    return failed(`widgetdata HTTP ${dataRes.status}`);
+    return { ok: false, rateLimited: false, detail: `widgetdata HTTP ${dataRes.status}` };
   }
-  let data: unknown;
   try {
-    data = JSON.parse(stripXssiPrefix(await dataRes.text()));
+    const data: unknown = JSON.parse(stripXssiPrefix(await dataRes.text()));
+    return { ok: true, data };
   } catch {
-    return failed("widgetdata 响应 JSON 解析失败");
+    return { ok: false, rateLimited: false, detail: "widgetdata 响应 JSON 解析失败" };
   }
-  return { value: averageInterest(data, keywords.length), rateLimited: false };
+}
+
+/** 从 widgetdata 响应取单关键词周粒度时间线（按时间升序；time 可能是秒字符串）。 */
+export function parseTrendsTimeline(data: unknown, keywordIndex = 0): TrendsTimelinePoint[] {
+  const root = data as { default?: { timelineData?: unknown } };
+  const timeline = root?.default?.timelineData;
+  if (!Array.isArray(timeline)) return [];
+  const points: TrendsTimelinePoint[] = [];
+  for (const entry of timeline) {
+    const e = entry as { time?: unknown; value?: unknown };
+    const rawTime = Number(e?.time);
+    const values = e?.value;
+    if (!Number.isFinite(rawTime) || !Array.isArray(values)) continue;
+    const v = values[keywordIndex];
+    if (typeof v !== "number" || !Number.isFinite(v)) continue;
+    // Trends time 是秒级时间戳（字符串或数字）；> 1e12 则已是毫秒。
+    const ms = rawTime > 1e12 ? rawTime : rawTime * 1000;
+    points.push({ time: ms, value: v });
+  }
+  points.sort((a, b) => a.time - b.time);
+  return points;
+}
+
+async function fetchTrendsInterest(
+  keywords: string[],
+  geo: string,
+  fetchImpl: typeof fetch
+): Promise<TrendsInterestResult> {
+  const outcome = await fetchTrendsWidgetData(keywords, geo, fetchImpl);
+  if (!outcome.ok) {
+    if (outcome.rateLimited) return { value: null, rateLimited: true };
+    console.warn(`[traffic][trends] 获取失败：${outcome.detail}`);
+    return { value: null, rateLimited: false };
+  }
+  return { value: averageInterest(outcome.data, keywords.length), rateLimited: false };
+}
+
+/** 取单关键词周粒度时间线（过去 12 个月）。失败 → 空数组，绝不抛错。 */
+async function fetchTrendsTimeline(
+  keyword: string,
+  geo: string,
+  fetchImpl: typeof fetch
+): Promise<TrendsTimelineResult> {
+  const outcome = await fetchTrendsWidgetData([keyword], geo, fetchImpl);
+  if (!outcome.ok) {
+    if (outcome.rateLimited) return { points: [], rateLimited: true };
+    console.warn(`[traffic][trends] 时间线获取失败：${outcome.detail}`);
+    return { points: [], rateLimited: false };
+  }
+  return { points: parseTrendsTimeline(outcome.data, 0), rateLimited: false };
 }
 
 /**
@@ -238,5 +300,73 @@ export async function getKeywordInterest(
       `[traffic][trends] 未预期异常：${e instanceof Error ? e.message : String(e)}`
     );
     return { value: null, rateLimited: false };
+  }
+}
+
+function timelineCacheKey(keyword: string, geo: string): string {
+  return `traffic:trends:timeline:${geo}:${keyword}`;
+}
+
+async function readTimelineCache(
+  redis: TrendsCache | undefined,
+  key: string
+): Promise<TrendsTimelinePoint[] | null> {
+  if (!redis) return null;
+  try {
+    const cached = await redis.get(key);
+    if (cached === null || cached === "") return null;
+    const parsed: unknown = JSON.parse(cached);
+    if (!Array.isArray(parsed)) return null;
+    const points = parsed.filter(
+      (p): p is TrendsTimelinePoint =>
+        typeof (p as TrendsTimelinePoint)?.time === "number" &&
+        typeof (p as TrendsTimelinePoint)?.value === "number"
+    );
+    return points.length > 0 ? points : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeTimelineCache(
+  redis: TrendsCache | undefined,
+  key: string,
+  points: TrendsTimelinePoint[]
+): Promise<void> {
+  if (!redis) return;
+  try {
+    await redis.setex(key, CACHE_TTL_SECONDS, JSON.stringify(points));
+  } catch {
+    // redis 不可用 → 跳过缓存，不抛错
+  }
+}
+
+/**
+ * 取单关键词周粒度时间线（过去 12 个月，相对热度 0-100）。
+ * 从不抛错：空关键词 / 限流 / 解析失败 / 无数据 / 网络异常
+ * → { points: [], rateLimited }。结果缓存 24h。
+ */
+export async function getKeywordTimeline(
+  keyword: string,
+  geo = "US",
+  fetchImpl: typeof fetch = fetch,
+  redis?: TrendsCache
+): Promise<TrendsTimelineResult> {
+  const kw = keyword.trim();
+  if (!kw) return { points: [], rateLimited: false };
+  const key = timelineCacheKey(kw, geo);
+
+  const cached = await readTimelineCache(redis, key);
+  if (cached !== null) return { points: cached, rateLimited: false };
+
+  try {
+    const result = await fetchTrendsTimeline(kw, geo, fetchImpl);
+    if (result.points.length > 0) await writeTimelineCache(redis, key, result.points);
+    return result;
+  } catch (e) {
+    console.warn(
+      `[traffic][trends] 时间线未预期异常：${e instanceof Error ? e.message : String(e)}`
+    );
+    return { points: [], rateLimited: false };
   }
 }

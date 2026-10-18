@@ -75,7 +75,167 @@ export async function checkTrafficGateAction(
   }
 }
 
-/** 截图 OCR 识别出的指标（识别值，需人工核对）。 */
+/** 季节选品：单关键词季节信号（Trends 时间线算出；Trends 是相对热度，绝不是销量）。 */
+export interface SeasonalSignal {
+  current: number | null;
+  direction: "rising" | "flat" | "falling" | null;
+  yoyChangePct: number | null;
+  lastYearPeak: { time: number; value: number } | null;
+  daysToPeak: number | null;
+  verdict:
+    | "approaching"
+    | "upcoming"
+    | "justPassed"
+    | "past"
+    | "rising"
+    | "flat"
+    | "insufficient";
+}
+
+export interface SeasonalWindow {
+  name: string;
+  date: string;
+  daysUntil: number;
+  leadDays: number;
+  withinLead: boolean;
+}
+
+export interface SeasonalKeywordResult {
+  keyword: string;
+  country: string;
+  trendsRateLimited: boolean;
+  timeline: Array<{ time: number; value: number }>;
+  signal: SeasonalSignal;
+  /** DataForSEO 绝对月搜索量（付费，未配置 → null） */
+  volume: number | null;
+  /** DataForSEO 逐月量 YoY（%）；无同期 → null */
+  volumeYoyPct: number | null;
+  /** 季节评分（代码按实测信号算，透明分项；数据不足时 score=null） */
+  score: {
+    score: number | null;
+    items: Array<{ key: string; points: number; max: number }>;
+  } | null;
+}
+
+/** 季节 AI 判断（只用传入的实测数，不编销量/CPC/CVR/payout）。 */
+export interface SeasonalityJudgment {
+  suggestion: "go" | "watch" | "skip";
+  reason: string;
+  confidence: number;
+}
+
+/**
+ * 季节 AI 判断。
+ * 后端契约：POST /api/v1/ai/seasonality-judgment
+ *   body: { keyword, countryLabel, verdict, direction, yoyChangePct, daysToPeak, volume, volumeYoyPct, score, language }
+ *   → { suggestion, reason, confidence }；AI 未配置时 400。
+ */
+export async function checkSeasonalityAiAction(
+  input: {
+    keyword: string;
+    countryLabel: string;
+    verdict: string;
+    direction: string | null;
+    yoyChangePct: number | null;
+    daysToPeak: number | null;
+    volume: number | null;
+    volumeYoyPct: number | null;
+    score: number | null;
+    language: "zh" | "en";
+  }
+): Promise<TrafficGateActionResult<SeasonalityJudgment>> {
+  const base = getApiBaseUrl();
+  const authHeaders = await sessionHeaders();
+  let res: Response;
+  try {
+    res = await fetch(`${base}/api/v1/ai/seasonality-judgment`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...authHeaders,
+      },
+      body: JSON.stringify(input),
+      cache: "no-store",
+    });
+  } catch {
+    return { ok: false, error: "网络请求失败，请稍后重试。" };
+  }
+  if (res.status === 401) redirect("/login");
+  if (!res.ok) {
+    let message = `AI 判断失败（${res.status}）`;
+    try {
+      const body = (await res.json()) as {
+        message?: string;
+        error?: string;
+      };
+      message = body.message ?? body.error ?? message;
+    } catch {
+      /* ignore */
+    }
+    return { ok: false, error: message };
+  }
+  try {
+    const data = (await res.json()) as SeasonalityJudgment;
+    return { ok: true, data };
+  } catch (e) {
+    return mapError(e, "AI 判断结果解析失败。");
+  }
+}
+
+export interface SeasonalityResponse {
+  country: string;
+  windows: SeasonalWindow[];
+  results: SeasonalKeywordResult[];
+}
+
+/**
+ * 季节选品查询。
+ * 后端契约：POST /api/v1/traffic/seasonality
+ *   body: { keywords: string[]（1-10）, country?: string, leadDays?: number }
+ *   → { country, windows, results }
+ */
+export async function checkSeasonalityAction(
+  keywords: string[],
+  country: string,
+  leadDays = 14
+): Promise<TrafficGateActionResult<SeasonalityResponse>> {
+  const base = getApiBaseUrl();
+  const authHeaders = await sessionHeaders();
+  let res: Response;
+  try {
+    res = await fetch(`${base}/api/v1/traffic/seasonality`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...authHeaders,
+      },
+      body: JSON.stringify({ keywords, country, leadDays }),
+      cache: "no-store",
+    });
+  } catch {
+    return { ok: false, error: "网络请求失败，请稍后重试。" };
+  }
+  if (res.status === 401) redirect("/login");
+  if (!res.ok) {
+    let message = `查询失败（${res.status}）`;
+    try {
+      const body = (await res.json()) as {
+        message?: string;
+        error?: string;
+      };
+      message = body.message ?? body.error ?? message;
+    } catch {
+      /* ignore */
+    }
+    return { ok: false, error: message };
+  }
+  try {
+    const data = (await res.json()) as SeasonalityResponse;
+    return { ok: true, data };
+  } catch (e) {
+    return mapError(e, "查询结果解析失败。");
+  }
+}
 export interface OcrMetrics {
   rating: number | null;
   reviewCount: number | null;

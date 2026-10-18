@@ -33,10 +33,11 @@ import {
 import { listCashbackOffersAction } from "@/lib/api/cashback-actions";
 import type { CashbackOffer } from "@/lib/api/cashback";
 import { OfferPresetFilterBar } from "@/components/offers/offer-preset-filter";
+import { SeasonalRecommendationsClient } from "@/components/offers/seasonal-recommendations-client";
 
 export const dynamic = "force-dynamic";
 
-const TABS = ["affiliate", "amazon", "cashback"] as const;
+const TABS = ["affiliate", "amazon", "cashback", "seasonal"] as const;
 type OfferTab = (typeof TABS)[number];
 
 function parseTab(value: string | string[] | undefined): OfferTab {
@@ -157,6 +158,7 @@ export default async function OffersPage({
     affiliate: tabsDict.affiliate,
     amazon: tabsDict.amazon,
     cashback: tabsDict.cashback,
+    seasonal: tabsDict.seasonal,
   };
   const qc = t.entities.offers.quickCalc;
   const quickCalcDict: QuickCalcDict = {
@@ -262,6 +264,56 @@ export default async function OffersPage({
               columns={columns}
               rows={res.data.items}
               emptyText={t.entities.offers.empty}
+            />
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // 季节推荐 Tab：不走 Offer 表格；加载联盟 + 亚马逊 Offer（各前 100）供逐行查季节信号。
+  if (tab === "seasonal") {
+    let seasonalOffers: Offer[] = [];
+    let seasonalError: string | null = null;
+    try {
+      const [affiliateRes, amazonRes] = await Promise.all([
+        entityApi.offers.list(1, 100, "affiliate"),
+        entityApi.offers.list(1, 100, "amazon"),
+      ]);
+      const seen = new Set<string>();
+      for (const o of [...affiliateRes.items, ...amazonRes.items]) {
+        if (!seen.has(o.id)) {
+          seen.add(o.id);
+          seasonalOffers.push(o);
+        }
+      }
+    } catch (e) {
+      seasonalError = mapEntityErrorMessage(e, lang);
+    }
+    return (
+      <div>
+        <EntityPageHeader
+          title={t.common.nav.offers}
+          description={t.entities.offers.description}
+          actions={
+            <PrimaryLink href="/offers/new">
+              {t.entities.offers.newOffer}
+            </PrimaryLink>
+          }
+        />
+        {tabsUi}
+        {seasonalError ? (
+          <ErrorState message={seasonalError} title={t.common.error.title} />
+        ) : (
+          <div className="mt-4">
+            <SeasonalRecommendationsClient
+              offers={seasonalOffers.map((o) => ({
+                id: o.id,
+                name: o.name,
+                network: o.network,
+              }))}
+              dict={t.entities.offers.seasonal}
+              lang={lang}
             />
           </div>
         )}
