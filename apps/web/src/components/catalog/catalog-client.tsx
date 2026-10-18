@@ -14,6 +14,7 @@ import {
   deleteWhitelistAction,
   evaluateMerchantsAction,
   getSessionStatusAction,
+  importBlacklistAction,
   listBlacklistAction,
   listCatalogProductsAction,
   listMerchantSignalsAction,
@@ -432,6 +433,14 @@ function BlacklistPanel({
   const [recheckOutcomes, setRecheckOutcomes] = useState<
     Record<string, RecheckResult>
   >({});
+  const [importOpen, setImportOpen] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<{
+    added: number;
+    skipped: number;
+    errors: Array<{ index: number; entityId: string; message: string }>;
+  } | null>(null);
 
   const load = useCallback(
     async (entityType?: string, ch?: CatalogChannel) => {
@@ -504,6 +513,41 @@ function BlacklistPanel({
     setDeletingEntry(entry);
     setDeleteReason("");
     setDeleteReasonError(false);
+  }
+
+  /** 批量导入：每行 `实体ID, 拉黑原因`（逗号或制表符分隔），渠道/实体类型沿用手动添加的选择。 */
+  async function onImport() {
+    if (importing) return;
+    const lines = importText
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
+    if (lines.length === 0) {
+      showMsg(d.blacklist.entityIdRequired);
+      return;
+    }
+    const items = lines.map((line) => {
+      const parts = line.split(/[,，\t]/);
+      return {
+        entityType: fType,
+        entityId: (parts[0] ?? "").trim(),
+        reason: parts.slice(1).join(",").trim(),
+        channel: fChannel,
+      };
+    });
+    setImporting(true);
+    showMsg(null);
+    setImportResult(null);
+    const res = await importBlacklistAction(items);
+    setImporting(false);
+    if (!res.ok) {
+      showMsg(res.error);
+      return;
+    }
+    setImportResult(res.data);
+    if (res.data.added > 0) {
+      await load(filter || undefined, channel);
+    }
   }
 
   async function confirmDelete() {
@@ -759,6 +803,67 @@ function BlacklistPanel({
         >
           {adding ? d.blacklist.adding : d.blacklist.add}
         </button>
+      </div>
+
+      {/* ===== 批量导入：与手动添加并列 ===== */}
+      <div className="mt-4 rounded-lg border border-ink/10">
+        <button
+          type="button"
+          className="flex w-full items-center justify-between px-4 py-3 text-left"
+          onClick={() => setImportOpen((v) => !v)}
+        >
+          <span className="font-medium text-ink">
+            {d.blacklist.importTitle}
+            <span className="ml-2 text-xs font-normal text-ink/50">
+              {entityTypeLabel(d, "blacklist", fType)} ·{" "}
+              {channelLabel(d, fChannel)}
+            </span>
+          </span>
+          <span className="text-sm text-ink/50">{importOpen ? "▲" : "▼"}</span>
+        </button>
+        {importOpen && (
+          <div className="border-t border-ink/10 p-4">
+            <p className="text-sm text-ink/70">{d.blacklist.importDesc}</p>
+            <textarea
+              className={`${inputCls} mt-3 font-mono`}
+              rows={6}
+              placeholder={d.blacklist.importPlaceholder}
+              value={importText}
+              onChange={(e) => setImportText(e.target.value)}
+            />
+            <button
+              className={`${btnPrimary} mt-3`}
+              onClick={onImport}
+              disabled={importing}
+            >
+              {importing ? d.blacklist.importing : d.blacklist.importButton}
+            </button>
+            {importResult && (
+              <div className="mt-3 rounded-lg bg-ink/5 p-3 text-sm">
+                <p className="font-medium text-ink">
+                  {d.blacklist.importResult
+                    .replace("{a}", String(importResult.added))
+                    .replace("{b}", String(importResult.skipped))}
+                </p>
+                {importResult.errors.length > 0 && (
+                  <ul className="mt-2 space-y-1 text-xs text-red-700">
+                    {importResult.errors.slice(0, 5).map((e) => (
+                      <li key={e.index}>
+                        {d.blacklist.importErrorLine
+                          .replace("{i}", String(e.index + 1))
+                          .replace("{id}", e.entityId || "—")
+                          .replace("{msg}", e.message)}
+                      </li>
+                    ))}
+                    {importResult.errors.length > 5 && (
+                      <li>… +{importResult.errors.length - 5}</li>
+                    )}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ===== 删除黑名单：弹框必填移除理由（仅管理员） ===== */}

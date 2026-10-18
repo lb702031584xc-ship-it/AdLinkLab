@@ -15,6 +15,7 @@
  *   POST   /api/v1/catalog/offers/batch            {productIds[]} 批量建 Offer
  *   GET    /api/v1/catalog/blacklist               ?entityType&channel
  *   POST   /api/v1/catalog/blacklist               {entityType, entityId, reason, channel?}
+ *   POST   /api/v1/catalog/blacklist/import        {items[]} 批量导入（上限200，已存在跳过）
  *   DELETE /api/v1/catalog/blacklist/:id           {reason} 仅管理员（软删除+观察期）
  *   POST   /api/v1/catalog/blacklist/:id/recheck   手动复检（不自动移除）
  *   POST   /api/v1/catalog/blacklist/check-offer   {offerId} 建 Offer 前检查
@@ -770,6 +771,73 @@ export async function registerCatalogRoutes(
       createdBy: info.id,
     });
     return { item: { id: row.id, status: row.status } };
+  });
+
+  app.post<{
+    Body: { items?: unknown };
+  }>("/api/v1/catalog/blacklist/import", async (request) => {
+    // 批量导入黑名单（与单条 POST 同权限：登录即可，DELETE 才要 admin）。
+    // 逐条复用单条接口的校验口径；已存在 active → 跳过不报错；单次上限 200 条。
+    const info = await requireSession(deps, request);
+    const items = request.body?.items;
+    if (!Array.isArray(items) || items.length === 0) {
+      throw new ValidationError("items 非空数组必填");
+    }
+    if (items.length > 200) {
+      throw new ValidationError("单次最多导入 200 条");
+    }
+    let added = 0;
+    let skipped = 0;
+    const errors: Array<{ index: number; entityId: string; message: string }> = [];
+    for (let i = 0; i < items.length; i++) {
+      const it = (items[i] ?? {}) as Record<string, unknown>;
+      try {
+        if (!isBlacklistEntityType(it.entityType)) {
+          throw new ValidationError("entityType 非法");
+        }
+        const entityId = asTrimmed(it.entityId);
+        if (!entityId) throw new ValidationError("entityId 不能为空");
+        const reason = asTrimmed(it.reason);
+        if (!reason) throw new ValidationError("reason 不能为空");
+        let channel: CatalogChannel = "affiliate";
+        if (it.channel !== undefined) {
+          if (!isCatalogChannel(it.channel)) throw new ValidationError("channel 非法");
+          channel = it.channel;
+        }
+        if (it.entityType === "merchant" && it.channel === undefined) {
+          throw new ValidationError("商家黑名单必须指定 channel（cashback/affiliate/amazon）");
+        }
+        const existing = await getBlacklistEntry(
+          prisma,
+          info.tenantId,
+          channel,
+          it.entityType,
+          entityId
+        );
+        if (existing) {
+          skipped += 1;
+          continue;
+        }
+        await addToBlacklist(prisma, {
+          tenantId: info.tenantId,
+          channel,
+          entityType: it.entityType,
+          entityId,
+          networkKind: asTrimmed(it.networkKind) ?? null,
+          reason,
+          source: "manual",
+          createdBy: info.id,
+        });
+        added += 1;
+      } catch (err) {
+        errors.push({
+          index: i,
+          entityId: asTrimmed(it.entityId) ?? "",
+          message: err instanceof Error ? err.message : "导入失败",
+        });
+      }
+    }
+    return { added, skipped, errors };
   });
 
   app.delete<{

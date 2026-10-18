@@ -123,6 +123,102 @@ describe("DELETE /api/v1/catalog/blacklist/:id", () => {
   });
 });
 
+describe("POST /api/v1/catalog/blacklist/import", () => {
+  it("正常批量导入 → added 统计", async () => {
+    const { ctx } = makeCatalogFakePrisma();
+    const { app } = buildApp(ctx, "member");
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/catalog/blacklist/import",
+      payload: {
+        items: [
+          { entityType: "merchant", entityId: "m1", reason: "不付钱", channel: "cashback" },
+          { entityType: "product", entityId: "p1", reason: "下架" },
+          { entityType: "offer", entityId: "o1", reason: "扣量", channel: "amazon" },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.added).toBe(3);
+    expect(body.skipped).toBe(0);
+    expect(body.errors).toHaveLength(0);
+  });
+
+  it("已存在 active → 跳过不报错", async () => {
+    const { ctx } = makeCatalogFakePrisma();
+    ctx.catalogBlacklist.push(
+      blacklistRow({ entityType: "product", entityId: "p1", channel: "affiliate" })
+    );
+    const { app } = buildApp(ctx, "member");
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/catalog/blacklist/import",
+      payload: {
+        items: [
+          { entityType: "product", entityId: "p1", reason: "再拉一次" },
+          { entityType: "product", entityId: "p2", reason: "新拉黑" },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.added).toBe(1);
+    expect(body.skipped).toBe(1);
+    expect(body.errors).toHaveLength(0);
+  });
+
+  it("非法行 → errors 逐条记录（index 对应）", async () => {
+    const { ctx } = makeCatalogFakePrisma();
+    const { app } = buildApp(ctx, "member");
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/catalog/blacklist/import",
+      payload: {
+        items: [
+          { entityType: "bogus", entityId: "x", reason: "r" },
+          { entityType: "product", entityId: "  ", reason: "r" },
+          { entityType: "product", entityId: "p1", reason: "" },
+          { entityType: "merchant", entityId: "m1", reason: "不付钱" },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.added).toBe(0);
+    expect(body.skipped).toBe(0);
+    expect(body.errors).toHaveLength(4);
+    expect(body.errors.map((e: any) => e.index)).toEqual([0, 1, 2, 3]);
+  });
+
+  it("超过 200 条 → 400", async () => {
+    const { ctx } = makeCatalogFakePrisma();
+    const { app } = buildApp(ctx, "member");
+    const items = Array.from({ length: 201 }, (_, i) => ({
+      entityType: "product",
+      entityId: `p${i}`,
+      reason: "批量",
+    }));
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/catalog/blacklist/import",
+      payload: { items },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("空数组 → 400", async () => {
+    const { ctx } = makeCatalogFakePrisma();
+    const { app } = buildApp(ctx, "member");
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/catalog/blacklist/import",
+      payload: { items: [] },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+});
+
 describe("白名单建议→确认", () => {
   it("POST /whitelist 添加（manual）→ POST /:id/confirm", async () => {
     const { ctx } = makeCatalogFakePrisma();

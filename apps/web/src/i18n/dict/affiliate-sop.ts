@@ -73,7 +73,7 @@ export const zh: AffiliateSopDict = {
       goal: "筛出 3–5 个值得测试的 Offer",
       checks: [
         "浏览联盟 Offer 市场，按类目筛选（选你懂的类目）",
-        "用 AI 分析看 Offer 风险：/ai/analyze 跑一遍条款",
+        "用一键推演报告看 Offer：在 /ai/blueprint 选 Offer，一键生成 7 节投放推演（条款/盈利/关键词/出价一次看完）",
         "记录关键指标：佣金率、Cookie 有效期、结算周期、最低支付额",
         "排除项：佣金率 <5%、Cookie <7 天、需要预付费、条款含糊的",
         "最终选定 3–5 个 Offer 进入测试",
@@ -82,7 +82,7 @@ export const zh: AffiliateSopDict = {
         "新手公式：佣金率 × 客单价 × 转化率。优先选高客单价（>$50）+ 佣金率 >10% 的，1 单顶 10 单。别贪多，3 个 Offer 足够测出感觉。",
       links: [
         { label: "Offer 列表", href: "/offers" },
-        { label: "AI 分析", href: "/ai/analyze" },
+        { label: "一键推演报告", href: "/ai/blueprint" },
         { label: "条款解析", href: "/ai/terms" },
       ],
     },
@@ -207,7 +207,7 @@ export const en: AffiliateSopDict = {
       goal: "Shortlist 3–5 offers worth testing",
       checks: [
         "Browse the offer marketplace, filter by categories you know",
-        "Run /ai/analyze on terms to screen offer risk",
+        "Read the Blueprint Report: pick an offer in /ai/blueprint and generate the 7-section launch blueprint in one click (terms/profit/keywords/bids in one place)",
         "Record key metrics: commission rate, cookie duration, payout cycle, minimum payout",
         "Exclude: commission <5%, cookie <7 days, upfront fees, vague terms",
         "Finalize 3–5 offers for testing",
@@ -216,7 +216,7 @@ export const en: AffiliateSopDict = {
         "Beginner formula: commission rate × order value × conversion rate. Prefer high-ticket (>$50) + >10% commission — one sale equals ten. Don't over-pick; 3 offers is enough to learn.",
       links: [
         { label: "Offers", href: "/offers" },
-        { label: "AI Analyze", href: "/ai/analyze" },
+        { label: "Blueprint Report", href: "/ai/blueprint" },
         { label: "Terms Parser", href: "/ai/terms" },
       ],
     },

@@ -248,6 +248,30 @@ export async function addBlacklistAction(input: {
   );
 }
 
+/** 批量导入黑名单（逐条校验；已存在 active 跳过；单次上限 200 条）。 */
+export async function importBlacklistAction(
+  items: Array<{
+    entityType: string;
+    entityId: string;
+    reason: string;
+    channel?: string;
+  }>
+) {
+  return attempt(
+    () =>
+      apiFetch<{
+        added: number;
+        skipped: number;
+        errors: Array<{ index: number; entityId: string; message: string }>;
+      }>("/api/v1/catalog/blacklist/import", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ items }),
+      }),
+    ["/catalog"]
+  );
+}
+
 /**
  * Admin-only on the backend (403 otherwise). reason 必填；
  * 后端改为软删除：条目 status → "removed"，进入观察期。
