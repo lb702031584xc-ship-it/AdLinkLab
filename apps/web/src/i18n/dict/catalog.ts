@@ -61,6 +61,7 @@ export const zh = {
     riskText:
       "登录态采集风险提示：使用登录态（Cookie）自动采集商品数据，可能违反 YeahPromos/PartnerBoost 服务条款中关于自动化访问的条款，存在账号被警告、限流或封禁的风险。请仅采集您自己账号可见的商品数据，不要高频抓取。如该联盟日后提供官方商品 API，请优先切换为官方 API 模式。继续即代表您已了解并自行承担该风险。",
     credTitle: "登录账号",
+    credGoConsole: "去管理控制台 →",
     credUsername: "用户名",
     credUsernamePh: "联盟后台登录用户名",
     credPassword: "密码",
@@ -331,6 +332,7 @@ export const en = {
     riskText:
       "Session-collection risk notice: auto-collecting product data with a login session (Cookie) may violate the network's terms on automated access, risking account warnings, rate limits or bans. Only collect product data visible to your own account; do not scrape at high frequency. If the network later offers an official product API, switch to official API mode. Proceeding means you understand and accept the risk yourself.",
     credTitle: "Login account",
+    credGoConsole: "Go to Admin Console →",
     credUsername: "Username",
     credUsernamePh: "Network backend login username",
     credPassword: "Password",

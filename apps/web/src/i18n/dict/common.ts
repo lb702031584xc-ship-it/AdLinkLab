@@ -26,6 +26,7 @@ export const zh = {
       cashback: "🎫 返利站",
       reports: "📈 数据报表",
       system: "⚙️ 系统设置",
+      adminConsole: "🛡️ 管理控制台",
     },
     // Workflow phases inside each lane (5-stage marketing flow).
     phases: {
@@ -58,6 +59,7 @@ export const zh = {
       cashbackQuickstart: "新手 7 天 SOP",
       cashbackMonitor: "返利监控",
       cashbackOffers: "返利 Offer",
+      adminConsoleOverview: "总览",
       cashbackRotations: "轮换配置",
       rotationScript: "直链轮换 Script",
       clickMonitor: "点击监测",
@@ -144,6 +146,7 @@ export const en: typeof zh = {
       cashback: "🎫 Cashback",
       reports: "📈 Reports",
       system: "⚙️ System",
+      adminConsole: "🛡️ Admin Console",
     },
     // Workflow phases inside each lane (5-stage marketing flow).
     phases: {
@@ -176,6 +179,7 @@ export const en: typeof zh = {
       cashbackQuickstart: "7-Day Starter SOP",
       cashbackMonitor: "Cashback Monitor",
       cashbackOffers: "Cashback Offers",
+      adminConsoleOverview: "Overview",
       cashbackRotations: "Rotation Settings",
       rotationScript: "Direct-Link Rotation Script",
       clickMonitor: "Click Monitor",

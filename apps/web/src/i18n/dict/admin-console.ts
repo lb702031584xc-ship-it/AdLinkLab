@@ -1,0 +1,156 @@
+/** 管理控制台文案（仅管理员可见）。 */
+export const zh = {
+  title: "🛡️ 管理控制台",
+  desc: "所有仅管理员可操作的入口收拢在这里：登录账号、权限审批、备份、其他管理。",
+  tabs: {
+    accounts: "登录账号",
+    grants: "权限审批",
+    backup: "备份",
+    others: "其他管理",
+  },
+  accounts: {
+    title: "登录账号（用户名/密码/有效期）",
+    desc: "联盟网络登录态账号统一管理。密码只写不读：保存后 AES-256-GCM 加密存储，页面永不回显；留空 = 不修改已保存的密码。",
+    empty: "暂无联盟网络。",
+    networkKind: "类型",
+    username: "用户名",
+    password: "密码",
+    validDays: "有效期（天）",
+    expiresAt: "到期",
+    set: "设置",
+    notSet: "未设置",
+    passwordSet: "已设置（加密存储）",
+    loadError: "加载网络列表失败",
+  },
+  backup: {
+    title: "备份状态",
+    desc: "只读展示最近备份。备份由宿主机定时器触发，页面不提供触发按钮（宿主机命令不出 web）。",
+    timer: "定时器：宿主机 adlinklab-backup.timer，每天 00:09 UTC 自动执行（创建 → 校验 → 清理 → 可选异地 rsync）。",
+    manual: "手动触发（宿主机执行）：sudo systemctl start adlinklab-backup.service；查日志：journalctl -u adlinklab-backup.service",
+    notConfigured: "未配置备份目录（环境变量 ADLINKLAB_BACKUP_DIR 为空），API 容器内无法读取宿主机备份。",
+    loadError: "备份状态加载失败",
+    colId: "备份 ID",
+    colTime: "时间",
+    colSize: "大小",
+    colVerified: "校验",
+    verifiedYes: "✅ 已校验",
+    verifiedNo: "⚠️ 未校验",
+    empty: "暂无备份记录。",
+    dir: "备份目录",
+  },
+  others: {
+    title: "其他管理",
+    desc: "跳转到各管理页面（均为 admin-only）。",
+    cards: [
+      {
+        href: "/admin/users",
+        title: "用户管理",
+        desc: "创建用户、改角色、删除、view-as。",
+      },
+      {
+        href: "/admin/ai-settings",
+        title: "AI 设置",
+        desc: "模型、密钥、用量上限、流量信号凭证。",
+      },
+      {
+        href: "/admin/api-keys",
+        title: "API 密钥",
+        desc: "创建/轮换/吊销 API Key，IP 白名单。",
+      },
+      {
+        href: "/admin/ai-prompts",
+        title: "提示词管理",
+        desc: "AI 提示词版本管理。",
+      },
+      {
+        href: "/admin/data-exchange",
+        title: "数据导入导出",
+        desc: "数据交换管理。",
+      },
+      {
+        href: "/catalog",
+        title: "黑名单",
+        desc: "黑名单移除仅管理员可操作（含移除理由 + 审计 + 观察期）。",
+      },
+    ],
+  },
+};
+
+export const en = {
+  title: "🛡️ Admin Console",
+  desc: "All admin-only operations in one place: login accounts, grant approvals, backups, other admin tools.",
+  tabs: {
+    accounts: "Login accounts",
+    grants: "Grant approvals",
+    backup: "Backups",
+    others: "Other admin",
+  },
+  accounts: {
+    title: "Login accounts (username / password / validity)",
+    desc: "Central management for network login-session accounts. Passwords are write-only: AES-256-GCM encrypted at rest, never echoed; blank = keep unchanged.",
+    empty: "No networks yet.",
+    networkKind: "Kind",
+    username: "Username",
+    password: "Password",
+    validDays: "Valid days",
+    expiresAt: "Expires",
+    set: "Set",
+    notSet: "Not set",
+    passwordSet: "Set (encrypted)",
+    loadError: "Failed to load network list",
+  },
+  backup: {
+    title: "Backup status",
+    desc: "Read-only view of recent backups. Backups are triggered by the host timer; the page has no trigger button (host commands stay off the web).",
+    timer: "Timer: host adlinklab-backup.timer runs daily at 00:09 UTC (create → verify → cleanup → optional offsite rsync).",
+    manual: "Manual trigger (on host): sudo systemctl start adlinklab-backup.service; logs: journalctl -u adlinklab-backup.service",
+    notConfigured: "Backup dir not configured (env ADLINKLAB_BACKUP_DIR empty); the API container cannot read host backups.",
+    loadError: "Failed to load backup status",
+    colId: "Backup ID",
+    colTime: "Time",
+    colSize: "Size",
+    colVerified: "Verified",
+    verifiedYes: "✅ Verified",
+    verifiedNo: "⚠️ Unverified",
+    empty: "No backup records.",
+    dir: "Backup dir",
+  },
+  others: {
+    title: "Other admin",
+    desc: "Jump to admin pages (all admin-only).",
+    cards: [
+      {
+        href: "/admin/users",
+        title: "Users",
+        desc: "Create users, change roles, delete, view-as.",
+      },
+      {
+        href: "/admin/ai-settings",
+        title: "AI settings",
+        desc: "Models, keys, usage caps, traffic-signal credentials.",
+      },
+      {
+        href: "/admin/api-keys",
+        title: "API keys",
+        desc: "Create / rotate / revoke API keys, IP allowlist.",
+      },
+      {
+        href: "/admin/ai-prompts",
+        title: "Prompt management",
+        desc: "AI prompt version management.",
+      },
+      {
+        href: "/admin/data-exchange",
+        title: "Data exchange",
+        desc: "Data import / export management.",
+      },
+      {
+        href: "/catalog",
+        title: "Blacklist",
+        desc: "Blacklist removal is admin-only (reason + audit + observation period).",
+      },
+    ],
+  },
+};
+
+export type AdminConsoleDict = typeof zh;

@@ -280,6 +280,9 @@ export async function registerRoutes(
     // §5：管理员授权机制（申请/审批/吊销/审计）
     const { registerAdminGrantRoutes } = await import("./admin-grants.js");
     await registerAdminGrantRoutes(app, { prisma: services.prisma });
+    // 管理控制台：备份状态（admin-only，只读）
+    const { registerAdminConsoleRoutes } = await import("./admin-console.js");
+    await registerAdminConsoleRoutes(app, { prisma: services.prisma });
     // P2-7：只读解析（B2 强制执行：自有域名 或 有效授权白名单）
     const { registerTrackingLinkResolveRoutes } = await import(
       "./tracking-links-resolve.js"

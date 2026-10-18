@@ -218,6 +218,20 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
               : []),
           ],
         },
+        // 管理控制台：仅管理员可见的一级菜单，收拢所有 admin-only 操作。
+        ...(isAdmin
+          ? [
+              {
+                title: s.adminConsole,
+                items: [
+                  {
+                    href: "/admin/console",
+                    label: ni.adminConsoleOverview,
+                  },
+                ],
+              },
+            ]
+          : []),
       ];
 
   return (
