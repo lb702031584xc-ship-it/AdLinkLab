@@ -593,6 +593,8 @@ export function AdsAutoClient({
   const [preflightResult, setPreflightResult] = useState<PreflightResult | null>(null);
   const [confirm, setConfirm] = useState<ConfirmResult | null>(null);
   const [scriptSource, setScriptSource] = useState<string | null>(null);
+  /** 生成 Script 时的数值指纹（在相关 state 声明后计算，见下方）。 */
+  const [scriptFingerprint, setScriptFingerprint] = useState<string | null>(null);
   const [showScript, setShowScript] = useState(false);
   const [copied, setCopied] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -1140,7 +1142,22 @@ export function AdsAutoClient({
       if (res.ok) {
         setConfirm(res.data);
         const s = await getCreateCampaignScriptAction(plan.planId);
-        if (s.ok) setScriptSource(s.data.source);
+        if (s.ok) {
+          setScriptSource(s.data.source);
+          // 记录本次生成时的数值指纹（与 currentScriptFingerprint 同算法）。
+          const maxCpc =
+            bidStrategy !== "plan" && bidCpc ? parseFloat(bidCpc) || null : null;
+          setScriptFingerprint(
+            JSON.stringify({
+              maxCpc,
+              budget: editedBudget,
+              currency: bidCurrency,
+              geo: editedGeo,
+              negatives: editedNegativesText,
+              schedules: editedSchedules,
+            })
+          );
+        }
       } else {
         setError(res.error);
       }
@@ -1150,9 +1167,11 @@ export function AdsAutoClient({
   }
 
   // Bid strategy state
-  const [bidStrategy, setBidStrategy] = useState<"plan" | "conservative" | "moderate" | "aggressive" | "custom">("plan");
+  const [bidStrategy, setBidStrategy] = useState<"plan" | "conservative" | "moderate" | "aggressive" | "roi" | "custom">("plan");
   const [bidCommission, setBidCommission] = useState("");
   const [bidCvr, setBidCvr] = useState("2");
+  /** 期望 ROI（投 1 期望产出 X）：填了就按 EPC ÷ ROI 给出价推荐。 */
+  const [bidRoi, setBidRoi] = useState("2");
   const [bidCpc, setBidCpc] = useState("");
   // bidCurrency / fxRate state 声明在 useWorkState 之前（见上方注释），这里只留 refs 与 helpers。
 
@@ -1181,6 +1200,24 @@ export function AdsAutoClient({
     const out = (n / rateForCurrency(from)) * rateForCurrency(to);
     return String(Math.round(out * 10000) / 10000);
   };
+
+  /* Script 数值指纹：出价/预算/货币/地域/否词/排期任一改动，Script 即过期，提示重新生成。 */
+  const currentScriptFingerprint = (() => {
+    const maxCpc =
+      bidStrategy !== "plan" && bidCpc ? parseFloat(bidCpc) || null : null;
+    return JSON.stringify({
+      maxCpc,
+      budget: editedBudget,
+      currency: bidCurrency,
+      geo: editedGeo,
+      negatives: editedNegativesText,
+      schedules: editedSchedules,
+    });
+  })();
+  const scriptStale =
+    scriptSource != null &&
+    scriptFingerprint != null &&
+    currentScriptFingerprint !== scriptFingerprint;
 
   // 切到某货币后，若 fxRate 不是该货币的汇率，填该货币默认值并清手改标记。
   const ensureFxRateFor = (cur: string) => {
@@ -1400,6 +1437,14 @@ export function AdsAutoClient({
   const recommendedBid = plannerProfit?.maxCpcAtTargetRatio ?? null;
   const plannerBreakEven = plannerProfit?.breakEvenCpc ?? null;
 
+  // 期望 ROI 出价推荐：EPC ÷ ROI（USD），展示时 × 换算因子。
+  const roiBidUsd = (() => {
+    const roi = parseFloat(bidRoi);
+    if (!Number.isFinite(roi) || roi <= 0) return null;
+    if (bidProfit == null) return null;
+    return bidProfit.epc / roi;
+  })();
+
   // 选中档位的单次点击利润 = EPC − 该档 CPC（内部统一按 USD 算，展示时 × 换算因子）。
   // 三档建议是 USD 推导值；自定义 bidCpc 是计划货币，需先换回 USD 再算。
   const selectedTierCpcUsd =
@@ -1407,7 +1452,9 @@ export function AdsAutoClient({
     bidStrategy === "moderate" ||
     bidStrategy === "aggressive"
       ? (bidSuggestions?.[bidStrategy] ?? null)
-      : bidStrategy === "custom"
+      : bidStrategy === "roi"
+        ? roiBidUsd
+        : bidStrategy === "custom"
         ? (() => {
             const c = parseFloat(bidCpc);
             return Number.isFinite(c) ? c / fxFactor : null;
@@ -1418,11 +1465,12 @@ export function AdsAutoClient({
       ? bidProfit.epc - selectedTierCpcUsd
       : null;
 
-  function selectBidStrategy(s: "conservative" | "moderate" | "aggressive") {
+  function selectBidStrategy(s: "conservative" | "moderate" | "aggressive" | "roi") {
     setBidStrategy(s);
-    if (bidSuggestions) {
+    const v = s === "roi" ? roiBidUsd : bidSuggestions?.[s];
+    if (v != null) {
       // 采用换算后的值（计划货币），确认推出去的是计划货币的数。
-      setBidCpc((bidSuggestions[s] * fxFactor).toFixed(4));
+      setBidCpc((v * fxFactor).toFixed(4));
     }
   }
 
@@ -1932,7 +1980,7 @@ export function AdsAutoClient({
           <div className={`mt-4 ${cardClass}`}>
             <h3 className="text-sm font-semibold text-ink">{d.bidStrategy.title}</h3>
             <p className="mt-1 text-sm text-ink/65">{d.bidStrategy.description}</p>
-            <div className="mt-3 grid gap-3 md:grid-cols-3">
+            <div className="mt-3 grid gap-3 md:grid-cols-4">
               <div>
                 <label className={labelClass}>
                   {d.bidStrategy.commissionLabel} (USD)
@@ -1956,6 +2004,16 @@ export function AdsAutoClient({
                   inputMode="decimal"
                   value={bidCvr}
                   onChange={(e) => setBidCvr(e.target.value)}
+                  placeholder="2"
+                  className={inputClass}
+                />
+              </div>
+              <div>
+                <label className={labelClass}>{d.bidStrategy.roiLabel}</label>
+                <input
+                  inputMode="decimal"
+                  value={bidRoi}
+                  onChange={(e) => setBidRoi(e.target.value)}
                   placeholder="2"
                   className={inputClass}
                 />
@@ -2053,7 +2111,7 @@ export function AdsAutoClient({
               </div>
             </dl>
             {bidSuggestions && (
-              <div className="mt-3 grid gap-2 md:grid-cols-4">
+              <div className="mt-3 grid gap-2 md:grid-cols-5">
                 <button
                   type="button"
                   onClick={() => setBidStrategy("plan")}
@@ -2061,6 +2119,15 @@ export function AdsAutoClient({
                 >
                   {d.bidStrategy.usePlanDefault}
                 </button>
+                {roiBidUsd != null ? (
+                  <button
+                    type="button"
+                    onClick={() => selectBidStrategy("roi")}
+                    className={`rounded-lg border px-3 py-2 text-sm ${bidStrategy === "roi" ? "border-ink bg-ink text-white" : "border-ink/15"}`}
+                  >
+                    {d.bidStrategy.roiBid}: {(roiBidUsd * fxFactor).toFixed(4)}
+                  </button>
+                ) : null}
                 {(["conservative", "moderate", "aggressive"] as const).map((s) => (
                   <button
                     key={s}
@@ -2211,7 +2278,12 @@ export function AdsAutoClient({
             <div className={`mt-4 ${cardClass}`}>
               <h3 className="text-sm font-semibold text-ink">create-campaign Script</h3>
               <p className="mt-1 text-sm text-ink/65">{d.confirm.scriptHint}</p>
-              <div className="mt-3 flex gap-2">
+              {scriptStale ? (
+                <p className="mt-1 text-xs font-medium text-amber-700">
+                  {d.confirm.scriptStale}
+                </p>
+              ) : null}
+              <div className="mt-3 flex flex-wrap gap-2">
                 <button
                   type="button"
                   onClick={onCopyScript}
@@ -2225,6 +2297,18 @@ export function AdsAutoClient({
                   className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink hover:bg-ink/5"
                 >
                   {showScript ? d.confirm.hideScript : d.confirm.showScript}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void onConfirm()}
+                  disabled={confirming}
+                  className={`rounded-lg border px-3 py-1.5 text-sm disabled:opacity-50 ${
+                    scriptStale
+                      ? "border-signal bg-signal/10 font-medium text-signal hover:bg-signal/20"
+                      : "border-ink/15 text-ink hover:bg-ink/5"
+                  }`}
+                >
+                  {confirming ? d.confirm.regenerating : `↻ ${d.confirm.regenerate}`}
                 </button>
               </div>
               {showScript ? (
