@@ -1952,6 +1952,69 @@ export async function registerAiRoutes(
   });
 
   /**
+   * Offer 页截图解析：上传联盟网络 offer 详情页截图 → tesseract OCR 转文字 →
+   * 与 parse-offer-capture 同一套 AI 提取（佣金/payout/均价/Cookie/EPC/转化率/品类/地区/验收率）。
+   * multipart 单图 ≤8MB；OCR 无文字时 400；图片只在内存处理，不落盘。
+   */
+  app.post("/api/v1/ai/parse-offer-screenshot", async (request) => {
+    const info = await requireSession(deps, request);
+    // P0-6 — 配额守门（超限 429）。
+    await enforceAiQuota(prisma, info.tenantId);
+    let part: Awaited<ReturnType<FastifyRequest["file"]>>;
+    try {
+      part = await request.file();
+    } catch {
+      throw new ValidationError("请上传一张 offer 页截图（multipart/form-data）");
+    }
+    if (!part) throw new ValidationError("请上传一张 offer 页截图");
+    const mimetype = part.mimetype ?? "";
+    if (!mimetype.startsWith("image/")) {
+      throw new ValidationError(`只接受图片文件，收到：${mimetype || "未知类型"}`);
+    }
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const chunk of part.file) {
+      size += (chunk as Buffer).length;
+      if (size > 8 * 1024 * 1024) throw new ValidationError("图片超过 8MB 上限");
+      chunks.push(chunk as Buffer);
+    }
+    const buf = Buffer.concat(chunks);
+    if (buf.length === 0) throw new ValidationError("图片为空，无法识别");
+    let ocrText: string;
+    try {
+      ocrText = (await ocrImageText(buf)).text;
+    } catch (e) {
+      if (e instanceof OcrError) throw e;
+      throw new ValidationError("截图识别失败，请换一张更清晰的截图重试");
+    }
+    const text = ocrText.replace(/\s+/g, " ").trim();
+    if (!text) throw new ValidationError("截图中未识别出任何文字");
+    const settings = await readSettings(prisma);
+    if (!isConfigured(settings)) {
+      throw new AppError("AI is not configured", {
+        code: "AI_NOT_CONFIGURED",
+        statusCode: 400,
+      });
+    }
+    const pepper = assertAiSettingsPepperConfigured();
+    const apiKey = decryptSecret(settings.apiKeyEnc as string, pepper);
+    const query = (request.query ?? {}) as Record<string, unknown>;
+    const offer: { offer: OfferPageCapture; summaryText: string } =
+      await extractOfferPageWithAi(
+        {
+          baseUrl: settings.baseUrl as string,
+          model: settings.model as string,
+          apiKey,
+          language: query.language === "en" ? "en" : "zh",
+        },
+        text
+      );
+    // P0-6 — helper 内部调用未透传 usage，只记 calls=1。
+    await trackHelperLlmCall(info.tenantId, settings.model as string);
+    return offer;
+  });
+
+  /**
    * 季节 AI 判断：把已算好的季节信号（实测数）交给 AI 写一句行动建议（布局/观望/放弃）。
    * 入参就是 /traffic/seasonality 返回的单条结果 + 国家名；AI 只能用传入的实测数，不许编销量/CPC/CVR/payout。
    * 未配置 AI 时 400（AI_NOT_CONFIGURED），前端显示为“AI 未配置”。

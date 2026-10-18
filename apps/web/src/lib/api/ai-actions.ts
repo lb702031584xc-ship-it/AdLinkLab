@@ -549,6 +549,64 @@ export async function parseOfferCaptureAiAction(
   }
 }
 
+/**
+ * Offer 页截图 AI 解析：上传联盟网络 offer 详情页截图 → tesseract OCR →
+ * 与 parse-offer-capture 同一套 AI 提取。返回 { offer, summaryText }。
+ */
+export async function parseOfferScreenshotAction(
+  formData: FormData
+): Promise<AiActionResult<{ offer: OfferPageCapture; summaryText: string }>> {
+  const file = formData.get("screenshot");
+  if (!(file instanceof File) || file.size === 0) {
+    return { ok: false, error: "请先选择一张截图。" };
+  }
+  if (!file.type.startsWith("image/")) {
+    return { ok: false, error: "只接受图片文件。" };
+  }
+  const base = getApiBaseUrl();
+  const authHeaders = await sessionHeaders();
+  const lang = await getLang();
+  const out = new FormData();
+  out.append("screenshot", file, file.name || "screenshot.png");
+  let res: Response;
+  try {
+    res = await fetch(
+      `${base}/api/v1/ai/parse-offer-screenshot?language=${lang}`,
+      {
+        method: "POST",
+        headers: { ...authHeaders },
+        body: out,
+        cache: "no-store",
+      }
+    );
+  } catch {
+    return { ok: false, error: "网络请求失败，请稍后重试。" };
+  }
+  if (res.status === 401) redirect("/login");
+  if (!res.ok) {
+    let message = `解析失败（${res.status}）`;
+    try {
+      const body = (await res.json()) as {
+        message?: string;
+        error?: string;
+      };
+      message = body.message ?? body.error ?? message;
+    } catch {
+      /* ignore */
+    }
+    return { ok: false, error: message };
+  }
+  try {
+    const data = (await res.json()) as {
+      offer: OfferPageCapture;
+      summaryText: string;
+    };
+    return { ok: true, data };
+  } catch {
+    return { ok: false, error: "解析结果解析失败。" };
+  }
+}
+
 export async function parseKeywordCaptureAction(
   captureId: string
 ): Promise<AiActionResult<ParsedKeywordData>> {

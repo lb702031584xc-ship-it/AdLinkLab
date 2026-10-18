@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition, type FormEvent } from "react";
+import { useState, useTransition, useRef, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { createOfferAction } from "@/lib/api/entity-actions";
 import { setLastOfferId } from "@/lib/current-offer";
@@ -8,7 +8,16 @@ import { useI18n } from "@/i18n/I18nProvider";
 import { coachCheckAction, type CoachFinding } from "@/lib/api/coach-actions";
 import { CoachGate, hasCoachBlock } from "@/components/coach/coach-gate";
 import { CapturePicker } from "@/components/ai/capture-picker";
-import { parseOfferCaptureAiAction } from "@/lib/api/ai-actions";
+import {
+  parseOfferCaptureAiAction,
+  parseOfferScreenshotAction,
+} from "@/lib/api/ai-actions";
+import type { OfferPageCapture } from "@/lib/api/ai";
+import {
+  loadWorkStateAction,
+  saveWorkStateAction,
+} from "@/lib/api/work-state-actions";
+import { calcProfit } from "@/lib/profit-calc";
 import { extractBrandName } from "@/lib/brand-extract";
 
 const inputClassName =
@@ -78,11 +87,23 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
   const [coachFindings, setCoachFindings] = useState<CoachFinding[]>([]);
   /** 抓取提取 offer 佣金/payout：加载态 + 结果文案 + 原文证据（用户核对）。 */
   const [captureExtracting, setCaptureExtracting] = useState(false);
+  const [screenshotExtracting, setScreenshotExtracting] = useState(false);
+  const screenshotFileRef = useRef<HTMLInputElement>(null);
   const [captureExtractMsg, setCaptureExtractMsg] = useState<string | null>(null);
   const [captureExtractEvidence, setCaptureExtractEvidence] = useState<{
     commission: string | null;
     payout: string | null;
     price: string | null;
+  } | null>(null);
+  /** 暂存识别到的 EPC / 转化率（offer 表单无此二栏）：创建成功后同步到投流页快照。 */
+  const [extractedEpcCvr, setExtractedEpcCvr] = useState<{
+    epc: number | null;
+    conversionRate: number | null;
+  } | null>(null);
+  /** 本次抓取的出价估算（按抓取数据就地算出，仅参考）。 */
+  const [bidEstimate, setBidEstimate] = useState<{
+    breakEven: number;
+    recommended: number;
   } | null>(null);
   const { t } = useI18n();
   const f = t.entities.forms.offer;
@@ -91,6 +112,88 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
     name.trim() !== "" &&
     network.trim() !== "" &&
     destinationUrl.trim() !== "";
+
+  /**
+   * 智能填入共用逻辑（插件抓取 / 截图识别共用同一套 AI 提取结果）。
+   * 只补空不覆盖手填；EPC/转化率暂存（表单无此二栏，创建后同步到投流页）；
+   * 有 payout + 转化率时就地用 calcProfit 算出价估算。
+   */
+  const applyExtractedOffer = (
+    o: OfferPageCapture,
+    summaryText: string,
+    fallbackPrice: number | null
+  ) => {
+    if (!commissionValue.trim() && o.commissionValue != null && o.commissionType) {
+      setCommissionValue(String(o.commissionValue));
+      setCommissionType(o.commissionType);
+    }
+    if (o.network && !network.trim()) setNetwork(o.network);
+    if (o.offerName && !name.trim()) setName(o.offerName);
+    if (!avgPrice.trim()) {
+      if (o.averageOrderValue != null) setAvgPrice(String(o.averageOrderValue));
+      else if (fallbackPrice != null) setAvgPrice(String(fallbackPrice));
+    }
+    // 暂存 EPC / 转化率
+    if (o.epc != null || o.conversionRate != null) {
+      setExtractedEpcCvr({ epc: o.epc, conversionRate: o.conversionRate });
+    } else {
+      setExtractedEpcCvr(null);
+    }
+    // 就地出价估算（按本次提取数据，目标产出比默认 2）
+    const effCv = o.commissionValue ?? (commissionValue.trim() ? Number(commissionValue) : NaN);
+    const effType = o.commissionType ?? commissionType;
+    const effAvg =
+      o.averageOrderValue ??
+      (avgPrice.trim() ? Number(avgPrice) : NaN) ??
+      fallbackPrice;
+    let payout: number | null = null;
+    if (
+      effType === "percentage" &&
+      Number.isFinite(effCv) &&
+      Number.isFinite(effAvg) &&
+      (effAvg as number) > 0
+    ) {
+      payout = ((effAvg as number) * (effCv as number)) / 100;
+    } else if (effType === "fixed" && Number.isFinite(effCv)) {
+      payout = effCv as number;
+    } else if (o.estimatedPayout != null) {
+      payout = o.estimatedPayout;
+    }
+    const cvrF = o.conversionRate != null ? o.conversionRate / 100 : null;
+    if (payout != null && payout > 0 && cvrF != null && cvrF > 0) {
+      const r = calcProfit({ payout, cpc: 0, cvrF, targetReturnRatio: 2 });
+      if (r.breakEvenCpc != null && r.maxCpcAtTargetRatio != null) {
+        setBidEstimate({
+          breakEven: Math.round(r.breakEvenCpc * 100) / 100,
+          recommended: Math.round(r.maxCpcAtTargetRatio * 100) / 100,
+        });
+      } else {
+        setBidEstimate(null);
+      }
+    } else {
+      setBidEstimate(null);
+    }
+    // 结果消息
+    if (
+      o.commissionValue != null ||
+      o.estimatedPayout != null ||
+      o.averageOrderValue != null ||
+      o.epc != null ||
+      o.conversionRate != null
+    ) {
+      let msg = f.captureExtracted.replace("{summary}", summaryText);
+      if (o.epc != null || o.conversionRate != null) {
+        const parts: string[] = [];
+        if (o.epc != null) parts.push(`EPC $${o.epc}`);
+        if (o.conversionRate != null) parts.push(`${f.conversionRateLabel}${o.conversionRate}%`);
+        msg += `；${f.epcCvrDetected.replace("{parts}", parts.join("、"))}`;
+      }
+      setCaptureExtractMsg(msg);
+      setCaptureExtractEvidence(o.evidence);
+    } else {
+      setCaptureExtractMsg(f.captureExtractNone);
+    }
+  };
 
   function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -129,7 +232,41 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
       }
       try {
         const newId = result.data?.offer?.id;
-        if (typeof newId === "string" && newId) setLastOfferId(newId);
+        if (typeof newId === "string" && newId) {
+          setLastOfferId(newId);
+          /* 智能填入暂存的 EPC / 转化率 → 同步到该 offer 的投流页快照（只补空不覆盖）。 */
+          if (
+            extractedEpcCvr &&
+            (extractedEpcCvr.epc != null || extractedEpcCvr.conversionRate != null)
+          ) {
+            try {
+              const loaded = await loadWorkStateAction("traffic-planner", newId);
+              const existing =
+                loaded.ok && loaded.data.state
+                  ? (loaded.data.state as Record<string, unknown>)
+                  : {};
+              const patch: Record<string, unknown> = {};
+              if (extractedEpcCvr.epc != null && !existing.epc) {
+                patch.epc = String(extractedEpcCvr.epc);
+              }
+              if (
+                extractedEpcCvr.conversionRate != null &&
+                !existing.networkCvr
+              ) {
+                patch.networkCvr = String(extractedEpcCvr.conversionRate);
+              }
+              if (Object.keys(patch).length > 0) {
+                await saveWorkStateAction(
+                  "traffic-planner",
+                  { ...existing, ...patch },
+                  { offerId: newId }
+                );
+              }
+            } catch {
+              /* 同步失败不阻断跳转 */
+            }
+          }
+        }
       } catch {
         /* 记忆写入失败不阻断跳转 */
       }
@@ -335,47 +472,60 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
           onPick={(c) => {
             if (c.finalUrl) setDestinationUrl(c.finalUrl);
             if (c.title && !name.trim()) setName(c.title);
-            /* 佣金/payout：AI 从抓取页提取（区分 % 佣金与 $ payout）。
-               均价优先用提取的均价（产品价），兜底用抓取的 price；佣金只补空不覆盖手填。 */
             void (async () => {
               setCaptureExtracting(true);
               setCaptureExtractMsg(null);
               setCaptureExtractEvidence(null);
-              const fillAvgPrice = (o: { averageOrderValue: number | null }) => {
-                if (avgPrice.trim()) return;
-                if (o.averageOrderValue != null) setAvgPrice(String(o.averageOrderValue));
-                else if (c.price != null) setAvgPrice(String(c.price));
-              };
               try {
                 const r = await parseOfferCaptureAiAction(c.id);
                 if (!r.ok) {
                   setCaptureExtractMsg(f.captureExtractFailed);
-                  fillAvgPrice({ averageOrderValue: null });
                   return;
                 }
-                const o = r.data.offer;
-                if (!commissionValue.trim() && o.commissionValue != null && o.commissionType) {
-                  setCommissionValue(String(o.commissionValue));
-                  setCommissionType(o.commissionType);
-                }
-                if (o.network && !network.trim()) setNetwork(o.network);
-                if (o.offerName && !name.trim()) setName(o.offerName);
-                fillAvgPrice(o);
-                if (o.commissionValue != null || o.estimatedPayout != null || o.averageOrderValue != null) {
-                  setCaptureExtractMsg(f.captureExtracted.replace("{summary}", r.data.summaryText));
-                  setCaptureExtractEvidence(o.evidence);
-                } else {
-                  setCaptureExtractMsg(f.captureExtractNone);
-                }
+                applyExtractedOffer(r.data.offer, r.data.summaryText, c.price ?? null);
               } catch {
                 setCaptureExtractMsg(f.captureExtractFailed);
-                fillAvgPrice({ averageOrderValue: null });
               } finally {
                 setCaptureExtracting(false);
               }
             })();
           }}
         />
+        {/* 截图识别：上传联盟后台 offer 详情页截图，走同一套 AI 提取 */}
+        <label className="mt-2 inline-flex cursor-pointer items-center gap-1 rounded-lg bg-signal/10 px-2.5 py-1.5 text-xs font-medium text-signal transition hover:bg-signal/20">
+          {screenshotExtracting ? f.screenshotExtracting : f.screenshotUpload}
+          <input
+            ref={screenshotFileRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            disabled={screenshotExtracting}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              void (async () => {
+                setScreenshotExtracting(true);
+                setCaptureExtractMsg(null);
+                setCaptureExtractEvidence(null);
+                try {
+                  const fd = new FormData();
+                  fd.append("screenshot", file);
+                  const r = await parseOfferScreenshotAction(fd);
+                  if (!r.ok) {
+                    setCaptureExtractMsg(r.error);
+                    return;
+                  }
+                  applyExtractedOffer(r.data.offer, r.data.summaryText, null);
+                } catch {
+                  setCaptureExtractMsg(f.captureExtractFailed);
+                } finally {
+                  setScreenshotExtracting(false);
+                  if (screenshotFileRef.current) screenshotFileRef.current.value = "";
+                }
+              })();
+            }}
+          />
+        </label>
         {captureExtracting && (
           <p className="mt-1 text-xs text-ink/50">{f.captureExtracting}</p>
         )}
@@ -389,6 +539,17 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
                   .join(" · ")}
               </p>
             )}
+          </div>
+        )}
+        {bidEstimate && (
+          <div className="mt-2 rounded-lg border border-signal/30 bg-signal/[0.04] p-2.5 text-xs">
+            <p className="font-medium text-ink">{f.bidEstimateTitle}</p>
+            <p className="mt-0.5 text-ink/70">
+              {f.bidEstimateBreakEven}：<span className="font-semibold text-ink">${bidEstimate.breakEven}</span>
+              <span className="mx-2 text-ink/30">|</span>
+              {f.bidEstimateRecommended}：<span className="font-semibold text-signal">${bidEstimate.recommended}</span>
+            </p>
+            <p className="mt-0.5 text-ink/50">{f.bidEstimateHint}</p>
           </div>
         )}
         <div className="mt-2">

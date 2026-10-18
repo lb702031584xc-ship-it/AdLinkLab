@@ -19,6 +19,16 @@ export interface OfferPageCapture {
   averageOrderValue: number | null;
   currency: string | null;
   cookieDays: number | null;
+  /** 30 天 EPC（美元/点击，网络后台口径）。 */
+  epc: number | null;
+  /** 转化率（%，网络后台口径）。 */
+  conversionRate: number | null;
+  /** 品类（如 Arts, Crafts & Sewing）。 */
+  category: string | null;
+  /** 支持地区（如 ["US","DE","CA"]）。 */
+  regions: string[] | null;
+  /** 验收率（%，如 100）。 */
+  acceptanceRate: number | null;
   /** 每项的页面原文证据（用户核对用）。 */
   evidence: { commission: string | null; payout: string | null; price: string | null };
 }
@@ -57,6 +67,11 @@ export function normalizeOfferPage(raw: unknown): OfferPageCapture {
     averageOrderValue: null,
     currency: null,
     cookieDays: null,
+    epc: null,
+    conversionRate: null,
+    category: null,
+    regions: null,
+    acceptanceRate: null,
     evidence: { ...emptyEvidence },
   };
   if (!raw || typeof raw !== "object") return empty;
@@ -98,6 +113,12 @@ export function normalizeOfferPage(raw: unknown): OfferPageCapture {
     r.evidence && typeof r.evidence === "object"
       ? (r.evidence as Record<string, unknown>)
       : {};
+  const regionsRaw = Array.isArray(r.regions)
+    ? r.regions
+        .filter((x): x is string => typeof x === "string" && x.trim().length > 0)
+        .map((x) => x.trim().toUpperCase())
+        .slice(0, 20)
+    : null;
   return {
     offerName: str(r.offerName, 300),
     network: str(r.network, 100),
@@ -107,6 +128,11 @@ export function normalizeOfferPage(raw: unknown): OfferPageCapture {
     averageOrderValue: num(r.averageOrderValue),
     currency: str(r.currency, 10),
     cookieDays: cookie != null ? Math.round(cookie) : null,
+    epc: num(r.epc),
+    conversionRate: num(r.conversionRate),
+    category: str(r.category, 200),
+    regions: regionsRaw && regionsRaw.length > 0 ? regionsRaw : null,
+    acceptanceRate: num(r.acceptanceRate),
     evidence: {
       commission: str(evidenceRaw.commission, 120),
       payout: str(evidenceRaw.payout, 120),
@@ -129,6 +155,8 @@ export function buildOfferPageSummaryText(p: OfferPageCapture, language: Analysi
     if (p.estimatedPayout != null) parts.push(`Est. Payout: ${p.currency ?? ""} ${p.estimatedPayout}`.trim());
     if (p.averageOrderValue != null) parts.push(`Avg order value: ${p.currency ?? ""} ${p.averageOrderValue}`.trim());
     if (p.cookieDays != null) parts.push(`Cookie: ${p.cookieDays} days`);
+    if (p.epc != null) parts.push(`EPC: $${p.epc}`);
+    if (p.conversionRate != null) parts.push(`CVR: ${p.conversionRate}%`);
     if (p.network) parts.push(`Network: ${p.network}`);
   } else {
     if (p.commissionValue != null && p.commissionType) {
@@ -141,6 +169,8 @@ export function buildOfferPageSummaryText(p: OfferPageCapture, language: Analysi
     if (p.estimatedPayout != null) parts.push(`预估 payout：${p.currency ?? ""}${p.estimatedPayout}`);
     if (p.averageOrderValue != null) parts.push(`均价：${p.currency ?? ""}${p.averageOrderValue}`);
     if (p.cookieDays != null) parts.push(`Cookie：${p.cookieDays} 天`);
+    if (p.epc != null) parts.push(`EPC：$${p.epc}`);
+    if (p.conversionRate != null) parts.push(`转化率：${p.conversionRate}%`);
     if (p.network) parts.push(`网络：${p.network}`);
   }
   return parts.join(" · ");

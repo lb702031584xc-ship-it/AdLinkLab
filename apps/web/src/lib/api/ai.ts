@@ -929,6 +929,11 @@ export interface OfferPageCapture {
   averageOrderValue: number | null;
   currency: string | null;
   cookieDays: number | null;
+  epc: number | null;
+  conversionRate: number | null;
+  category: string | null;
+  regions: string[] | null;
+  acceptanceRate: number | null;
   evidence: { commission: string | null; payout: string | null; price: string | null };
 }
 

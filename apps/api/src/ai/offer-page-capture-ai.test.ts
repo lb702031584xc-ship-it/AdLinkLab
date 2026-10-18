@@ -41,6 +41,11 @@ describe("offer-page-capture-ai", () => {
       averageOrderValue: 180,
       currency: "USD",
       cookieDays: 30,
+      epc: null,
+      conversionRate: null,
+      category: null,
+      regions: null,
+      acceptanceRate: null,
       evidence: {
         commission: "Commission: 13%",
         payout: "Est. Payout: $23.4",
@@ -74,8 +79,32 @@ describe("offer-page-capture-ai", () => {
       averageOrderValue: null,
       currency: null,
       cookieDays: null,
+      epc: null,
+      conversionRate: null,
+      category: null,
+      regions: null,
+      acceptanceRate: null,
       evidence: { commission: null, payout: null, price: null },
     });
+  });
+
+  it("normalize：新字段（EPC/转化率/品类/地区/验收率）", () => {
+    const p = normalizeOfferPage({
+      offerName: "Citylife",
+      epc: 9.28,
+      conversionRate: 1.11,
+      category: "Arts, Crafts & Sewing",
+      regions: ["us", "de", "ca"],
+      acceptanceRate: 100,
+    });
+    expect(p.epc).toBe(9.28);
+    expect(p.conversionRate).toBe(1.11);
+    expect(p.category).toBe("Arts, Crafts & Sewing");
+    expect(p.regions).toEqual(["US", "DE", "CA"]);
+    expect(p.acceptanceRate).toBe(100);
+    // 非法 regions → null
+    expect(normalizeOfferPage({ regions: "US" }).regions).toBeNull();
+    expect(normalizeOfferPage({ regions: [] }).regions).toBeNull();
   });
 
   it("summary：按佣金/payout/均价格式化", () => {
