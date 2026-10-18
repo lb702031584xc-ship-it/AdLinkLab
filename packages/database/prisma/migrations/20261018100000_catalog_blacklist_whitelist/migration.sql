@@ -7,8 +7,8 @@ ALTER TABLE "affiliate_networks" ADD COLUMN "session_expire_strikes" INTEGER NOT
 ALTER TABLE "network_products" ADD COLUMN "sync_streak" INTEGER NOT NULL DEFAULT 0;
 
 CREATE TABLE "catalog_blacklist" (
-  "id" TEXT NOT NULL,
-  "tenant_id" TEXT NOT NULL,
+  "id" UUID NOT NULL,
+  "tenant_id" UUID NOT NULL,
   "entity_type" TEXT NOT NULL,
   "entity_id" TEXT NOT NULL,
   "network_kind" TEXT,
@@ -26,8 +26,8 @@ CREATE INDEX "catalog_blacklist_tenant_entity_idx" ON "catalog_blacklist"("tenan
 ALTER TABLE "catalog_blacklist" ADD CONSTRAINT "catalog_blacklist_tenant_id_fkey" FOREIGN KEY ("tenant_id") REFERENCES "tenants"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 CREATE TABLE "catalog_whitelist" (
-  "id" TEXT NOT NULL,
-  "tenant_id" TEXT NOT NULL,
+  "id" UUID NOT NULL,
+  "tenant_id" UUID NOT NULL,
   "entity_type" TEXT NOT NULL,
   "entity_id" TEXT NOT NULL,
   "note" TEXT,

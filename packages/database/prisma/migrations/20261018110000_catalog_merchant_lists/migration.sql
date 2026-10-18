@@ -23,8 +23,8 @@ CREATE UNIQUE INDEX "catalog_whitelist_tenant_channel_entity_uniq" ON "catalog_w
 ALTER TABLE "network_products" ADD COLUMN "merchant_id" TEXT;
 
 CREATE TABLE "catalog_merchant_policies" (
-  "id" TEXT NOT NULL,
-  "tenant_id" TEXT NOT NULL,
+  "id" UUID NOT NULL,
+  "tenant_id" UUID NOT NULL,
   "shave_threshold_pct" DECIMAL(5,2) NOT NULL DEFAULT 30,
   "shave_period_days" INTEGER NOT NULL DEFAULT 7,
   "shave_periods" INTEGER NOT NULL DEFAULT 3,
@@ -40,9 +40,9 @@ CREATE UNIQUE INDEX "catalog_merchant_policies_tenant_id_key" ON "catalog_mercha
 ALTER TABLE "catalog_merchant_policies" ADD CONSTRAINT "catalog_merchant_policies_tenant_id_fkey" FOREIGN KEY ("tenant_id") REFERENCES "tenants"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 CREATE TABLE "catalog_merchant_signals" (
-  "id" TEXT NOT NULL,
-  "tenant_id" TEXT NOT NULL,
-  "merchant_id" TEXT NOT NULL,
+  "id" UUID NOT NULL,
+  "tenant_id" UUID NOT NULL,
+  "merchant_id" UUID NOT NULL,
   "channel" TEXT NOT NULL,
   "period_start" TIMESTAMPTZ(3) NOT NULL,
   "period_days" INTEGER NOT NULL,

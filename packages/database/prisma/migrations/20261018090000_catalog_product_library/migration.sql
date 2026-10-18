@@ -10,9 +10,9 @@ ALTER TABLE "affiliate_networks" ADD COLUMN "session_updated_at" TIMESTAMPTZ(3);
 ALTER TABLE "affiliate_networks" ADD COLUMN "session_error" TEXT;
 
 CREATE TABLE "network_products" (
-  "id" TEXT NOT NULL,
-  "tenant_id" TEXT NOT NULL,
-  "network_id" TEXT NOT NULL,
+  "id" UUID NOT NULL,
+  "tenant_id" UUID NOT NULL,
+  "network_id" UUID NOT NULL,
   "external_id" TEXT NOT NULL,
   "name" TEXT NOT NULL,
   "brand" TEXT,
@@ -37,8 +37,8 @@ ALTER TABLE "network_products" ADD CONSTRAINT "network_products_tenant_id_fkey" 
 ALTER TABLE "network_products" ADD CONSTRAINT "network_products_network_id_fkey" FOREIGN KEY ("network_id") REFERENCES "affiliate_networks"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 CREATE TABLE "catalog_screening_presets" (
-  "id" TEXT NOT NULL,
-  "tenant_id" TEXT NOT NULL,
+  "id" UUID NOT NULL,
+  "tenant_id" UUID NOT NULL,
   "min_reviews" INTEGER,
   "min_commission_amount" DECIMAL(19,4),
   "min_commission_rate" DECIMAL(9,4),
