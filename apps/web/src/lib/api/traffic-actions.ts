@@ -246,7 +246,73 @@ export interface OcrMetrics {
   needsReview: true;
 }
 
-/** 网络后台截图 OCR 识别出的指标（识别值，需人工核对）。 */
+/** AI 量级参考（非实测）：后台无 EPC / 转化率时，按行业基准给保守的量级区间。 */
+export interface EpcReference {
+  vertical: string;
+  verticalLabel: string;
+  cvrLow: number;
+  cvrHigh: number;
+  epcLow: number;
+  epcHigh: number;
+  sources: string[];
+  reasoning: string;
+  confidence: number;
+}
+
+/**
+ * AI 量级参考。
+ * 后端契约：POST /api/v1/ai/epc-reference
+ *   body: { offerName, payout, avgPrice?, commissionRate?, network?, language }
+ *   → EpcReference；AI 未配置时 400。
+ * 硬隔离：返回的参考值只做展示，调用方绝不许写进 EPC / 转化率输入框、出价公式。
+ */
+export async function getEpcReferenceAction(
+  input: {
+    offerName: string;
+    payout: number;
+    avgPrice?: number | null;
+    commissionRate?: number | null;
+    network?: string;
+    language: "zh" | "en";
+  }
+): Promise<TrafficGateActionResult<EpcReference>> {
+  const base = getApiBaseUrl();
+  const authHeaders = await sessionHeaders();
+  let res: Response;
+  try {
+    res = await fetch(`${base}/api/v1/ai/epc-reference`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...authHeaders,
+      },
+      body: JSON.stringify(input),
+      cache: "no-store",
+    });
+  } catch {
+    return { ok: false, error: "网络请求失败，请稍后重试。" };
+  }
+  if (res.status === 401) redirect("/login");
+  if (!res.ok) {
+    let message = `生成失败（${res.status}）`;
+    try {
+      const body = (await res.json()) as {
+        message?: string;
+        error?: string;
+      };
+      message = body.message ?? body.error ?? message;
+    } catch {
+      /* ignore */
+    }
+    return { ok: false, error: message };
+  }
+  try {
+    const data = (await res.json()) as EpcReference;
+    return { ok: true, data };
+  } catch (e) {
+    return mapError(e, "参考值解析失败。");
+  }
+}
 export interface NetworkOcrMetrics {
   epc: number | null;
   conversionRate: number | null;

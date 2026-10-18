@@ -85,6 +85,10 @@ import {
   judgeSeasonalityWithAi,
   type SeasonalityJudgmentInput,
 } from "../ai/seasonality-judgment.js";
+import {
+  judgeEpcReferenceWithAi,
+  type EpcReferenceInput,
+} from "../ai/epc-reference.js";
 
 /**
  * Phase 11 — AI offer risk analysis (one tenant per user; session auth only).
@@ -2014,6 +2018,61 @@ export async function registerAiRoutes(
     // P0-6 — helper 内部调用未透传 usage，只记 calls=1。
     await trackHelperLlmCall(info.tenantId, settings.model as string);
     return judgment;
+  });
+
+  /**
+   * AI 量级参考：后台拿不到 EPC / 转化率时，按行业基准给一个保守的量级区间（非实测）。
+   * 入参 { offerName, payout（美元/转化）, avgPrice?, commissionRate?, network?, language? }。
+   * 返回 { vertical, cvrLow, cvrHigh, epcLow, epcHigh, sources, reasoning, confidence }。
+   * 区间数字由代码按 基准 CVR × payout 算，不经过 LLM；LLM 只选基准行 + 写依据。
+   * 调用方（投流页）只做展示，绝不许把参考值写进 EPC / 转化率输入框、出价公式。
+   * 未配置 AI 时 400（AI_NOT_CONFIGURED）。
+   */
+  app.post("/api/v1/ai/epc-reference", async (request) => {
+    const info = await requireSession(deps, request);
+    // P0-6 — 配额守门（超限 429）。
+    await enforceAiQuota(prisma, info.tenantId);
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    const offerName =
+      typeof body.offerName === "string" ? body.offerName.trim() : "";
+    const payout = Number(body.payout);
+    if (!offerName) throw new ValidationError("offerName is required");
+    if (!Number.isFinite(payout) || payout <= 0) {
+      throw new ValidationError("payout 必须是大于 0 的数字");
+    }
+    const numOrNull = (v: unknown): number | null => {
+      if (v == null || v === "") return null;
+      const n = Number(v);
+      return Number.isFinite(n) && n > 0 ? n : null;
+    };
+    const input: EpcReferenceInput = {
+      offerName,
+      payout,
+      avgPrice: numOrNull(body.avgPrice),
+      commissionRate: numOrNull(body.commissionRate),
+      network: typeof body.network === "string" ? body.network.trim() : "",
+    };
+    const settings = await readSettings(prisma);
+    if (!isConfigured(settings)) {
+      throw new AppError("AI is not configured", {
+        code: "AI_NOT_CONFIGURED",
+        statusCode: 400,
+      });
+    }
+    const pepper = assertAiSettingsPepperConfigured();
+    const apiKey = decryptSecret(settings.apiKeyEnc as string, pepper);
+    const ref = await judgeEpcReferenceWithAi(
+      {
+        baseUrl: settings.baseUrl as string,
+        model: settings.model as string,
+        apiKey,
+        language: body.language === "en" ? "en" : "zh",
+      },
+      input
+    );
+    // P0-6 — helper 内部调用未透传 usage，只记 calls=1。
+    await trackHelperLlmCall(info.tenantId, settings.model as string);
+    return ref;
   });
 
   /**

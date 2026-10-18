@@ -24,6 +24,8 @@ import {
 import {
   ocrScreenshotAction,
   type NetworkOcrMetrics,
+  getEpcReferenceAction,
+  type EpcReference,
 } from "@/lib/api/traffic-actions";
 import {
   mergeLongtailCandidates,
@@ -377,24 +379,37 @@ export function TrafficPlannerClient({
     return price * (rate / 100) * (1 - refundF);
   }, [profitMode, avgPrice, commissionRate, refundRate]);
 
-  /* 出价参考：EPC / 保本 CPC（= EPC）/ 推荐出价（= EPC ÷ 目标产出比），全部来自 profit-calc。
-     电商用派生 payout（已扣退货，不再重复扣）；联盟用固定 payout 并扣 shave。payout/CVR 缺失时为 null。 */
-  const bidCalc = useMemo(() => {
+  /* 出价参考（拆两套）：电商用派生 payout（均价×佣金率，已扣退货），联盟用固定 payout（扣 shave）。
+     两套都算 EPC / 保本 CPC（= EPC）/ 推荐出价（= EPC ÷ 目标产出比），payout/CVR 缺失时为 null。 */
+  const bidCalcEcom = useMemo(() => {
     const cvrF = Number(networkCvr) / 100;
     const ratio = Number(targetReturnRatio);
-    const base = profitMode === "ecommerce"
-      ? derivedPayout
-      : Number(payout) > 0 ? Number(payout) : null;
+    if (derivedPayout == null || derivedPayout <= 0 || !Number.isFinite(cvrF) || cvrF <= 0) return null;
+    return calcProfit({
+      payout: derivedPayout,
+      cpc: 0,
+      cvrF,
+      refundF: 0,
+      shaveF: 0,
+      targetReturnRatio: Number.isFinite(ratio) && ratio > 0 ? ratio : 2,
+    });
+  }, [derivedPayout, networkCvr, targetReturnRatio]);
+  const bidCalcAff = useMemo(() => {
+    const cvrF = Number(networkCvr) / 100;
+    const ratio = Number(targetReturnRatio);
+    const base = Number(payout) > 0 ? Number(payout) : null;
     if (base == null || base <= 0 || !Number.isFinite(cvrF) || cvrF <= 0) return null;
     return calcProfit({
       payout: base,
       cpc: 0,
       cvrF,
       refundF: 0,
-      shaveF: profitMode === "affiliate" ? Math.min(Math.max(Number(shavePct) || 0, 0), 100) / 100 : 0,
+      shaveF: Math.min(Math.max(Number(shavePct) || 0, 0), 100) / 100,
       targetReturnRatio: Number.isFinite(ratio) && ratio > 0 ? ratio : 2,
     });
-  }, [profitMode, derivedPayout, payout, networkCvr, shavePct, targetReturnRatio]);
+  }, [payout, networkCvr, shavePct, targetReturnRatio]);
+  /** 当前模式的出价参考（渠道对比等共用逻辑沿用）。 */
+  const bidCalc = profitMode === "ecommerce" ? bidCalcEcom : bidCalcAff;
 
   /* Google 参考 CPC：自动 = 关键词表 Planner 低位均值（无低位时用关键词表 CPC 均值）；手动覆盖优先。 */
   const googleCpcAuto = useMemo(() => {
@@ -525,6 +540,44 @@ export function TrafficPlannerClient({
     } finally {
       setNetworkOcrBusy(false);
       if (networkOcrFileRef.current) networkOcrFileRef.current.value = "";
+    }
+  };
+
+  /* AI 量级参考（非实测）：后台无数据时，按行业基准给保守的量级区间，只看方向。
+     硬隔离：epcRef 只做展示，绝不写入 epc / networkCvr state，不进出价公式。 */
+  const [epcRef, setEpcRef] = useState<EpcReference | null>(null);
+  const [epcRefBusy, setEpcRefBusy] = useState(false);
+  const [epcRefMsg, setEpcRefMsg] = useState("");
+  const genEpcReference = async () => {
+    const p =
+      profitMode === "ecommerce"
+        ? derivedPayout
+        : Number(payout) > 0
+          ? Number(payout)
+          : null;
+    if (p == null || !Number.isFinite(p) || p <= 0) {
+      setEpcRefMsg(d.epcRefNeedPayout);
+      return;
+    }
+    setEpcRefBusy(true);
+    setEpcRefMsg("");
+    setEpcRef(null);
+    try {
+      const res = await getEpcReferenceAction({
+        offerName: offerName || "Offer",
+        payout: p,
+        avgPrice: numOrUndef(avgPrice) ?? null,
+        commissionRate: numOrUndef(commissionRate) ?? null,
+        network,
+        language: lang,
+      });
+      if (!res.ok) {
+        setEpcRefMsg(res.error);
+        return;
+      }
+      setEpcRef(res.data);
+    } finally {
+      setEpcRefBusy(false);
     }
   };
 
@@ -1615,51 +1668,160 @@ export function TrafficPlannerClient({
         {/* EPC */}
         <div className={cardCls}>
           {sectionHead(d.epcSection, "offervault", d.epcHint, offerName, true)}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <label className="block">
-              <span className={labelCls}>{d.epc}</span>
-              <input className={inputCls} type="number" min="0" step="0.01" value={epc} onChange={(e) => setEpc(e.target.value)} placeholder="0.50" />
-              {/* EPC / CVR 数据来源：联盟网络后台 offer 详情页 */}
-              <span className="mt-1 block">
-                {networkDashboardSite(network) ? (
-                  <a href={siteUrl(networkDashboardSite(network), "")} target="_blank" rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 rounded-lg bg-signal/10 px-2.5 py-1 text-xs font-medium text-signal transition hover:bg-signal/20">
-                    ↗ {d.srcNetworkDashboard.replace("{network}", network)}
-                  </a>
-                ) : (
-                  <span className="text-xs text-ink/50">{d.srcNetworkHint}</span>
-                )}
-                <span className="ml-1 text-xs text-ink/50">{d.srcEpcCvrHint}</span>
-              </span>
+          {/* 共享：期望产出比（目标 ROI，两张卡共用） */}
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-1.5 text-xs text-ink/70">
+              {d.bidTargetReturnRatio}
+              <input
+                className="w-20 rounded-lg border border-ink/15 bg-white px-2 py-1 text-sm text-ink outline-none focus:border-signal"
+                type="number" min="1" step="0.1" value={targetReturnRatio}
+                onChange={(e) => setTargetReturnRatio(e.target.value)} placeholder="2"
+              />
             </label>
-            <label className="block">
-              <span className={labelCls}>{d.networkCvr}</span>
-              <input className={inputCls} type="number" min="0" step="0.1" value={networkCvr} onChange={(e) => { setNetworkCvr(e.target.value); setCvrSource("manual"); }} placeholder="3.5" />
-              <span className="mt-1 block text-xs text-ink/50">
-                {cvrSource === "epc" ? `✓ ${d.cvrFromEpc}` : d.cvrManual} · {d.cvrDeriveHint}
-              </span>
-              <button
-                type="button"
-                onClick={deriveCvrFromEpc}
-                disabled={!Number(epc) || !(profitMode === "ecommerce" ? derivedPayout : Number(payout))}
-                className={`${btnGhost} mt-1 disabled:opacity-50`}
-              >
-                {d.deriveCvrFromEpc}
-              </button>
-            </label>
-            {profitMode === "ecommerce" ? (
+          </div>
+          {/* —— 电商模式卡 —— */}
+          <div className={`rounded-xl border-2 p-3 ${profitMode === "ecommerce" ? "border-signal/60 bg-signal/[0.04]" : "border-ink/10"}`}>
+            <div className="mb-2 flex items-center gap-2">
+              <span className="text-sm font-semibold text-ink">🛒 {d.modeEcom}</span>
+              {profitMode === "ecommerce" ? (
+                <span className="rounded-full bg-signal/15 px-2 py-0.5 text-xs font-medium text-signal">{d.modeCurrent}</span>
+              ) : null}
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="block">
+                <span className={labelCls}>{d.avgPrice}</span>
+                <span className={hintCls}>{d.avgPriceHint}</span>
+                <input className={inputCls} type="number" min="0" step="0.01" value={avgPrice} onChange={(e) => setAvgPrice(e.target.value)} placeholder="180" />
+              </label>
+              <label className="block">
+                <span className={labelCls}>{d.commissionRate}</span>
+                <span className={hintCls}>{d.commissionRateHint}</span>
+                <input className={inputCls} type="number" min="0" step="0.1" value={commissionRate} onChange={(e) => setCommissionRate(e.target.value)} placeholder="13" />
+              </label>
+            </div>
+            <p className="mt-1 text-xs text-ink/60">
+              {d.modeEcomPayout}：{derivedPayout != null ? <span className="font-semibold text-ink">${derivedPayout.toFixed(2)}</span> : "—"}
+              <span className="ml-1 text-ink/40">（{d.modeEcomFormula}）</span>
+            </p>
+            <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="block">
+                <span className={labelCls}>{d.networkCvr}</span>
+                <input className={inputCls} type="number" min="0" step="0.1" value={networkCvr} onChange={(e) => { setNetworkCvr(e.target.value); setCvrSource("manual"); }} placeholder="3.5" />
+                <span className="mt-1 block text-xs text-ink/50">
+                  {cvrSource === "epc" ? `✓ ${d.cvrFromEpc}` : d.cvrManual}
+                </span>
+              </label>
               <label className="block">
                 <span className={labelCls}>{d.refundRate}</span>
                 <span className={hintCls}>{d.refundRateHint}</span>
                 <input className={inputCls} type="number" min="0" step="0.1" value={refundRate} onChange={(e) => setRefundRate(e.target.value)} placeholder="5" />
               </label>
-            ) : (
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-4 text-sm">
+              <span>
+                <span className="text-xs text-ink/50">{d.bidBreakEven}：</span>
+                <span className="font-semibold text-ink">{bidCalcEcom?.breakEvenCpc != null ? `$${bidCalcEcom.breakEvenCpc.toFixed(2)}` : "—"}</span>
+              </span>
+              <span>
+                <span className="text-xs text-ink/50">{d.bidRecommended}：</span>
+                <span className="font-semibold text-signal">{bidCalcEcom?.maxCpcAtTargetRatio != null ? `$${bidCalcEcom.maxCpcAtTargetRatio.toFixed(2)}` : "—"}</span>
+              </span>
+            </div>
+            {!bidCalcEcom ? <p className="mt-1 text-xs text-ink/50">{d.bidNoData}</p> : null}
+          </div>
+          {/* —— 联盟模式卡 —— */}
+          <div className={`mt-3 rounded-xl border-2 p-3 ${profitMode === "affiliate" ? "border-signal/60 bg-signal/[0.04]" : "border-ink/10"}`}>
+            <div className="mb-2 flex items-center gap-2">
+              <span className="text-sm font-semibold text-ink">🔗 {d.modeAff}</span>
+              {profitMode === "affiliate" ? (
+                <span className="rounded-full bg-signal/15 px-2 py-0.5 text-xs font-medium text-signal">{d.modeCurrent}</span>
+              ) : null}
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="block">
+                <span className={labelCls}>{d.payout}</span>
+                <input className={inputCls} type="number" min="0" step="0.01" value={payout} onChange={(e) => setPayout(e.target.value)} placeholder="23.4" />
+                <span className="mt-1 block text-xs text-ink/40">（{d.modeAffFormula}）</span>
+              </label>
+              <label className="block">
+                <span className={labelCls}>{d.networkCvr}</span>
+                <input className={inputCls} type="number" min="0" step="0.1" value={networkCvr} onChange={(e) => { setNetworkCvr(e.target.value); setCvrSource("manual"); }} placeholder="3.5" />
+                <span className="mt-1 block text-xs text-ink/50">
+                  {cvrSource === "epc" ? `✓ ${d.cvrFromEpc}` : d.cvrManual}
+                </span>
+              </label>
+            </div>
+            <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
               <label className="block">
                 <span className={labelCls}>{d.shavePct}</span>
                 <span className={hintCls}>{d.shaveHint}</span>
                 <input className={inputCls} type="number" min="0" max="100" step="0.1" value={shavePct} onChange={(e) => setShavePct(e.target.value)} placeholder="0" />
               </label>
-            )}
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-4 text-sm">
+              <span>
+                <span className="text-xs text-ink/50">{d.bidBreakEven}：</span>
+                <span className="font-semibold text-ink">{bidCalcAff?.breakEvenCpc != null ? `$${bidCalcAff.breakEvenCpc.toFixed(2)}` : "—"}</span>
+              </span>
+              <span>
+                <span className="text-xs text-ink/50">{d.bidRecommended}：</span>
+                <span className="font-semibold text-signal">{bidCalcAff?.maxCpcAtTargetRatio != null ? `$${bidCalcAff.maxCpcAtTargetRatio.toFixed(2)}` : "—"}</span>
+              </span>
+            </div>
+            {!bidCalcAff ? <p className="mt-1 text-xs text-ink/50">{d.bidNoData}</p> : null}
+          </div>
+          {/* —— 数据获取（两张卡共用）：EPC 记录 / 反推 / 抓取 / 截图识别 —— */}
+          <div className="mt-3 border-t border-ink/10 pt-3">
+            <span className="text-xs font-medium text-ink/70">{d.modeDataTools}：</span>
+            <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="block">
+                <span className={labelCls}>{d.epc}</span>
+                <input className={inputCls} type="number" min="0" step="0.01" value={epc} onChange={(e) => setEpc(e.target.value)} placeholder="0.50" />
+                {/* 防呆：EPC（按点击）不可能大于单次转化的 payout */}
+                {(() => {
+                  const epcNum = numOrUndef(epc);
+                  const base =
+                    profitMode === "ecommerce"
+                      ? derivedPayout
+                      : numOrUndef(payout);
+                  if (
+                    epcNum != null &&
+                    base != null &&
+                    base > 0 &&
+                    epcNum > base
+                  ) {
+                    return (
+                      <span className="mt-1 block text-xs font-medium text-red-700">
+                        {d.epcImpossible.replace("${payout}", `$${base}`)}
+                      </span>
+                    );
+                  }
+                  return null;
+                })()}
+                <span className="mt-1 block text-xs text-ink/50">{d.srcEpcCvrHint}</span>
+                <button
+                  type="button"
+                  onClick={deriveCvrFromEpc}
+                  disabled={!Number(epc) || !(profitMode === "ecommerce" ? derivedPayout : Number(payout))}
+                  className={`${btnGhost} mt-1 disabled:opacity-50`}
+                >
+                  {d.deriveCvrFromEpc}
+                </button>
+              </label>
+              <div>
+                <span className={labelCls}>{d.srcNetworkDashboard.replace("{network}", network || "—")}</span>
+                <span className="mt-1 block">
+                  {networkDashboardSite(network) ? (
+                    <a href={siteUrl(networkDashboardSite(network), "")} target="_blank" rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 rounded-lg bg-signal/10 px-2.5 py-1 text-xs font-medium text-signal transition hover:bg-signal/20">
+                      ↗ {d.srcNetworkDashboard.replace("{network}", network)}
+                    </a>
+                  ) : (
+                    <span className="text-xs text-ink/50">{d.srcNetworkHint}</span>
+                  )}
+                </span>
+              </div>
+            </div>
           </div>
           {/* 后台拿不到数据时的 fallback 指引（EPC 为空时显示） */}
           {!epc.trim() ? (
@@ -1712,42 +1874,39 @@ export function TrafficPlannerClient({
               <p className="mt-1 text-xs text-ink/70">{networkOcrMsg}</p>
             ) : null}
           </div>
-          {/* 出价参考：EPC / 保本 CPC / 推荐出价（profit-calc 算出，指导值） */}
-          <div className="mt-3 rounded-lg border border-ink/10 bg-ink/[0.02] p-3">
-            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-              <span className="text-sm font-semibold text-ink">{d.bidGuide}</span>
-              <label className="flex items-center gap-1.5 text-xs text-ink/70">
-                {d.bidTargetReturnRatio}
-                <input
-                  className="w-20 rounded-lg border border-ink/15 bg-white px-2 py-1 text-sm text-ink outline-none focus:border-signal"
-                  type="number" min="1" step="0.1" value={targetReturnRatio}
-                  onChange={(e) => setTargetReturnRatio(e.target.value)} placeholder="2"
-                />
-              </label>
+          {/* AI 量级参考（非实测）：后台无数据时看量级，绝不进出价公式 */}
+          <div className="mt-3 border-t border-ink/10 pt-3">
+            <span className="text-xs font-medium text-ink/70">{d.epcRefTitle}：</span>
+            <span className="ml-1 text-xs text-ink/50">{d.epcRefHint}</span>
+            <div className="mt-1">
+              <button
+                type="button"
+                disabled={epcRefBusy}
+                onClick={() => void genEpcReference()}
+                className={`${btnGhost} disabled:opacity-50`}
+              >
+                {epcRefBusy ? d.epcRefBusy : d.epcRefButton}
+              </button>
             </div>
-            {bidCalc ? (
-              <div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-3">
-                <div>
-                  <div className="text-xs text-ink/50">{d.bidEpc}</div>
-                  <div className="font-semibold text-ink">${bidCalc.epc.toFixed(2)}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-ink/50">{d.bidBreakEven}</div>
-                  <div className="font-semibold text-ink">
-                    ${bidCalc.breakEvenCpc != null ? bidCalc.breakEvenCpc.toFixed(2) : "—"}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-xs text-ink/50">{d.bidRecommended}</div>
-                  <div className="font-semibold text-signal">
-                    ${bidCalc.maxCpcAtTargetRatio != null ? bidCalc.maxCpcAtTargetRatio.toFixed(2) : "—"}
-                  </div>
-                </div>
+            {epcRef ? (
+              <div className="mt-2 rounded-lg border border-ink/10 bg-ink/[0.02] p-2.5 text-xs">
+                <p className="font-medium text-ink">
+                  {d.epcRefCvr}：{epcRef.cvrLow}% – {epcRef.cvrHigh}%
+                  <span className="ml-1 font-normal text-ink/50">（{epcRef.verticalLabel}）</span>
+                </p>
+                <p className="mt-0.5 font-medium text-ink">
+                  {d.epcRefEpc}：${epcRef.epcLow} – ${epcRef.epcHigh}
+                  <span className="ml-1 font-normal text-ink/50">{d.epcRefPerClick}</span>
+                </p>
+                <p className="mt-1 text-ink/70">{epcRef.reasoning}</p>
+                <p className="mt-1 text-ink/50">
+                  {d.epcRefSources}：{epcRef.sources.join("、")}
+                </p>
+                <p className="mt-1 font-medium text-amber-700">{d.epcRefDisclaimer}</p>
               </div>
-            ) : (
-              <p className="text-xs text-ink/50">{d.bidNoData}</p>
-            )}
-            <p className="mt-2 text-xs text-ink/50">{d.bidFormulaHint}</p>
+            ) : epcRefMsg ? (
+              <p className="mt-1 text-xs text-ink/70">{epcRefMsg}</p>
+            ) : null}
           </div>
           {/* 电商查询：电商 offer 在 Offervault 没有数据，直接查产品本身 */}
           <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-ink/10 pt-3">

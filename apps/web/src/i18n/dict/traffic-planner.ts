@@ -176,6 +176,26 @@ export const zh = {
   networkOcrFilled: "已识别填入",
   networkOcrNone: "截图里没认出 EPC / 转化率，请手动填写",
   networkOcrReview: "识别值请核对",
+  epcImpossible: "⚠ EPC（按点击）不可能大于单次转化的 payout（${payout}），请检查是否填错——比如把预估 payout 填进了 EPC",
+  /* 双模式卡片：电商 / 联盟分开展示 */
+  modeEcom: "电商模式（按单拿佣金）",
+  modeAff: "联盟模式（固定 payout）",
+  modeCurrent: "当前使用",
+  modeEcomPayout: "单次转化 payout",
+  modeEcomFormula: "均价 × 佣金率 ×（1 - 退款率）",
+  modeAffFormula: "固定 payout ×（1 - 扣量）",
+  modeDataTools: "数据获取（两张卡共用）",
+  /* AI 量级参考（非实测）：只看方向，绝不进出价公式 */
+  epcRefTitle: "AI 量级参考（非实测）",
+  epcRefHint: "后台无 EPC / 转化率时，按行业基准估一个保守区间，只看量级",
+  epcRefButton: "生成量级参考",
+  epcRefBusy: "生成中…",
+  epcRefNeedPayout: "先填好 payout（或均价 + 佣金率），才能算参考区间",
+  epcRefCvr: "CVR 参考区间",
+  epcRefEpc: "EPC 参考区间",
+  epcRefPerClick: "/ 点击",
+  epcRefSources: "依据",
+  epcRefDisclaimer: "⚠ 非实测，仅看量级，不进入出价计算；定出价以实测 EPC 为准",
   /* 后台拿不到 EPC / 转化率时的 fallback 指引（EPC 为空时显示） */
   noDataGuideTitle: "后台没有 EPC / 转化率数据时，按这个顺序来",
   noDataGuide: [
@@ -411,6 +431,26 @@ export const en = {
   networkOcrFilled: "Recognized and filled",
   networkOcrNone: "No EPC / conversion rate recognized; please fill in manually",
   networkOcrReview: "please verify the recognized values",
+  epcImpossible: "⚠ EPC (per click) cannot exceed the per-conversion payout (${payout}); check for a mistake — e.g. putting the estimated payout into EPC",
+  /* Dual-mode cards: ecommerce / affiliate shown separately */
+  modeEcom: "Ecommerce mode (per-sale commission)",
+  modeAff: "Affiliate mode (fixed payout)",
+  modeCurrent: "In use",
+  modeEcomPayout: "Per-conversion payout",
+  modeEcomFormula: "avg price × commission rate × (1 − refund rate)",
+  modeAffFormula: "fixed payout × (1 − shave)",
+  modeDataTools: "Data sources (shared by both cards)",
+  /* AI magnitude reference (not measured): direction only, never into the bid formula */
+  epcRefTitle: "AI magnitude reference (not measured)",
+  epcRefHint: "When the backend has no EPC / CVR, estimate a conservative range from industry benchmarks — magnitude only",
+  epcRefButton: "Generate magnitude reference",
+  epcRefBusy: "Generating…",
+  epcRefNeedPayout: "Fill in the payout (or avg price + commission rate) first to compute the reference range",
+  epcRefCvr: "CVR reference range",
+  epcRefEpc: "EPC reference range",
+  epcRefPerClick: "/ click",
+  epcRefSources: "Based on",
+  epcRefDisclaimer: "⚠ Not measured, magnitude only, never into the bid formula; base bids on measured EPC",
   /* Fallback guide when the backend has no EPC / CVR data (shown when EPC is empty) */
   noDataGuideTitle: "When the backend has no EPC / CVR data, follow this order",
   noDataGuide: [
