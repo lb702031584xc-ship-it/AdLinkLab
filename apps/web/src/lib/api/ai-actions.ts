@@ -33,6 +33,7 @@ import {
   getAiUsageSummary,
   type AiUsageSummary,
   type BrandBiddingResult,
+  type LongtailCandidate,
   type ParsedKeywordData,
   type EcommerceData,
   type AiKeywordRow,
@@ -54,6 +55,7 @@ import {
   type RecommendedKeyword,
   analyzeTrafficPlan,
   recommendKeywords,
+  getLongtailSuggestions,
   testAiConnection,
   type AiConnectionTestResult,
   generateBlueprint,
@@ -315,6 +317,27 @@ export async function recommendKeywordsAction(
       t,
       lang === "zh" ? "AI 推荐关键词失败，请稍后重试。" : "Keyword recommendation failed, please try again."
     );
+  }
+}
+
+/** 长尾词候选：种子词 → Google 联想（免费）+ DataForSEO 建议（付费，需凭证）。 */
+export async function getLongtailSuggestionsAction(
+  seed: string
+): Promise<
+  AiActionResult<{
+    seed: string;
+    candidates: LongtailCandidate[];
+    sources: { autocomplete: boolean; dataforseo: boolean };
+  }>
+> {
+  try {
+    const data = await getLongtailSuggestions(seed);
+    return { ok: true, data };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof AiApiError ? e.message : "获取长尾词候选失败",
+    };
   }
 }
 

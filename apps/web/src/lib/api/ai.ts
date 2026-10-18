@@ -441,6 +441,30 @@ export async function recommendKeywords(
   );
 }
 
+/** 长尾词候选（服务器聚合）：Google 联想（免费）+ DataForSEO 关键词建议（付费，需凭证）。 */
+export interface LongtailCandidate {
+  keyword: string;
+  volume: number | null;
+  source: "autocomplete" | "dataforseo";
+}
+
+export async function getLongtailSuggestions(
+  seed: string
+): Promise<{
+  seed: string;
+  candidates: LongtailCandidate[];
+  sources: { autocomplete: boolean; dataforseo: boolean };
+}> {
+  return aiFetch<{
+    seed: string;
+    candidates: LongtailCandidate[];
+    sources: { autocomplete: boolean; dataforseo: boolean };
+  }>("/api/v1/ai/longtail-suggestions", {
+    method: "POST",
+    body: JSON.stringify({ seed }),
+  });
+}
+
 /** Batch-screen up to 10 offers' terms, ranked go → caution → stop. */
 export async function screenOffers(
   items: AiScreenItemInput[],

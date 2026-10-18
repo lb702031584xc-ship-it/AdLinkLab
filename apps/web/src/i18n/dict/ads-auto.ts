@@ -92,9 +92,9 @@ export const zh = {
     recommendedTitle: "推荐出价（取自投流页测算）",
     recommendedBreakEven: "保本 CPC",
     recommendedValue: "推荐出价",
-    targetRoiLabel: "目标 ROI (%)",
+    targetReturnRatioLabel: "目标产出比（投 1 产出 X）",
     adoptRecommended: "采用推荐值",
-    recommendedHint: "推荐出价 = EPC ÷ (1 + 目标 ROI)，EPC 由投流页的 payout × CVR 算出。",
+    recommendedHint: "推荐出价 = EPC ÷ 目标产出比，EPC 由投流页的 payout × CVR 算出。",
     noPlannerData: "暂无测算数据，去投流页填写 payout/CVR 后显示推荐值",
   },
   preview: {
@@ -360,9 +360,9 @@ export const en = {
     recommendedTitle: "Recommended bid (from traffic planner)",
     recommendedBreakEven: "Breakeven CPC",
     recommendedValue: "Recommended bid",
-    targetRoiLabel: "Target ROI (%)",
+    targetReturnRatioLabel: "Target return ratio (invest 1 → get X)",
     adoptRecommended: "Use recommended value",
-    recommendedHint: "Recommended bid = EPC ÷ (1 + target ROI); EPC is payout × CVR from the traffic planner.",
+    recommendedHint: "Recommended bid = EPC ÷ target return ratio; EPC is payout × CVR from the traffic planner.",
     noPlannerData: "No planner data yet — fill payout / CVR on the traffic planner page to show a recommendation",
   },
   preview: {

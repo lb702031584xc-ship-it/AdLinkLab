@@ -20,8 +20,8 @@ export interface ProfitInputs {
   refundF?: number;
   /** Shave/deduction rate as a fraction (0-1). */
   shaveF?: number;
-  /** Target ROI as a fraction (e.g. 1 for 100%). Default 1. */
-  targetRoiF?: number;
+  /** Target return ratio r = 产出 / 投入（投 1 产出 r，利润 r − 1）。如 1.5 = 投 1 产出 1.5、利润 0.5；1 = 保平。默认 2。 */
+  targetReturnRatio?: number;
   /**
    * Whether the inputs are estimates (AI guess / defaults) rather than
    * measured data. Default false. Never silently treat a guess as measured:
@@ -43,10 +43,10 @@ export interface ProfitResult {
   breakEvenCpc: number | null;
   /** Recommended max CPC with 30% safety margin. */
   maxCpc30: number | null;
-  /** Max CPC that still hits the target ROI (null when EPC invalid). */
-  maxCpcAtTargetRoi: number | null;
-  /** Actual ROI at the current CPC, as a fraction (null when CPC <= 0). */
-  roiAtCpc: number | null;
+  /** Max CPC that still hits the target return ratio (null when EPC invalid). */
+  maxCpcAtTargetRatio: number | null;
+  /** Actual return ratio at the current CPC: EPC / CPC (null when CPC <= 0). 1 = 保平。 */
+  returnRatioAtCpc: number | null;
   /** Suggested test budget in clicks (null when CVR unknown/invalid). */
   testBudgetClicks: number | null;
   /** Suggested test budget cost. */
@@ -106,20 +106,35 @@ export function recommendedMaxCpc(breakEven: number | null): number | null {
 }
 
 /**
- * Max CPC that still hits the target ROI.
- * ROI = (EPC − CPC) / CPC  →  CPC = EPC / (1 + ROI).
- * Target ROI 0 = breakeven; 100% → half of EPC; 200% → a third.
+ * Max CPC that still hits the target return ratio.
+ * ratio r = 产出 / 投入 = EPC / CPC  →  CPC = EPC / r。
+ * r = 1 → 保平（CPC = EPC）；r = 1.5 → 投 1 产出 1.5（利润 0.5）；r = 2 → 投 1 产出 2（利润 1）。
  */
-export function maxCpcForRoi(epc: number, roiF: number): number | null {
+export function maxCpcForReturnRatio(epc: number, ratio: number): number | null {
   if (!Number.isFinite(epc) || epc <= 0) return null;
-  if (!Number.isFinite(roiF) || roiF < 0) return null;
-  return epc / (1 + roiF);
+  if (!Number.isFinite(ratio) || ratio <= 0) return null;
+  return epc / ratio;
 }
 
-/** Actual ROI at the current CPC, as a fraction (null when CPC <= 0). */
-export function roiAtCpc(epc: number, cpc: number): number | null {
+/** Actual return ratio at the current CPC: EPC / CPC (null when CPC <= 0). 1 = 保平。 */
+export function returnRatioAtCpc(epc: number, cpc: number): number | null {
   if (!Number.isFinite(epc) || !Number.isFinite(cpc) || cpc <= 0) return null;
-  return (epc - cpc) / cpc;
+  return epc / cpc;
+}
+
+/**
+ * 旧快照迁移：目标 ROI%（如 100/300）→ 目标产出比（2/4）。
+ * 新快照已有比值时直接用；都没有时默认 2（= 旧 ROI 100%）。
+ */
+export function normalizeReturnRatio(opts?: {
+  targetReturnRatio?: unknown;
+  targetRoiPct?: unknown;
+}): string {
+  const r = opts?.targetReturnRatio;
+  if (r != null && String(r).trim()) return String(r);
+  const pct = parseFloat(String(opts?.targetRoiPct ?? ""));
+  if (Number.isFinite(pct) && pct >= 0) return String(1 + pct / 100);
+  return "2";
 }
 
 /**
@@ -164,7 +179,7 @@ export function calcProfit(inputs: ProfitInputs): ProfitResult {
   const epc = epcFor(eff, cvrF);
   const beCpc = breakEvenCpc(cvrF, eff);
   const clicks = testBudgetClicks(cvrF);
-  const roiF = inputs.targetRoiF ?? 1;
+  const ratio = inputs.targetReturnRatio ?? 2;
   return {
     effectivePayout: eff,
     epc,
@@ -173,8 +188,8 @@ export function calcProfit(inputs: ProfitInputs): ProfitResult {
     breakEvenCvrPct: breakEvenCvrPct(cpc, eff),
     breakEvenCpc: beCpc,
     maxCpc30: recommendedMaxCpc(beCpc),
-    maxCpcAtTargetRoi: maxCpcForRoi(epc, roiF),
-    roiAtCpc: roiAtCpc(epc, cpc),
+    maxCpcAtTargetRatio: maxCpcForReturnRatio(epc, ratio),
+    returnRatioAtCpc: returnRatioAtCpc(epc, cpc),
     testBudgetClicks: clicks,
     testBudgetCost:
       clicks !== null && Number.isFinite(cpc) && cpc > 0 ? clicks * cpc : null,

@@ -76,6 +76,7 @@ import {
   generateBlueprint,
   type BlueprintInput,
 } from "../ai/blueprint.js";
+import { DataForSeoProvider } from "../traffic/dataforseo.js";
 
 /**
  * Phase 11 — AI offer risk analysis (one tenant per user; session auth only).
@@ -809,6 +810,76 @@ export async function registerAiRoutes(
       }));
 
     return { product, keywords, analyzedAt: new Date().toISOString() };
+  });
+
+  /**
+   * 长尾词候选：种子词 → 候选长尾词（不 AI 现编，全部来自真实数据）。
+   * - 免费：Google 联想（suggestqueries，用户真实搜过的查询；无搜索量数字）。
+   * - 付费（已配 DataForSEO 凭证才调）：Labs keyword_suggestions，带月均搜索量。
+   * 不用 LLM，不占 AI 配额；任一来源失败都只返回另一来源，绝不抛错。
+   * 快照候选（需求验证）由前端合并；过滤（包含种子词、比种子词长、去重、排除已在计划里）
+   * 在前端 `mergeLongtailCandidates` 里统一做。
+   */
+  app.post("/api/v1/ai/longtail-suggestions", async (request) => {
+    await requireSession(deps, request);
+    const body = (request.body ?? {}) as { seed?: unknown };
+    const seed = asTrimmedString(body.seed);
+    if (!seed || seed.length < 2 || seed.length > 100) {
+      throw new ValidationError("seed must be 2-100 characters");
+    }
+
+    const variants = [seed];
+    if (!/\bbest\b/i.test(seed)) variants.push(`${seed} best`);
+    if (!/\breview\b/i.test(seed)) variants.push(`${seed} review`);
+
+    const autocomplete = async (
+      query: string
+    ): Promise<string[]> => {
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 8000);
+        try {
+          const res = await fetch(
+            `https://suggestqueries.google.com/complete/search?client=firefox&hl=en&gl=us&q=${encodeURIComponent(query)}`,
+            { signal: ctrl.signal, headers: { "User-Agent": "Mozilla/5.0" } }
+          );
+          if (!res.ok) return [];
+          const data = (await res.json()) as unknown;
+          const list = Array.isArray(data) && Array.isArray(data[1]) ? data[1] : [];
+          return list.filter((s): s is string => typeof s === "string" && !!s.trim());
+        } finally {
+          clearTimeout(timer);
+        }
+      } catch {
+        return [];
+      }
+    };
+
+    const [autoLists, dfs] = await Promise.all([
+      Promise.all(variants.map((v) => autocomplete(v))),
+      new DataForSeoProvider(prisma).getKeywordSuggestions(seed),
+    ]);
+
+    const byKey = new Map<string, { keyword: string; volume: number | null; source: string }>();
+    for (const item of dfs) {
+      byKey.set(item.keyword.toLowerCase(), { ...item, source: "dataforseo" });
+    }
+    for (const list of autoLists) {
+      for (const keyword of list) {
+        const key = keyword.toLowerCase();
+        if (!byKey.has(key)) {
+          byKey.set(key, { keyword, volume: null, source: "autocomplete" });
+        }
+      }
+    }
+    const candidates = [...byKey.values()].filter(
+      (c) => c.keyword.toLowerCase() !== seed.toLowerCase()
+    );
+    return {
+      seed,
+      candidates,
+      sources: { autocomplete: autoLists.some((l) => l.length > 0), dataforseo: dfs.length > 0 },
+    };
   });
 
   /**

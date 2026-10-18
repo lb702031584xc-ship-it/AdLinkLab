@@ -81,7 +81,7 @@ export function ProfitClient({ offers }: { offers: ProfitOfferOption[] }) {
   const [bidError, setBidError] = useState<string | null>(null);
   /** P1-1：双公式输入（仅价格 × 比例区间模式）。 */
   const [dualCtoOverride, setDualCtoOverride] = useState("");
-  const [dualTargetRoiPct, setDualTargetRoiPct] = useState("100");
+  const [dualTargetReturnRatio, setDualTargetReturnRatio] = useState("2");
 
   async function runBidAnalysis() {
     setBidLoading(true);
@@ -218,10 +218,10 @@ export function ProfitClient({ offers }: { offers: ProfitOfferOption[] }) {
     bidCvrNum < 100
       ? bidPriceMid * (bidPctMid / 100) * (bidCvrNum / 100)
       : null;
-  const dualRoiNum = parseFloat(dualTargetRoiPct);
+  const dualRatioNum = parseFloat(dualTargetReturnRatio);
   const dualFormulaB =
-    dualEpc !== null && Number.isFinite(dualRoiNum) && dualRoiNum >= 0
-      ? dualEpc / (1 + dualRoiNum / 100)
+    dualEpc !== null && Number.isFinite(dualRatioNum) && dualRatioNum > 0
+      ? dualEpc / dualRatioNum
       : null;
 
   return (
@@ -624,17 +624,17 @@ export function ProfitClient({ offers }: { offers: ProfitOfferOption[] }) {
                 推荐出价 = EPC ÷ (1 + 目标 ROI)，EPC = 区间佣金中值 × 预期转化率
               </p>
               <label className="mt-3 block text-xs font-medium text-ink/70">
-                目标 ROI %
+                目标产出比（投 1 产出 X）
               </label>
               <input
                 inputMode="decimal"
-                value={dualTargetRoiPct}
-                onChange={(e) => setDualTargetRoiPct(e.target.value)}
-                placeholder="100"
+                value={dualTargetReturnRatio}
+                onChange={(e) => setDualTargetReturnRatio(e.target.value)}
+                placeholder="2"
                 className="mt-1 w-full rounded-lg border border-ink/15 bg-white px-3 py-1.5 text-sm text-ink"
               />
               <p className="mt-1 text-xs text-ink/55">
-                假设来源：目标 ROI {dualTargetRoiPct || "100"}%
+                假设来源：目标产出比 {dualTargetReturnRatio || "2"}（投 1 产出 {dualTargetReturnRatio || "2"}）
               </p>
             </div>
           </div>

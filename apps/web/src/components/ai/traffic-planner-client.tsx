@@ -17,11 +17,16 @@ import {
   parseKeywordCaptureAiAction,
   parseIntelCaptureAction,
   parseEcommerceCaptureAction,
+  getLongtailSuggestionsAction,
   type AiActionResult,
 } from "@/lib/api/ai-actions";
+import {
+  mergeLongtailCandidates,
+  type LongtailCandidate,
+} from "@/lib/longtail";
 import { loadWorkStateAction } from "@/lib/api/work-state-actions";
 import { checkKeywordsAction, type KeywordCheckResult } from "@/lib/api/keyword-check-actions";
-import { calcProfit } from "@/lib/profit-calc";
+import { calcProfit, normalizeReturnRatio } from "@/lib/profit-calc";
 import { getLastOfferId, setLastOfferId, getManualOffer, setManualOffer } from "@/lib/current-offer";
 import { useWorkState } from "@/lib/use-work-state";
 import type {
@@ -129,9 +134,24 @@ function siteUrl(site: string, query: string): string {
       return q ? `https://keepa.com/#!search/1-${q}` : "https://keepa.com/";
     case "gshopping":
       return q ? `https://www.google.com/search?tbm=shop&q=${q}` : "https://www.google.com/shopping";
+    /* 联盟网络后台（已核实地址；未收录的网络不编链接，只给提示） */
+    case "yeahpromos":
+      return "https://www.yeahpromos.com/";
+    case "partnerboost":
+      return "https://app.partnerboost.com/";
+    case "microsoft":
+      return "https://ads.microsoft.com/";
     default:
       return "https://www.google.com/";
   }
+}
+
+/** 网络名 → 已核实后台 site key；未收录返回 ""（不编链接）。 */
+function networkDashboardSite(networkName: string): string {
+  const n = networkName.toLowerCase();
+  if (n.includes("yeahpromos")) return "yeahpromos";
+  if (n.includes("partnerboost")) return "partnerboost";
+  return "";
 }
 
 const inputCls =
@@ -216,8 +236,8 @@ export function TrafficPlannerClient({
   );
   /** 联盟：扣量假设（%），默认 0。 */
   const [shavePct, setShavePct] = useState("0");
-  /** 出价参考：目标 ROI（%），默认 100。 */
-  const [targetRoiPct, setTargetRoiPct] = useState("100");
+  /** 出价参考：目标产出比 r = 产出 / 投入（投 1 产出 r，利润 r − 1），默认 2。 */
+  const [targetReturnRatio, setTargetReturnRatio] = useState("2");
 
   // Offer 上下文：?offerId= / 工作表嵌入带入
   const [selectedOfferId, setSelectedOfferId] = useState<string | null>(
@@ -237,6 +257,12 @@ export function TrafficPlannerClient({
   // EPC
   const [epc, setEpc] = useState("");
   const [networkCvr, setNetworkCvr] = useState(initialInputs?.cvr ?? "");
+  /** CVR 来源：epc = 由网络后台 EPC 反推（实测）；manual = 手动填写。 */
+  const [cvrSource, setCvrSource] = useState<"epc" | "manual">("manual");
+  /** 渠道对比：Bing 参考 CPC（Microsoft 关键词规划师查，免费）。 */
+  const [bingCpc, setBingCpc] = useState("");
+  /** Google 参考 CPC 手动覆盖：null = 自动取关键词表 Planner 低位均值。 */
+  const [googleCpcManual, setGoogleCpcManual] = useState<string | null>(null);
   const [refundRate, setRefundRate] = useState(initialInputs?.refundRate ?? "");
 
   /* ④→⑤ 同步：工作表嵌入时，④ 盈利测算的输入变化后同步到 ⑤ 的 payout/CVR/退款率/均价/佣金率。
@@ -304,11 +330,11 @@ export function TrafficPlannerClient({
     return price * (rate / 100) * (1 - refundF);
   }, [profitMode, avgPrice, commissionRate, refundRate]);
 
-  /* 出价参考：EPC / 保本 CPC（= EPC）/ 推荐出价（= EPC ÷ (1 + 目标 ROI)），全部来自 profit-calc。
+  /* 出价参考：EPC / 保本 CPC（= EPC）/ 推荐出价（= EPC ÷ 目标产出比），全部来自 profit-calc。
      电商用派生 payout（已扣退货，不再重复扣）；联盟用固定 payout 并扣 shave。payout/CVR 缺失时为 null。 */
   const bidCalc = useMemo(() => {
     const cvrF = Number(networkCvr) / 100;
-    const roiF = Number(targetRoiPct) / 100;
+    const ratio = Number(targetReturnRatio);
     const base = profitMode === "ecommerce"
       ? derivedPayout
       : Number(payout) > 0 ? Number(payout) : null;
@@ -319,9 +345,65 @@ export function TrafficPlannerClient({
       cvrF,
       refundF: 0,
       shaveF: profitMode === "affiliate" ? Math.min(Math.max(Number(shavePct) || 0, 0), 100) / 100 : 0,
-      targetRoiF: Number.isFinite(roiF) && roiF >= 0 ? roiF : 1,
+      targetReturnRatio: Number.isFinite(ratio) && ratio > 0 ? ratio : 2,
     });
-  }, [profitMode, derivedPayout, payout, networkCvr, shavePct, targetRoiPct]);
+  }, [profitMode, derivedPayout, payout, networkCvr, shavePct, targetReturnRatio]);
+
+  /* Google 参考 CPC：自动 = 关键词表 Planner 低位均值（无低位时用关键词表 CPC 均值）；手动覆盖优先。 */
+  const googleCpcAuto = useMemo(() => {
+    const lows = keywords
+      .map((k) => k.plannerLow)
+      .filter((v): v is number => typeof v === "number" && Number.isFinite(v) && v > 0);
+    const cpcs = keywords
+      .map((k) => k.cpc)
+      .filter((v): v is number => typeof v === "number" && Number.isFinite(v) && v > 0);
+    const arr = lows.length ? lows : cpcs;
+    if (!arr.length) return null;
+    return arr.reduce((a, b) => a + b, 0) / arr.length;
+  }, [keywords]);
+  const googleCpcEff =
+    googleCpcManual != null && googleCpcManual !== ""
+      ? Number(googleCpcManual)
+      : googleCpcAuto;
+  const bingCpcNum = Number(bingCpc);
+
+  /* 渠道对比（Google vs Bing）：同一 EPC 下，利润/点击 = EPC − CPC；产出比 = EPC / CPC。 */
+  const channelCompare = useMemo(() => {
+    const epcNum = bidCalc?.epc;
+    if (epcNum == null || !Number.isFinite(epcNum) || epcNum <= 0) return null;
+    const row = (cpc: number | null | undefined) =>
+      cpc != null && Number.isFinite(cpc) && cpc > 0
+        ? { cpc, profitPerClick: epcNum - cpc, ratio: epcNum / cpc }
+        : null;
+    const google = row(googleCpcEff);
+    const bing = row(Number.isFinite(bingCpcNum) ? bingCpcNum : null);
+    let verdict: "bing" | "google" | "tie" | "needBing" | null = null;
+    if (google && bing) {
+      const diff = bing.profitPerClick - google.profitPerClick;
+      verdict = diff > 0.005 ? "bing" : diff < -0.005 ? "google" : "tie";
+    } else if (google && !bing) {
+      verdict = "needBing";
+    }
+    return { epc: epcNum, google, bing, verdict };
+  }, [bidCalc, googleCpcEff, bingCpcNum]);
+
+  /* CVR 由 EPC 反推：CVR = EPC ÷ Payout（EPC 取自网络后台 = 实测）。 */
+  const deriveCvrFromEpc = () => {
+    const epcNum = Number(epc);
+    const base =
+      profitMode === "ecommerce"
+        ? derivedPayout
+        : Number(payout) > 0
+          ? Number(payout)
+          : null;
+    if (!Number.isFinite(epcNum) || epcNum <= 0 || base == null || base <= 0) return;
+    setNetworkCvr(((epcNum / base) * 100).toFixed(2));
+    setCvrSource("epc");
+  };
+
+  /* 一键直达用的关键词：首个已填关键词，否则用 offer 名。 */
+  const kwForLinks =
+    keywords.find((k) => k.keyword.trim())?.keyword.trim() || offerName;
 
   const numOrUndef = (s: string): number | undefined => {
     const n = Number(s);
@@ -371,13 +453,15 @@ export function TrafficPlannerClient({
     avgPrice,
     commissionRate,
     shavePct,
-    targetRoiPct,
+    targetReturnRatio,
     offerName,
     payout,
     network,
     cookieDays,
     epc,
     networkCvr,
+    cvrSource,
+    bingCpc,
     refundRate,
     bestPayout,
     bestPayoutNetwork,
@@ -417,7 +501,14 @@ export function TrafficPlannerClient({
     if (str(s.avgPrice)) setAvgPrice(str(s.avgPrice));
     if (str(s.commissionRate)) setCommissionRate(str(s.commissionRate));
     if (str(s.shavePct)) setShavePct(str(s.shavePct));
-    if (str(s.targetRoiPct)) setTargetRoiPct(str(s.targetRoiPct));
+    /* 目标产出比：旧快照的 ROI%（targetRoiPct）按 比值 = 1 + ROI% / 100 换算。 */
+    if (str(s.targetReturnRatio) || str(s.targetRoiPct))
+      setTargetReturnRatio(
+        normalizeReturnRatio({
+          targetReturnRatio: str(s.targetReturnRatio) || undefined,
+          targetRoiPct: str(s.targetRoiPct) || undefined,
+        }),
+      );
     /* offer 字段：快照为空时不覆盖（库参数为准；空快照是"没填过"不是"清空"） */
     if (str(s.offerName)) setOfferName(str(s.offerName));
     if (str(s.payout)) setPayout(str(s.payout));
@@ -425,6 +516,9 @@ export function TrafficPlannerClient({
     if (str(s.cookieDays)) setCookieDays(str(s.cookieDays));
     setEpc(str(s.epc));
     setNetworkCvr(str(s.networkCvr));
+    if (s.cvrSource === "epc") setCvrSource("epc");
+    else if (s.cvrSource === "manual") setCvrSource("manual");
+    setBingCpc(str(s.bingCpc));
     setRefundRate(str(s.refundRate));
     setBestPayout(str(s.bestPayout));
     setBestPayoutNetwork(str(s.bestPayoutNetwork));
@@ -460,13 +554,15 @@ export function TrafficPlannerClient({
       avgPrice,
       commissionRate,
       shavePct,
-      targetRoiPct,
+      targetReturnRatio,
       offerName,
       payout,
       network,
       cookieDays,
       epc,
       networkCvr,
+      cvrSource,
+      bingCpc,
       refundRate,
       bestPayout,
       bestPayoutNetwork,
@@ -638,6 +734,81 @@ export function TrafficPlannerClient({
     const zhMap: Record<string, string> = { buy: "购买", review: "评测", compare: "对比", info: "纯信息" };
     const enMap: Record<string, string> = { buy: "Buy", review: "Review", compare: "Compare", info: "Informational" };
     return (lang === "en" ? enMap : zhMap)[v ?? ""] ?? undefined;
+  };
+
+  /** 长尾词：种子词（某关键词几天零展示时手动触发）→ 候选面板 → 勾选加入本页关键词表。 */
+  const [longtailOpen, setLongtailOpen] = useState(false);
+  const [longtailSeed, setLongtailSeed] = useState("");
+  const [longtailCandidates, setLongtailCandidates] = useState<LongtailCandidate[]>([]);
+  const [longtailSelected, setLongtailSelected] = useState<string[]>([]);
+  const [longtailLoading, setLongtailLoading] = useState(false);
+  const [longtailError, setLongtailError] = useState<string | null>(null);
+  const [longtailSnapshotEmpty, setLongtailSnapshotEmpty] = useState(false);
+
+  const generateLongtail = async (row: KwRow) => {
+    const seed = row.keyword.trim();
+    if (!seed) {
+      setLongtailError(d.longtailNeedSeed);
+      setLongtailOpen(true);
+      return;
+    }
+    setLongtailOpen(true);
+    setLongtailSeed(seed);
+    setLongtailLoading(true);
+    setLongtailError(null);
+    setLongtailCandidates([]);
+    setLongtailSelected([]);
+    try {
+      const [launchRes, researchRes, serverRes] = await Promise.all([
+        loadWorkStateAction("keyword-launch", selectedOfferId),
+        loadWorkStateAction("keyword-research", selectedOfferId),
+        getLongtailSuggestionsAction(seed),
+      ]);
+      const researchRows = (researchRes.ok && researchRes.data.state
+        ? (researchRes.data.state.rows as Array<{ keyword?: string; volume?: string }>)
+        : []) as Array<{ keyword?: string; volume?: string }>;
+      const launchRows = (launchRes.ok && launchRes.data.state
+        ? (launchRes.data.state.rows as Array<{ keyword?: string }>)
+        : []) as Array<{ keyword?: string }>;
+      setLongtailSnapshotEmpty(researchRows.length === 0);
+      const serverCandidates = serverRes.ok ? serverRes.data.candidates : [];
+      if (!serverRes.ok) setLongtailError(serverRes.error);
+      const merged = mergeLongtailCandidates({
+        seed,
+        snapshotRows: researchRows,
+        serverCandidates,
+        planKeywords: [
+          ...keywords.map((k) => k.keyword),
+          ...launchRows.map((r) => r.keyword ?? ""),
+        ],
+      });
+      setLongtailCandidates(merged);
+      // 默认选中带搜索量的（已验证）；联想（无搜索量）需用户手动勾选。
+      setLongtailSelected(merged.filter((c) => c.volume != null).map((c) => c.keyword));
+    } catch {
+      setLongtailError(d.longtailEmpty);
+    } finally {
+      setLongtailLoading(false);
+    }
+  };
+
+  const addLongtailToPlan = () => {
+    const existing = new Set(keywords.map((k) => k.keyword.trim().toLowerCase()));
+    const toAdd = longtailCandidates.filter(
+      (c) => longtailSelected.includes(c.keyword) && !existing.has(c.keyword.toLowerCase())
+    );
+    if (!toAdd.length) return;
+    setKeywords((ks) => [
+      ...ks,
+      ...toAdd.map((c) => ({
+        ...newKwRow(),
+        keyword: c.keyword,
+        volume: c.volume ?? undefined,
+      })),
+    ]);
+    setMsg(d.longtailAdded.replace("{n}", String(toAdd.length)));
+    setLongtailOpen(false);
+    setLongtailSelected([]);
   };
 
   /** 从关键词页导入：投放选词（关键词 + 参考 CPC）+ 需求验证（搜索量 / 竞争度 / 意图），
@@ -1306,7 +1477,18 @@ export function TrafficPlannerClient({
             </label>
             <label className="block">
               <span className={labelCls}>{d.networkCvr}</span>
-              <input className={inputCls} type="number" min="0" step="0.1" value={networkCvr} onChange={(e) => setNetworkCvr(e.target.value)} placeholder="3.5" />
+              <input className={inputCls} type="number" min="0" step="0.1" value={networkCvr} onChange={(e) => { setNetworkCvr(e.target.value); setCvrSource("manual"); }} placeholder="3.5" />
+              <span className="mt-1 block text-xs text-ink/50">
+                {cvrSource === "epc" ? `✓ ${d.cvrFromEpc}` : d.cvrManual} · {d.cvrDeriveHint}
+              </span>
+              <button
+                type="button"
+                onClick={deriveCvrFromEpc}
+                disabled={!Number(epc) || !(profitMode === "ecommerce" ? derivedPayout : Number(payout))}
+                className={`${btnGhost} mt-1 disabled:opacity-50`}
+              >
+                {d.deriveCvrFromEpc}
+              </button>
             </label>
             {profitMode === "ecommerce" ? (
               <label className="block">
@@ -1327,13 +1509,12 @@ export function TrafficPlannerClient({
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <span className="text-sm font-semibold text-ink">{d.bidGuide}</span>
               <label className="flex items-center gap-1.5 text-xs text-ink/70">
-                {d.bidTargetRoi}
+                {d.bidTargetReturnRatio}
                 <input
                   className="w-20 rounded-lg border border-ink/15 bg-white px-2 py-1 text-sm text-ink outline-none focus:border-signal"
-                  type="number" min="0" step="10" value={targetRoiPct}
-                  onChange={(e) => setTargetRoiPct(e.target.value)} placeholder="100"
+                  type="number" min="1" step="0.1" value={targetReturnRatio}
+                  onChange={(e) => setTargetReturnRatio(e.target.value)} placeholder="2"
                 />
-                %
               </label>
             </div>
             {bidCalc ? (
@@ -1351,7 +1532,7 @@ export function TrafficPlannerClient({
                 <div>
                   <div className="text-xs text-ink/50">{d.bidRecommended}</div>
                   <div className="font-semibold text-signal">
-                    ${bidCalc.maxCpcAtTargetRoi != null ? bidCalc.maxCpcAtTargetRoi.toFixed(2) : "—"}
+                    ${bidCalc.maxCpcAtTargetRatio != null ? bidCalc.maxCpcAtTargetRatio.toFixed(2) : "—"}
                   </div>
                 </div>
               </div>
@@ -1359,6 +1540,50 @@ export function TrafficPlannerClient({
               <p className="text-xs text-ink/50">{d.bidNoData}</p>
             )}
             <p className="mt-2 text-xs text-ink/50">{d.bidFormulaHint}</p>
+          </div>
+          {/* 数据来源 · 一键直达（可多选，免费优先）：每个出价参数去哪拿真实数据 */}
+          <div className="mt-3 rounded-lg border border-ink/10 bg-ink/[0.02] p-3">
+            <div className="text-sm font-semibold text-ink">{d.bidDataSources}</div>
+            <p className="mt-1 text-xs text-ink/50">{d.bidDataSourcesHint}</p>
+            <div className="mt-2 space-y-2 text-xs">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="w-24 shrink-0 font-medium text-ink/70">{d.srcPayout}</span>
+                <a href={siteUrl("offervault", offerName)} target="_blank" rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 rounded-lg bg-signal/10 px-2.5 py-1 font-medium text-signal transition hover:bg-signal/20">
+                  ↗ {d.srcOffervault}
+                </a>
+                <span className="text-ink/50">{d.srcPayoutHint}</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="w-24 shrink-0 font-medium text-ink/70">{d.srcEpcCvr}</span>
+                {networkDashboardSite(network) ? (
+                  <a href={siteUrl(networkDashboardSite(network), "")} target="_blank" rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 rounded-lg bg-signal/10 px-2.5 py-1 font-medium text-signal transition hover:bg-signal/20">
+                    ↗ {d.srcNetworkDashboard.replace("{network}", network)}
+                  </a>
+                ) : (
+                  <span className="text-ink/50">{d.srcNetworkHint}</span>
+                )}
+                <span className="text-ink/50">{d.srcEpcCvrHint}</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="w-24 shrink-0 font-medium text-ink/70">{d.srcCpcVolume}</span>
+                <a href={siteUrl("planner", kwForLinks)} target="_blank" rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 rounded-lg bg-signal/10 px-2.5 py-1 font-medium text-signal transition hover:bg-signal/20">
+                  ↗ {d.srcKeywordPlanner}
+                </a>
+                <a href={siteUrl("trends", kwForLinks)} target="_blank" rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 rounded-lg bg-signal/10 px-2.5 py-1 font-medium text-signal transition hover:bg-signal/20">
+                  ↗ {d.srcTrends}
+                </a>
+                <a href={siteUrl("semrush", kwForLinks)} target="_blank" rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 rounded-lg bg-signal/10 px-2.5 py-1 font-medium text-signal transition hover:bg-signal/20">
+                  ↗ {d.srcSemrush}
+                </a>
+                <span className="text-ink/50">{d.srcCpcVolumeHint}</span>
+              </div>
+              <p className="text-ink/50">{d.srcCaptureHint}</p>
+            </div>
           </div>
           {/* 电商查询：电商 offer 在 Offervault 没有数据，直接查产品本身 */}
           <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-ink/10 pt-3">
@@ -1384,6 +1609,88 @@ export function TrafficPlannerClient({
             <div className="mt-2">
               <CapturePicker onPick={fillEcomFromCapture} />
             </div>
+          </div>
+        </div>
+
+        {/* 投流渠道推荐：Google vs Bing（同一 EPC 下比预期利润/点击，哪里便宜一目了然） */}
+        <div className={cardCls}>
+          <h3 className="text-sm font-semibold text-ink">{d.channelSection}</h3>
+          <p className="mt-1 text-xs text-ink/50">{d.channelHint}</p>
+          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <label className="block">
+              <span className={labelCls}>{d.channelGoogleCpc}</span>
+              <div className="flex gap-2">
+                <input
+                  className={inputCls} type="number" min="0" step="0.01"
+                  value={googleCpcManual ?? (googleCpcAuto != null ? googleCpcAuto.toFixed(2) : "")}
+                  onChange={(e) => setGoogleCpcManual(e.target.value)} placeholder="—"
+                />
+                {googleCpcManual != null && (
+                  <button type="button" onClick={() => setGoogleCpcManual(null)} className={`${btnGhost} shrink-0`}>
+                    {d.channelGoogleCpcAuto}
+                  </button>
+                )}
+              </div>
+              <span className={hintCls}>{d.channelGoogleCpcHint}</span>
+            </label>
+            <label className="block">
+              <span className={labelCls}>{d.channelBingCpc}</span>
+              <input className={inputCls} type="number" min="0" step="0.01" value={bingCpc} onChange={(e) => setBingCpc(e.target.value)} placeholder="—" />
+              <span className={hintCls}>{d.channelBingCpcHint}</span>
+            </label>
+          </div>
+          {channelCompare ? (
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full min-w-[420px] text-left text-sm">
+                <thead>
+                  <tr className="text-xs text-ink/50">
+                    <th className="py-1 pr-2 font-medium">渠道</th>
+                    <th className="py-1 pr-2 font-medium">参考 CPC</th>
+                    <th className="py-1 pr-2 font-medium">{d.channelProfitPerClick}</th>
+                    <th className="py-1 pr-2 font-medium">{d.channelRatio}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="border-t border-ink/10">
+                    <td className="py-1.5 pr-2 font-medium text-ink">Google</td>
+                    <td className="py-1.5 pr-2">${channelCompare.google ? channelCompare.google.cpc.toFixed(2) : "—"}</td>
+                    <td className="py-1.5 pr-2">${channelCompare.google ? channelCompare.google.profitPerClick.toFixed(2) : "—"}</td>
+                    <td className="py-1.5 pr-2">{channelCompare.google ? channelCompare.google.ratio.toFixed(2) : "—"}</td>
+                  </tr>
+                  <tr className="border-t border-ink/10">
+                    <td className="py-1.5 pr-2 font-medium text-ink">Bing</td>
+                    <td className="py-1.5 pr-2">${channelCompare.bing ? channelCompare.bing.cpc.toFixed(2) : "—"}</td>
+                    <td className="py-1.5 pr-2">${channelCompare.bing ? channelCompare.bing.profitPerClick.toFixed(2) : "—"}</td>
+                    <td className="py-1.5 pr-2">{channelCompare.bing ? channelCompare.bing.ratio.toFixed(2) : "—"}</td>
+                  </tr>
+                </tbody>
+              </table>
+              {channelCompare.verdict === "bing" && (
+                <p className="mt-2 text-sm font-medium text-signal">{d.channelBingWins}</p>
+              )}
+              {channelCompare.verdict === "google" && (
+                <p className="mt-2 text-sm font-medium text-signal">{d.channelGoogleWins}</p>
+              )}
+              {channelCompare.verdict === "tie" && (
+                <p className="mt-2 text-sm font-medium text-signal">{d.channelTie}</p>
+              )}
+              {channelCompare.verdict === "needBing" && (
+                <p className="mt-2 text-sm text-ink/70">{d.channelNeedBing}</p>
+              )}
+            </div>
+          ) : (
+            <p className="mt-3 text-xs text-ink/50">{d.channelNeedEpc}</p>
+          )}
+          <p className="mt-2 text-xs text-ink/50">{d.channelVolumeNote}</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <a href={siteUrl("planner", kwForLinks)} target="_blank" rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 rounded-lg bg-signal/10 px-2.5 py-1 text-xs font-medium text-signal transition hover:bg-signal/20">
+              ↗ {d.srcKeywordPlanner}
+            </a>
+            <a href={siteUrl("microsoft", "")} target="_blank" rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 rounded-lg bg-signal/10 px-2.5 py-1 text-xs font-medium text-signal transition hover:bg-signal/20">
+              ↗ {d.channelMicrosoft}
+            </a>
           </div>
         </div>
 
@@ -1462,13 +1769,105 @@ export function TrafficPlannerClient({
                       <input className={inputCls} value={k.intent ?? ""} onChange={(e) => updateKw(k.id, "intent", e.target.value)} placeholder="交易" />
                     </td>
                     <td className="py-1">
-                      <button className={btnGhost} onClick={() => removeKw(k.id)}>×</button>
+                      <div className="flex gap-1">
+                        <button className={btnGhost} onClick={() => generateLongtail(k)} disabled={!k.keyword.trim()}>
+                          {d.longtailGenerate}
+                        </button>
+                        <button className={btnGhost} onClick={() => removeKw(k.id)}>×</button>
+                      </div>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+          {/* 长尾词候选：种子词几天零展示时手动生成，勾选加入本页关键词表 */}
+          {longtailOpen && (
+            <div className="mt-3 rounded-lg border border-ink/10 bg-ink/[0.02] p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-sm font-semibold text-ink">
+                  {d.longtailTitle.replace("{seed}", longtailSeed)}
+                </span>
+                <button type="button" onClick={() => setLongtailOpen(false)} className={btnGhost}>
+                  {d.longtailClose}
+                </button>
+              </div>
+              <p className="mt-1 text-xs text-ink/50">{d.longtailHint}</p>
+              {longtailLoading && <p className="mt-2 text-xs text-ink/60">{d.longtailLoading}</p>}
+              {longtailError && <p className="mt-2 text-xs text-red-700">{longtailError}</p>}
+              {!longtailLoading && longtailCandidates.length === 0 && (
+                <div className="mt-2">
+                  <p className="text-xs text-ink/60">{d.longtailEmpty}</p>
+                  {longtailSnapshotEmpty && (
+                    <p className="mt-1 text-xs text-ink/60">
+                      {d.longtailSnapshotEmpty}{" "}
+                      <a href="/keywords/starter?tab=research" className="font-medium text-signal underline">
+                        {d.longtailGoDemand}
+                      </a>
+                    </p>
+                  )}
+                </div>
+              )}
+              {longtailCandidates.length > 0 && (
+                <div className="mt-2">
+                  <div className="mb-2 flex flex-wrap gap-2">
+                    <button type="button" className={btnGhost} onClick={() => setLongtailSelected(longtailCandidates.map((c) => c.keyword))}>
+                      {d.longtailSelectAll}
+                    </button>
+                    <button type="button" className={btnGhost} onClick={() => setLongtailSelected([])}>
+                      {d.longtailSelectNone}
+                    </button>
+                    <button type="button" className={btnPrimary} disabled={!longtailSelected.length} onClick={addLongtailToPlan}>
+                      {d.longtailAdd}
+                    </button>
+                  </div>
+                  <div className="max-h-64 overflow-y-auto">
+                    <table className="w-full text-left text-sm">
+                      <thead>
+                        <tr className="text-xs text-ink/50">
+                          <th className="py-1 pr-2"></th>
+                          <th className="py-1 pr-2">{d.colKeyword}</th>
+                          <th className="py-1 pr-2">{d.longtailVolume}</th>
+                          <th className="py-1 pr-2">{d.longtailSource}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {longtailCandidates.map((c) => (
+                          <tr key={c.keyword.toLowerCase()} className="border-t border-ink/10">
+                            <td className="py-1 pr-2">
+                              <input
+                                type="checkbox"
+                                checked={longtailSelected.includes(c.keyword)}
+                                onChange={(e) =>
+                                  setLongtailSelected((prev) =>
+                                    e.target.checked
+                                      ? [...prev, c.keyword]
+                                      : prev.filter((k) => k !== c.keyword)
+                                  )
+                                }
+                              />
+                            </td>
+                            <td className="py-1 pr-2">{c.keyword}</td>
+                            <td className="py-1 pr-2">{c.volume != null ? c.volume.toLocaleString() : "—"}</td>
+                            <td className="py-1 pr-2 text-xs text-ink/60">
+                              {c.source === "snapshot"
+                                ? d.longtailSourceSnapshot
+                                : c.source === "dataforseo"
+                                  ? d.longtailSourceDataforseo
+                                  : d.longtailSourceAutocomplete}
+                              {c.volume == null && (
+                                <span className="ml-1 text-ink/50">· {d.longtailNoVolumeNote}</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           <div className="mt-2 flex flex-wrap gap-2">
             <button className={btnGhost} onClick={() => setKeywords((ks) => [...ks, newKwRow()])}>
               + {d.addKeyword}

@@ -2,7 +2,7 @@
  * calcProfit: isEstimated flag (P0-2). Math itself must stay unchanged.
  */
 import { describe, expect, it } from "vitest";
-import { calcProfit, clicksToOrderFromCvr, suggestCpcByClicksToOrder } from "@/lib/profit-calc";
+import { calcProfit, clicksToOrderFromCvr, maxCpcForReturnRatio, returnRatioAtCpc, suggestCpcByClicksToOrder } from "@/lib/profit-calc";
 
 describe("calcProfit isEstimated", () => {
   it("defaults isEstimated to false when inputsEstimated is omitted", () => {
@@ -26,6 +26,33 @@ describe("calcProfit isEstimated", () => {
     expect(r.epc).toBeCloseTo(0.2, 10);
     expect(r.perClickProfit).toBeCloseTo(-0.3, 10);
     expect(r.breakEvenCpc).toBeCloseTo(0.2, 10);
+  });
+});
+
+describe("return ratio（产出比）: r = 产出 / 投入，投 1 产出 r、利润 r − 1", () => {
+  it("maxCpcForReturnRatio：EPC 0.18、r 1.5 → 0.12；r 1 → 保平 0.18；r 2 → 0.09", () => {
+    expect(maxCpcForReturnRatio(0.18, 1.5)).toBeCloseTo(0.12, 10);
+    expect(maxCpcForReturnRatio(0.18, 1)).toBeCloseTo(0.18, 10);
+    expect(maxCpcForReturnRatio(0.18, 2)).toBeCloseTo(0.09, 10);
+  });
+
+  it("maxCpcForReturnRatio：比值 <= 0 返回 null", () => {
+    expect(maxCpcForReturnRatio(0.18, 0)).toBeNull();
+    expect(maxCpcForReturnRatio(0.18, -1)).toBeNull();
+  });
+
+  it("returnRatioAtCpc：EPC 0.18、CPC 0.12 → 1.5；CPC 0.18 → 1（保平）；CPC 0 → null", () => {
+    expect(returnRatioAtCpc(0.18, 0.12)).toBeCloseTo(1.5, 10);
+    expect(returnRatioAtCpc(0.18, 0.18)).toBeCloseTo(1, 10);
+    expect(returnRatioAtCpc(0.18, 0)).toBeNull();
+  });
+
+  it("calcProfit：默认比值 2（= 旧 ROI 100%）；显式 r 1.5 时最高 CPC = EPC / 1.5", () => {
+    const d = calcProfit({ payout: 10, cpc: 0.5, cvrF: 0.02 });
+    expect(d.maxCpcAtTargetRatio).toBeCloseTo(0.1, 10);
+    expect(d.returnRatioAtCpc).toBeCloseTo(0.4, 10);
+    const r = calcProfit({ payout: 10, cpc: 0.5, cvrF: 0.02, targetReturnRatio: 1.5 });
+    expect(r.maxCpcAtTargetRatio).toBeCloseTo(0.2 / 1.5, 10);
   });
 });
 

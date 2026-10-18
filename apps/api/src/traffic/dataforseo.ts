@@ -19,8 +19,15 @@ export const DATAFORSEO_PASSWORD_SETTING = "traffic.dataforseoPassword";
 
 const HISTORICAL_SEARCH_VOLUME_URL =
   "https://api.dataforseo.com/v3/dataforseo_labs/google/historical_search_volume/live";
+const KEYWORD_SUGGESTIONS_URL =
+  "https://api.dataforseo.com/v3/dataforseo_labs/google/keyword_suggestions/live";
 
 interface HistoricalSearchVolumeItem {
+  keyword?: unknown;
+  keyword_info?: { search_volume?: unknown };
+}
+
+interface KeywordSuggestionItem {
   keyword?: unknown;
   keyword_info?: { search_volume?: unknown };
 }
@@ -52,6 +59,63 @@ export class DataForSeoProvider implements TrafficProvider {
   async getMonthlyVisits(_domain: string): Promise<number | null> {
     void _domain;
     return null;
+  }
+
+  /**
+   * 长尾词候选（付费）：Labs `google/keyword_suggestions/live`。
+   * 返回种子词的相关/长尾建议，带月均搜索量；失败 → []，绝不抛错。
+   */
+  async getKeywordSuggestions(
+    seed: string
+  ): Promise<Array<{ keyword: string; volume: number | null }>> {
+    const kw = seed.trim();
+    const creds = await this.getCredentials();
+    if (!creds || !kw) return [];
+    try {
+      const auth = Buffer.from(`${creds.login}:${creds.password}`).toString(
+        "base64"
+      );
+      const res = await this.fetchImpl(KEYWORD_SUGGESTIONS_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${auth}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify([
+          {
+            keyword: kw,
+            location_code: 2840,
+            language_code: "en",
+            include_seed_keyword: false,
+            limit: 50,
+          },
+        ]),
+      });
+      if (!res.ok) return [];
+      const data = (await res.json()) as {
+        tasks?: Array<{ result?: Array<{ items?: KeywordSuggestionItem[] }> }>;
+      };
+      const items =
+        data?.tasks?.[0]?.result?.[0]?.items ??
+        ([] as KeywordSuggestionItem[]);
+      const out: Array<{ keyword: string; volume: number | null }> = [];
+      const seen = new Set<string>();
+      for (const item of items) {
+        if (typeof item?.keyword !== "string") continue;
+        const keyword = item.keyword.trim();
+        const key = keyword.toLowerCase();
+        if (!keyword || seen.has(key)) continue;
+        seen.add(key);
+        const raw = item.keyword_info?.search_volume;
+        out.push({
+          keyword,
+          volume: typeof raw === "number" && Number.isFinite(raw) ? raw : null,
+        });
+      }
+      return out;
+    } catch {
+      return [];
+    }
   }
 
   async getKeywordVolume(

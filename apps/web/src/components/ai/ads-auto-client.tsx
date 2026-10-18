@@ -1288,7 +1288,7 @@ export function AdsAutoClient({
   // 推荐出价：取该 offer 的投流页快照 payout + CVR，用 calcProfit 算 EPC。
   const [plannerPayout, setPlannerPayout] = useState<string | null>(null);
   const [plannerCvrPct, setPlannerCvrPct] = useState<string | null>(null);
-  const [targetRoiPct, setTargetRoiPct] = useState("100");
+  const [targetReturnRatio, setTargetReturnRatio] = useState("2");
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -1321,13 +1321,13 @@ export function AdsAutoClient({
   const plannerProfit = (() => {
     const payout = plannerPayout !== null ? parseFloat(plannerPayout) : NaN;
     const cvrPct = plannerCvrPct !== null ? parseFloat(plannerCvrPct) : NaN;
-    const roiPct = parseFloat(targetRoiPct);
+    const ratio = parseFloat(targetReturnRatio);
     if (!Number.isFinite(payout) || payout <= 0) return null;
     if (!Number.isFinite(cvrPct) || cvrPct <= 0) return null;
-    if (!Number.isFinite(roiPct) || roiPct < 0) return null;
-    return calcProfit({ payout, cpc: 0, cvrF: cvrPct / 100, targetRoiF: roiPct / 100 });
+    if (!Number.isFinite(ratio) || ratio <= 0) return null;
+    return calcProfit({ payout, cpc: 0, cvrF: cvrPct / 100, targetReturnRatio: ratio });
   })();
-  const recommendedBid = plannerProfit?.maxCpcAtTargetRoi ?? null;
+  const recommendedBid = plannerProfit?.maxCpcAtTargetRatio ?? null;
   const plannerBreakEven = plannerProfit?.breakEvenCpc ?? null;
 
   // 选中档位的单次点击利润 = EPC − 该档 CPC（内部统一按 USD 算，展示时 × 换算因子）。
@@ -2016,12 +2016,12 @@ export function AdsAutoClient({
                   </dl>
                   <div className="mt-2 flex flex-wrap items-end gap-2">
                     <div>
-                      <label className={labelClass}>{d.bidStrategy.targetRoiLabel}</label>
+                      <label className={labelClass}>{d.bidStrategy.targetReturnRatioLabel}</label>
                       <input
                         inputMode="decimal"
-                        value={targetRoiPct}
-                        onChange={(e) => setTargetRoiPct(e.target.value)}
-                        placeholder="100"
+                        value={targetReturnRatio}
+                        onChange={(e) => setTargetReturnRatio(e.target.value)}
+                        placeholder="2"
                         className={`${inputClass} w-24`}
                       />
                     </div>

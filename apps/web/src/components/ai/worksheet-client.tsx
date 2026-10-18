@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useDict } from "@/i18n/use-dict";
 import { EntityPageHeader } from "@/components/entities/ui";
-import { calcProfit, ASSUMED_CLICKS_TO_ORDER, clicksToOrderFromCvr, suggestCpcByClicksToOrder } from "@/lib/profit-calc";
+import { calcProfit, ASSUMED_CLICKS_TO_ORDER, clicksToOrderFromCvr, normalizeReturnRatio, suggestCpcByClicksToOrder } from "@/lib/profit-calc";
 import { getLastOfferId, getManualOffer, setLastOfferId, setManualOffer } from "@/lib/current-offer";
 import {
   evaluateDemandGate,
@@ -80,9 +80,14 @@ export interface ProfitStepState {
     mode: ProfitMode;
     avgPrice: string;
     commissionRate: string;
-    targetRoiPct: string;
+    /** 目标产出比 r = 产出 / 投入（投 1 产出 r，利润 r − 1）。如 1.5 = 投 1 产出 1.5、利润 0.5；1 = 保平。 */
+    targetReturnRatio: string;
+    /** 旧快照：目标 ROI %（已废弃，读旧快照时换算：比值 = 1 + ROI% / 100）。 */
+    targetRoiPct?: string;
   };
 }
+
+/** 旧快照迁移：目标 ROI% → 目标产出比（@/lib/profit-calc 的 normalizeReturnRatio）。 */
 
 function ProfitStep({
   onChange,
@@ -113,7 +118,7 @@ function ProfitStep({
   const [commissionRate, setCommissionRate] = useState(
     initialValues?.commissionRate ?? initialCommissionRate ?? ""
   );
-  const [targetRoiPct, setTargetRoiPct] = useState(initialValues?.targetRoiPct ?? "100");
+  const [targetReturnRatio, setTargetReturnRatio] = useState(() => normalizeReturnRatio(initialValues));
   const [payout, setPayout] = useState(initialValues?.payout ?? initialPayout ?? "");
   const [cpc, setCpc] = useState(initialValues?.cpc ?? "");
   const [cvrPct, setCvrPct] = useState(initialValues?.cvrPct ?? "");
@@ -147,7 +152,8 @@ function ProfitStep({
     if (!snapshotAppliedRef.current) {
       snapshotAppliedRef.current = true;
       if (initialValues.mode) setMode(initialValues.mode);
-      if (initialValues.targetRoiPct) setTargetRoiPct(initialValues.targetRoiPct);
+      if (initialValues.targetReturnRatio || initialValues.targetRoiPct)
+        setTargetReturnRatio(normalizeReturnRatio(initialValues));
     }
     if (!payout && initialValues.payout) { setPayout(initialValues.payout); setFieldProv("payout", "snapshot"); }
     if (!cpc && initialValues.cpc) { setCpc(initialValues.cpc); setFieldProv("cpc", "snapshot"); }
@@ -259,7 +265,7 @@ function ProfitStep({
       const n = parseFloat(s);
       return Number.isFinite(n) ? Math.min(Math.max(n, 0), 100) / 100 : 0;
     };
-    const roi = parseFloat(targetRoiPct);
+    const ratio = parseFloat(targetReturnRatio);
     return calcProfit({
       payout: p,
       cpc: c,
@@ -267,10 +273,10 @@ function ProfitStep({
       // 电商扣退货、不扣量；其他扣量、不算退货
       refundF: mode === "ecommerce" ? pct(refundPct) : 0,
       shaveF: mode === "other" ? pct(shavePct) : 0,
-      targetRoiF: Number.isFinite(roi) && roi >= 0 ? roi / 100 : 1,
+      targetReturnRatio: Number.isFinite(ratio) && ratio > 0 ? ratio : 2,
       inputsEstimated: isEstimated,
     });
-  }, [derivedPayout, cpc, cvrPct, refundPct, shavePct, mode, targetRoiPct, isEstimated]);
+  }, [derivedPayout, cpc, cvrPct, refundPct, shavePct, mode, targetReturnRatio, isEstimated]);
 
   /* 按期望 ROI 反推 CPC：不依赖已填 CPC，只用 payout/CVR/退货/扣量/目标 ROI。 */
   const reverseCpc = useMemo(() => {
@@ -281,18 +287,18 @@ function ProfitStep({
       const n = parseFloat(s);
       return Number.isFinite(n) ? Math.min(Math.max(n, 0), 100) / 100 : 0;
     };
-    const roi = parseFloat(targetRoiPct);
+    const ratio = parseFloat(targetReturnRatio);
     const r = calcProfit({
       payout: p,
       cpc: 0,
       cvrF: cvr / 100,
       refundF: mode === "ecommerce" ? pct(refundPct) : 0,
       shaveF: mode === "other" ? pct(shavePct) : 0,
-      targetRoiF: Number.isFinite(roi) && roi >= 0 ? roi / 100 : 1,
+      targetReturnRatio: Number.isFinite(ratio) && ratio > 0 ? ratio : 2,
       inputsEstimated: isEstimated,
     });
-    return r.maxCpcAtTargetRoi;
-  }, [derivedPayout, cvrPct, refundPct, shavePct, mode, targetRoiPct, isEstimated]);
+    return r.maxCpcAtTargetRatio;
+  }, [derivedPayout, cvrPct, refundPct, shavePct, mode, targetReturnRatio, isEstimated]);
 
   useEffect(() => {
     if (!result) {
@@ -315,7 +321,7 @@ function ProfitStep({
         mode,
         avgPrice,
         commissionRate,
-        targetRoiPct,
+        targetReturnRatio,
       },
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -327,7 +333,7 @@ function ProfitStep({
   /* P1-1 — 建议 CPC 双公式并列（补充，不改 K3 公式）：
      A = 价格 × 佣金比例 ÷ 预期点击出单数；分母优先用实测 CVR（1 ÷ CVR），
      无实测时用讲师假设 50 并打估算角标；用户可手改分母。
-     B = EPC ÷ (1 + 目标 ROI)，即 result.maxCpcAtTargetRoi（K3 公式本身不动）。 */
+     B = EPC ÷ 目标产出比，即 result.maxCpcAtTargetRatio（K3 公式本身不动）。 */
   const ctoFromCvr = (() => {
     const cvr = parseFloat(cvrPct);
     return Number.isFinite(cvr) && cvr > 0 && cvr < 100
@@ -438,7 +444,7 @@ function ProfitStep({
           {reverseCpc != null && (
             <button type="button" className="mt-1 text-xs text-sky-700 underline underline-offset-2"
               onClick={() => { setCpc(reverseCpc.toFixed(4)); setCpcFromKeywords(false); }}>
-              {w.deriveCpcFromRoi}：{fmt(reverseCpc, 4)}
+              {w.deriveCpcFromRatio}：{fmt(reverseCpc, 4)}
             </button>
           )}
         </div>
@@ -461,9 +467,9 @@ function ProfitStep({
           </div>
         )}
         <div>
-          <label className={labelClass} htmlFor="ws-target-roi">{w.targetRoiLabel}</label>
-          <input id="ws-target-roi" inputMode="decimal" value={targetRoiPct}
-            onChange={(e) => setTargetRoiPct(e.target.value)} placeholder="100" className={inputClass} />
+          <label className={labelClass} htmlFor="ws-target-ratio">{w.targetReturnRatioLabel}</label>
+          <input id="ws-target-ratio" inputMode="decimal" value={targetReturnRatio}
+            onChange={(e) => setTargetReturnRatio(e.target.value)} placeholder="2" className={inputClass} />
         </div>
       </div>
 
@@ -473,10 +479,10 @@ function ProfitStep({
             [
               ["EPC", `EPC = payout × CVR`, fmt(result.epc)],
               [w.breakEvenCpc, w.breakEvenCpcFormula, result.breakEvenCpc !== null ? fmt(result.breakEvenCpc, 4) : "—"],
-              [w.maxCpcAtTargetRoi, w.maxCpcAtTargetRoiFormula, result.maxCpcAtTargetRoi !== null ? fmt(result.maxCpcAtTargetRoi, 4) : "—"],
+              [w.maxCpcAtTargetRatio, w.maxCpcAtTargetRatioFormula, result.maxCpcAtTargetRatio !== null ? fmt(result.maxCpcAtTargetRatio, 4) : "—"],
               [w.perClickProfit, w.perClickProfitFormula, `${result.perClickProfit > 0 ? "+" : ""}${fmt(result.perClickProfit)}`],
               [d.results.breakEvenCvr, d.formulas.breakEvenCvr, result.breakEvenCvrPct !== null ? `${fmt(result.breakEvenCvrPct)}%` : "—"],
-              [w.currentRoi, w.currentRoiFormula, result.roiAtCpc !== null ? `${result.roiAtCpc >= 0 ? "+" : ""}${fmt(result.roiAtCpc * 100)}%` : "—"],
+              [w.currentReturnRatio, w.currentReturnRatioFormula, result.returnRatioAtCpc !== null ? `${fmt(result.returnRatioAtCpc, 2)}（赚 ${fmt(result.returnRatioAtCpc - 1, 2)}）` : "—"],
             ] as const
           ).map(([label, formula, value]) => (
             <div key={label} className="rounded-xl border border-ink/10 bg-white px-5 py-4">
@@ -528,13 +534,13 @@ function ProfitStep({
             <div className="rounded-lg border border-ink/10 bg-ink/[0.02] p-4">
               <p className="text-sm font-medium text-ink">{w.formulaBLabel}</p>
               <p className="mt-1 text-2xl font-semibold text-ink">
-                {result?.maxCpcAtTargetRoi !== null && result?.maxCpcAtTargetRoi !== undefined
-                  ? fmt(result.maxCpcAtTargetRoi, 4)
+                {result?.maxCpcAtTargetRatio !== null && result?.maxCpcAtTargetRatio !== undefined
+                  ? fmt(result.maxCpcAtTargetRatio, 4)
                   : "—"}
               </p>
               <p className="mt-1 font-mono text-xs text-ink/45">{w.formulaBFormula}</p>
               <p className="mt-3 text-xs text-ink/55">
-                {w.formulaBSource.replace("{roi}", targetRoiPct || "100")}
+                {w.formulaBSource.replaceAll("{ratio}", targetReturnRatio || "2")}
               </p>
             </div>
           </div>
