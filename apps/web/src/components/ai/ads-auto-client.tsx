@@ -19,7 +19,8 @@ import {
   listGoogleAccountsAction,
 } from "@/lib/api/entity-actions";
 import { calcProfit } from "@/lib/profit-calc";
-import { listOfferCapturesAction, parseProductCaptureAiAction } from "@/lib/api/ai-actions";
+import { listOfferCapturesAction, parseProductCaptureAiAction, parseOfferCaptureAiAction } from "@/lib/api/ai-actions";
+import { ocrScreenshotAction, type NetworkOcrMetrics } from "@/lib/api/traffic-actions";
 import { CapturePicker } from "@/components/ai/capture-picker";
 import { AdPreview } from "@/components/ai/ad-preview";
 import {
@@ -1265,6 +1266,75 @@ export function AdsAutoClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offerId]);
 
+  /* 出价策略的数据获取：插件抓取 offer 页 → 填预估佣金；网络后台截图识别 → 填预期转化率。
+     与投流页同一套逻辑：% 是佣金、$ 是按转化计的预估 payout，不混淆；截图只认标 "EPC" 的数字。 */
+  const [bidCaptureBusy, setBidCaptureBusy] = useState(false);
+  const [bidCaptureMsg, setBidCaptureMsg] = useState("");
+  const fillBidFromCapture = async (c: { id: string }) => {
+    setBidCaptureBusy(true);
+    setBidCaptureMsg("");
+    try {
+      const res = await parseOfferCaptureAiAction(c.id);
+      if (!res.ok) {
+        setBidCaptureMsg(d.bidStrategy.captureFailed);
+        return;
+      }
+      const ex = res.data.offer;
+      let payout: number | null = null;
+      if (ex.commissionType === "percentage" && ex.commissionValue != null) {
+        const avg =
+          ex.averageOrderValue != null
+            ? ex.averageOrderValue
+            : ex.estimatedPayout != null && ex.commissionValue > 0
+              ? ex.estimatedPayout / (ex.commissionValue / 100)
+              : null;
+        if (avg != null && Number.isFinite(avg) && avg > 0) {
+          payout = (avg * ex.commissionValue) / 100;
+        } else if (ex.estimatedPayout != null) {
+          payout = ex.estimatedPayout;
+        }
+      } else if (ex.commissionType === "fixed" && ex.commissionValue != null) {
+        payout = ex.commissionValue;
+      } else if (ex.estimatedPayout != null) {
+        payout = ex.estimatedPayout;
+      }
+      if (payout != null && Number.isFinite(payout) && payout > 0) {
+        setBidCommission(String(Math.round(payout * 100) / 100));
+        setBidCaptureMsg(d.bidStrategy.captureFilled);
+      } else {
+        setBidCaptureMsg(d.bidStrategy.captureNone);
+      }
+    } finally {
+      setBidCaptureBusy(false);
+    }
+  };
+  const [bidOcrBusy, setBidOcrBusy] = useState(false);
+  const [bidOcrMsg, setBidOcrMsg] = useState("");
+  const bidOcrFileRef = useRef<HTMLInputElement>(null);
+  const ocrBidScreenshot = async (file: File) => {
+    setBidOcrBusy(true);
+    setBidOcrMsg("");
+    try {
+      const fd = new FormData();
+      fd.append("screenshot", file);
+      const res = await ocrScreenshotAction(fd, "network");
+      if (!res.ok) {
+        setBidOcrMsg(res.error);
+        return;
+      }
+      const m: NetworkOcrMetrics = res.data;
+      if (m.conversionRate != null) {
+        setBidCvr(String(m.conversionRate));
+        setBidOcrMsg(`${d.bidStrategy.ocrFilled}：${m.conversionRate}%（${d.bidStrategy.ocrReview}）`);
+      } else {
+        setBidOcrMsg(d.bidStrategy.ocrNone);
+      }
+    } finally {
+      setBidOcrBusy(false);
+      if (bidOcrFileRef.current) bidOcrFileRef.current.value = "";
+    }
+  };
+
   // 出价测算：统一走 @/lib/profit-calc（与盈利测算/工作表同一套公式）。
   const bidProfit = (() => {
     const commission = parseFloat(bidCommission);
@@ -1926,6 +1996,28 @@ export function AdsAutoClient({
               </div>
             )}
             {/* 出价数据表：始终渲染，佣金未填时显示 — */}
+            {/* 数据获取：插件抓取填预估佣金 / 网络后台截图识别填预期转化率 */}
+            <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-ink/10 pt-3">
+              <span className="text-xs font-medium text-ink/70">{d.bidStrategy.dataTools}：</span>
+              <CapturePicker onPick={fillBidFromCapture} label={d.bidStrategy.captureLabel} />
+              {bidCaptureBusy ? <span className="text-xs text-ink/50">{d.bidStrategy.captureBusy}</span> : null}
+              <label className="inline-flex cursor-pointer items-center gap-1 rounded-lg bg-signal/10 px-2.5 py-1 text-xs font-medium text-signal transition hover:bg-signal/20">
+                {bidOcrBusy ? d.bidStrategy.ocrBusy : d.bidStrategy.ocrLabel}
+                <input
+                  ref={bidOcrFileRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  disabled={bidOcrBusy}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void ocrBidScreenshot(f);
+                  }}
+                />
+              </label>
+            </div>
+            {bidCaptureMsg ? <p className="mt-1 text-xs text-ink/60">{bidCaptureMsg}</p> : null}
+            {bidOcrMsg ? <p className="mt-1 text-xs text-ink/60">{bidOcrMsg}</p> : null}
             <dl className="mt-3 grid grid-cols-2 gap-2 text-sm md:grid-cols-3">
               <div className="rounded-lg bg-ink/[0.03] px-3 py-2">
                 <dt className="text-ink/55">{d.bidStrategy.breakEven}</dt>
