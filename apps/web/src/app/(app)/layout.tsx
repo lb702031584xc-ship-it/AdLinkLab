@@ -68,6 +68,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
                     items: [
             { href: "/affiliate/beginner-sop", label: ni.affiliateBeginnerSop },
             { href: "/networks", label: ni.connectNetworks, phase: ph.selection },
+            { href: "/catalog", label: ni.catalog, phase: ph.selection },
             { href: "/offers", label: ni.offerList, phase: ph.selection },
             { href: "/offers/new", label: ni.offerNewImport, phase: ph.selection },
             {

@@ -287,6 +287,12 @@ export async function registerRoutes(
     await registerTrackingLinkResolveRoutes(app, {
       prisma: services.prisma,
     });
+    // 商品库同步（双模式 + 黑白名单；B6 catalog-sync 授权强制执行）
+    const { registerCatalogRoutes } = await import("./catalog.js");
+    await registerCatalogRoutes(app, {
+      prisma: services.prisma,
+      offers: services.offers,
+    });
     // P1-21：死信队列（DLQ）
     const { registerDeadLetterRoutes } = await import("./dead-letter.js");
     await registerDeadLetterRoutes(app, { prisma: services.prisma });

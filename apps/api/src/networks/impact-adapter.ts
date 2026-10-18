@@ -16,6 +16,7 @@ import type {
   AdapterContext,
   NetworkAdapter,
   NetworkOffer,
+  SyncMode,
 } from "./types.js";
 
 export const IMPACT_DEFAULT_BASE_URL = "https://api.impact.com";
@@ -172,6 +173,7 @@ export class ImpactAdapter implements NetworkAdapter {
   readonly kind = "impact";
   readonly displayName = "Impact";
   readonly defaultBaseUrl = IMPACT_DEFAULT_BASE_URL;
+  readonly supportsModes: readonly SyncMode[] = ["api", "session"] as const;
 
   async pullOffers(ctx: AdapterContext): Promise<NetworkOffer[]> {
     const creds = parseImpactCredentials(ctx.apiKey);

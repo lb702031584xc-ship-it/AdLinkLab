@@ -240,6 +240,13 @@ model Tenant {
   /// P0：DB API Keys / AI 用量日报 back-references (additive)
   apiKeys               ApiKey[]
   aiUsageDaily          AiUsageDaily[]
+  /// 商品库（catalog）back-references (additive)
+  networkProducts       NetworkProduct[]
+  catalogScreeningPreset CatalogScreeningPreset?
+  catalogBlacklist      CatalogBlacklist[]
+  catalogWhitelist      CatalogWhitelist[]
+  catalogMerchantPolicy CatalogMerchantPolicy?
+  catalogMerchantSignals CatalogMerchantSignal[]
 
   @@map("tenants")
 }
@@ -1046,6 +1053,7 @@ model Merchant {
   tenant  Tenant            @relation(fields: [tenantId], references: [id])
   network AffiliateNetwork? @relation(fields: [networkId], references: [id], onDelete: SetNull)
   offers  Offer[]
+  catalogMerchantSignals CatalogMerchantSignal[]
 
   @@index([tenantId])
   @@index([networkId])
@@ -1072,6 +1080,18 @@ model AffiliateNetwork {
   /// NEVER | RUNNING | SUCCESS | FAILED
   pullStatus    String    @default("NEVER") @map("pull_status")
   pullError     String?   @map("pull_error") @db.Text
+  /// P1-30 商品库双模式：官方 API / 登录态采集（'api' | 'session'，代码层校验）。
+  syncMode      String    @default("api") @map("sync_mode")
+  /// 加密后的 session Cookie（AES-256-GCM，复用 network-crypto；绝不记明文日志）。
+  sessionRef    String?   @map("session_ref")
+  /// NEVER | OK | EXPIRED | FAILED
+  sessionStatus String    @default("NEVER") @map("session_status")
+  sessionUpdatedAt DateTime? @map("session_updated_at") @db.Timestamptz(3)
+  sessionError  String?   @map("session_error") @db.Text
+  /// 可配置的 session 商品列表路径（默认由适配器提供；网络设置可覆盖）。
+  sessionListPath String? @map("session_list_path")
+  /// SESSION_EXPIRED 连续次数；连续 3 次 → 自动进黑名单（network_account）。
+  sessionExpireStrikes Int @default(0) @map("session_expire_strikes")
   status        String    @default("ACTIVE")
   createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -1081,10 +1101,185 @@ model AffiliateNetwork {
   merchants Merchant[]
   pulls     NetworkOfferPull[]
   offers    NetworkOffer[]
+  products  NetworkProduct[]
 
   @@index([tenantId])
   @@index([status])
   @@map("affiliate_networks")
+}
+
+/// 商品库（catalog）：session/API 同步拉取的商品明细，供筛选建 Offer。
+model NetworkProduct {
+  id                String   @id @db.Uuid
+  tenantId          String   @map("tenant_id") @db.Uuid
+  networkId         String   @map("network_id") @db.Uuid
+  /// 网络侧商品 ID（与 tenantId + networkId 联合去重）。
+  externalId        String   @map("external_id")
+  name              String
+  brand             String?
+  asin              String?
+  price             Decimal? @db.Decimal(19, 4)
+  commissionAmount  Decimal? @map("commission_amount") @db.Decimal(19, 4)
+  commissionRate    Decimal? @map("commission_rate") @db.Decimal(9, 4)
+  currency          String?  @default("USD")
+  reviewCount       Int?     @map("review_count")
+  recommended       Boolean  @default(false)
+  recommendationScore Decimal? @map("recommendation_score") @db.Decimal(9, 2)
+  promoUrl          String?  @map("promo_url")
+  rawData           Json     @map("raw_data") @db.JsonB
+  syncedAt          DateTime @map("synced_at") @db.Timestamptz(3)
+  /// 连续同步出现期数（用于白名单自动建议：连续 3 期出现 → 生成 suggested 建议）。
+  syncStreak        Int      @default(0) @map("sync_streak")
+  /// 同步时按 brand + networkId 匹配到的 Merchant.id（匹配不上为 null）。
+  merchantId        String?  @map("merchant_id") @db.Uuid
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant  Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  network AffiliateNetwork @relation(fields: [networkId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, networkId, externalId])
+  @@index([tenantId, networkId])
+  @@index([tenantId, recommended])
+  @@map("network_products")
+}
+
+/// 商品库筛选预设（每租户一条；autoCreateOffer 仅管理员可改）。
+model CatalogScreeningPreset {
+  id                  String   @id @db.Uuid
+  tenantId            String   @unique @map("tenant_id") @db.Uuid
+  minReviews          Int?     @map("min_reviews")
+  minCommissionAmount Decimal? @map("min_commission_amount") @db.Decimal(19, 4)
+  minCommissionRate   Decimal? @map("min_commission_rate") @db.Decimal(9, 4)
+  minPrice            Decimal? @map("min_price") @db.Decimal(19, 4)
+  maxPrice            Decimal? @map("max_price") @db.Decimal(19, 4)
+  minScore            Int?     @map("min_score")
+  autoCreateOffer     Boolean  @default(false) @map("auto_create_offer")
+  autoCreateTopN      Int      @default(20) @map("auto_create_top_n")
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("catalog_screening_presets")
+}
+
+/// 商品库黑名单：被封/下架/拒登的商家、账号、商品、Offer，同步与建 Offer 时自动跳过。
+/// 黑名单不设自动过期（被封是事实）；删除为软删除（status="removed"），保留审计链；
+/// 移除后进入观察期（observationUntil），观察期内中性对待（不拉黑、不加白）。
+model CatalogBlacklist {
+  id              String    @id @db.Uuid
+  tenantId        String    @map("tenant_id") @db.Uuid
+  /// 渠道：cashback | affiliate | amazon（三渠道各自独立）。
+  channel         String    @default("affiliate")
+  /// "merchant" | "network_account" | "product" | "offer"（后续可扩展 "domain"）。
+  entityType      String    @map("entity_type")
+  /// 商家 → Merchant.id；账号 → AffiliateNetwork.id；商品 → NetworkProduct.id；Offer → Offer.id。
+  entityId        String    @map("entity_id")
+  networkKind     String?   @map("network_kind")
+  reason          String    @map("reason") @db.Text
+  firstSeenAt     DateTime  @map("first_seen_at") @db.Timestamptz(3)
+  lastConfirmedAt DateTime  @map("last_confirmed_at") @db.Timestamptz(3)
+  /// "auto" | "manual"
+  source          String
+  createdBy       String?   @map("created_by") @db.Uuid
+  /// 软删除：active | removed（同一实体只保留一条 active，复拉黑时旧行改回 active）。
+  status          String    @default("active")
+  removedAt       DateTime? @map("removed_at") @db.Timestamptz(3)
+  removedBy       String?   @map("removed_by") @db.Uuid
+  removeReason    String?   @map("remove_reason") @db.Text
+  observationUntil DateTime? @map("observation_until") @db.Timestamptz(3)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, channel, entityType, entityId])
+  @@index([tenantId, entityType])
+  @@index([tenantId, channel, status])
+  @@map("catalog_blacklist")
+}
+
+/// 商品库白名单（业务白名单，与 B6 审批白名单是两套，不要混）：
+/// 手动管理为主；同步引擎对"连续 3 期正常出现"的商品只生成 suggested 建议，
+/// 需用户确认后才转为 manual。
+model CatalogWhitelist {
+  id          String    @id @db.Uuid
+  tenantId    String    @map("tenant_id") @db.Uuid
+  /// 渠道：cashback | affiliate | amazon（三渠道各自独立）。
+  channel     String    @default("affiliate")
+  /// "merchant" | "network_account" | "product"
+  entityType  String    @map("entity_type")
+  entityId    String    @map("entity_id")
+  note        String?
+  /// "manual" | "suggested"
+  source      String
+  suggestedAt DateTime? @map("suggested_at") @db.Timestamptz(3)
+  confirmedAt DateTime? @map("confirmed_at") @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, channel, entityType, entityId])
+  @@map("catalog_whitelist")
+}
+
+/// 商家评估政策（每租户一条；阈值可调）。
+model CatalogMerchantPolicy {
+  id                String   @id @db.Uuid
+  tenantId          String   @unique @map("tenant_id") @db.Uuid
+  /// 扣量嫌疑阈值（百分比，如 30 = 30%）。
+  shaveThresholdPct Decimal  @default(30) @map("shave_threshold_pct") @db.Decimal(5, 2)
+  /// 扣量统计周期天数。
+  shavePeriodDays   Int      @default(7) @map("shave_period_days")
+  /// 连续超阈值的周期数（达到才进黑名单）。
+  shavePeriods      Int      @default(3) @map("shave_periods")
+  /// ROAS 评估窗口天数。
+  roasDays          Int      @default(14) @map("roas_days")
+  /// ROAS 阈值（commission/spend 低于此值 → unprofitable）。
+  roasThreshold     Decimal  @default(0.9) @map("roas_threshold") @db.Decimal(5, 2)
+  /// 订单超期未付款天数（PENDING 超过此天数 → non_payment）。
+  nonPaymentDays    Int      @default(45) @map("non_payment_days")
+  /// 黑名单移除后的观察期天数。
+  observationDays   Int      @default(30) @map("observation_days")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("catalog_merchant_policies")
+}
+
+/// 商家周期信号（快照证据：自有转化 vs 网络订单、花费 vs 佣金并列存储）。
+model CatalogMerchantSignal {
+  id                String    @id @db.Uuid
+  tenantId          String    @map("tenant_id") @db.Uuid
+  merchantId        String    @map("merchant_id") @db.Uuid
+  /// 渠道：cashback | affiliate | amazon。
+  channel           String
+  periodStart       DateTime  @map("period_start") @db.Timestamptz(3)
+  periodDays        Int       @map("period_days")
+  /// 本租户归因到该商家的转化数（Conversion ATTRIBUTED/UPLOADED，经 click→offer→merchant）。
+  ownConversions    Int       @default(0) @map("own_conversions")
+  /// 网络侧同步订单数（clickId/conversionId 为 null 的 Order；当前无写入链路 → 常为 0，记 insufficient_data）。
+  networkOrders     Int       @default(0) @map("network_orders")
+  /// 扣量率百分比 (own-network)/own*100；数据不足为 null。
+  shavePct          Decimal?  @map("shave_pct") @db.Decimal(7, 2)
+  adSpend           Decimal?  @map("ad_spend") @db.Decimal(19, 4)
+  commission        Decimal?  @map("commission") @db.Decimal(19, 4)
+  roas              Decimal?  @map("roas") @db.Decimal(9, 4)
+  pendingOrders     Int       @default(0) @map("pending_orders")
+  oldestPendingDays Int?      @map("oldest_pending_days")
+  /// 证据备注（如 insufficient_data 原因）。
+  note              String?   @db.Text
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, merchantId, channel, periodStart])
+  @@index([tenantId, merchantId, channel])
+  @@map("catalog_merchant_signals")
 }
 
 /// Network API framework — one row per offer-pull run (audit + counts).

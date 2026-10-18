@@ -1,0 +1,848 @@
+/**
+ * 商品库同步引擎（2026-10-18）：官方 API / 登录态双模式 + 黑白名单。
+ *
+ * 流程：
+ *  1. B6 授权强制执行：requireActiveGrant(catalog-sync, whitelist=network.kind)，无授权 403。
+ *  2. 黑名单账号检查：命中 network_account 黑名单 → 直接返回 {skipped:true}，
+ *     审计 CATALOG_SYNC_SKIPPED_BLACKLIST，不再浪费请求。
+ *  3. mode = network.syncMode（非法值 → 按 "api" 处理 + 审计）。
+ *  4. 拉取（api / session）→ 统一为 SessionProduct 列表。
+ *  5. upsert NetworkProduct（@@unique tenantId+networkId+externalId），syncStreak 累计；
+ *     brand+networkId 匹配 Merchant → merchantId。
+ *  6. 消失商品（syncedAt < 本次开始）→ 自动黑名单（product, reason=sync_disappeared）+ 审计。
+ *  7. 评分：排除黑名单商品/黑名单商家的商品后跑 scoreProduct，写回 recommended/score。
+ *  8. 白名单建议：syncStreak 达到 3 → suggested（只建议，不自动加入）。
+ *  9. 自动建 Offer（preset.autoCreateOffer）：白名单优先（观察期商家不置顶），
+ *     跳过黑名单，Top-N（1–50），idempotencyKey 幂等，逐个审计。
+ * 10. 成功 → network.lastPullAt/pullStatus=SUCCESS + CATALOG_SYNC_SUCCESS + incrementGrantUsage；
+ *     失败 → pullStatus=FAILED + CATALOG_SYNC_FAILED。
+ *
+ * session 错误语义：
+ * - SessionExpiredError(restricted=true, 即 HTTP 403 账号受限) → 立即黑名单 + 409。
+ * - SessionExpiredError(普通过期) → strike+1；连续 3 次 → 自动黑名单 + 409。
+ * - SessionRateLimitedError → FAILED + 审计，429（不重试）。
+ * - SessionTemplateError（脚手架未验证）→ FAILED + 审计，400 明错。
+ *
+ * 全程绝不记日志输出明文凭证/session。
+ */
+import { randomUUID } from "node:crypto";
+import type { PrismaClient } from "@adlinklab/database";
+import {
+  AppError,
+  ConflictError,
+  NotFoundError,
+  ValidationError,
+} from "@adlinklab/shared";
+import {
+  incrementGrantUsage,
+  requireActiveGrant,
+} from "./admin-grants.js";
+import {
+  decryptApiKey,
+  assertNetworkApiPepperConfigured,
+} from "../networks/network-crypto.js";
+import { getAdapter, getSessionAdapter } from "../networks/index.js";
+import {
+  BaseSessionAdapter,
+  SessionExpiredError,
+  SessionParseError,
+  SessionRateLimitedError,
+  SessionTemplateError,
+  type SessionProduct,
+} from "../networks/session-adapter.js";
+import { NetworkAdapterError } from "../networks/partnerboost-adapter.js";
+import type {
+  AdapterContext,
+  NetworkAdapter,
+  NetworkOffer,
+  SyncMode,
+} from "../networks/types.js";
+import { isSyncMode } from "../networks/types.js";
+import {
+  DEFAULT_PRESET,
+  scoreProduct,
+  type ScreeningPreset,
+} from "./catalog-screening.js";
+import {
+  addToBlacklist,
+  isBlacklisted,
+  isMerchantObserved,
+  networkKindToChannel,
+  suggestWhitelistEntry,
+  writeCatalogAudit,
+  type CatalogChannel,
+} from "./catalog-blacklist.js";
+
+export interface CreateOfferInput {
+  tenantId: string;
+  name: string;
+  network: string;
+  source?: string;
+  destinationUrl: string;
+  commissionValue?: number;
+  commissionType?: string;
+  avgPrice?: number;
+  brandName?: string;
+  brandNameSource?: string;
+  idempotencyKey?: string;
+}
+
+export interface CatalogSyncDeps {
+  prisma: PrismaClient;
+  getAdapterImpl?: (kind: string) => NetworkAdapter;
+  getSessionAdapterImpl?: (kind: string) => BaseSessionAdapter;
+  createOfferImpl?: (
+    input: CreateOfferInput
+  ) => Promise<{ offer: { id: string }; created: boolean; replayed: boolean }>;
+}
+
+export interface CatalogSyncInput {
+  tenantId: string;
+  userId: string;
+  networkId: string;
+  fetchImpl?: typeof fetch;
+}
+
+export interface CatalogSyncSummary {
+  synced: number;
+  created: number;
+  updated: number;
+  recommended: number;
+  autoCreatedOffers: number;
+  skipped?: boolean;
+  skipReason?: string;
+}
+
+const SESSION_EXPIRE_STRIKE_LIMIT = 3;
+const AUTO_CREATE_TOP_N_MIN = 1;
+const AUTO_CREATE_TOP_N_MAX = 50;
+
+interface NetworkRow {
+  id: string;
+  tenantId: string;
+  kind: string;
+  name: string;
+  apiKeyRef: string | null;
+  apiBaseUrl: string | null;
+  syncMode: string;
+  sessionRef: string | null;
+  sessionListPath: string | null;
+  sessionExpireStrikes: number | null;
+}
+
+interface ProductRow {
+  id: string;
+  externalId: string;
+  name: string;
+  brand: string | null;
+  price: unknown;
+  commissionAmount: unknown;
+  commissionRate: unknown;
+  reviewCount: number | null;
+  promoUrl: string | null;
+  url?: string | null;
+  merchantId: string | null;
+  syncStreak: number | null;
+  recommended: boolean | null;
+  recommendationScore: unknown;
+}
+
+const toNum = (v: unknown): number | null => {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (v === null || v === undefined) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+/** 官方 API 的 NetworkOffer → SessionProduct（字段缺失 → null，不虚构）。 */
+function offerToSessionProduct(o: NetworkOffer): SessionProduct {
+  const isPct = (o.currency ?? "").trim() === "%";
+  return {
+    externalId: o.externalId,
+    name: o.name,
+    payout: o.payout ?? null,
+    currency: o.currency ?? null,
+    termsText: o.termsText ?? null,
+    url: o.url ?? null,
+    rawData: o.rawData,
+    brand: null,
+    asin: null,
+    price: null,
+    commissionAmount: !isPct ? (o.payout ?? null) : null,
+    commissionRate: isPct ? (o.payout ?? null) : null,
+    reviewCount: null,
+    promoUrl: o.url ?? null,
+  };
+}
+
+/**
+ * 商品 → Offer（复用点：syncCatalog 自动建 Offer 与 POST /catalog/offers/batch 共用）。
+ * 幂等：idempotencyKey = catalog:{networkId}:{externalId}，同商品重复调 → replayed。
+ */
+export async function createOfferFromProduct(
+  deps: CatalogSyncDeps,
+  network: { id: string; kind: string },
+  product: {
+    tenantId: string;
+    externalId: string;
+    name: string;
+    brand?: string | null;
+    price?: number | null;
+    commissionAmount?: number | null;
+    commissionRate?: number | null;
+    promoUrl?: string | null;
+    url?: string | null;
+  }
+): Promise<{ offerId: string; created: boolean }> {
+  if (!deps.createOfferImpl) {
+    throw new ValidationError("Offer 创建未接线（createOfferImpl 缺失）");
+  }
+  const destinationUrl = (product.promoUrl || product.url || "").trim();
+  if (!destinationUrl) {
+    throw new ValidationError(`商品「${product.name}」缺少推广链接，无法创建 Offer`);
+  }
+  // 佣金金额优先；只有佣金率+价格时换算（金额 = 价格 × 佣金率 ÷ 100）。
+  const commissionValue =
+    product.commissionAmount ??
+    (product.commissionRate != null && product.price != null
+      ? Math.round(product.price * product.commissionRate) / 100
+      : null);
+  const res = await deps.createOfferImpl({
+    tenantId: product.tenantId,
+    name: product.name,
+    network: network.kind,
+    source: "affiliate",
+    destinationUrl,
+    commissionValue: commissionValue ?? undefined,
+    commissionType:
+      product.commissionAmount != null
+        ? "FIXED"
+        : product.commissionRate != null
+          ? "PERCENT"
+          : undefined,
+    avgPrice: product.price ?? undefined,
+    brandName: product.brand ?? undefined,
+    brandNameSource: product.brand ? "catalog-sync" : undefined,
+    idempotencyKey: `catalog:${network.id}:${product.externalId}`,
+  });
+  return { offerId: res.offer.id, created: res.created };
+}
+
+async function loadPreset(
+  prisma: PrismaClient,
+  tenantId: string
+): Promise<ScreeningPreset & { autoCreateOffer: boolean; autoCreateTopN: number }> {
+  const row = (await prisma.catalogScreeningPreset.findUnique({
+    where: { tenantId },
+  })) as null | {
+    minReviews: number | null;
+    minCommissionAmount: unknown;
+    minCommissionRate: unknown;
+    minPrice: unknown;
+    maxPrice: unknown;
+    minScore: number | null;
+    autoCreateOffer: boolean;
+    autoCreateTopN: number;
+  };
+  if (!row) {
+    return { ...DEFAULT_PRESET, autoCreateOffer: false, autoCreateTopN: 20 };
+  }
+  return {
+    minReviews: row.minReviews,
+    minCommissionAmount: toNum(row.minCommissionAmount),
+    minCommissionRate: toNum(row.minCommissionRate),
+    minPrice: toNum(row.minPrice),
+    maxPrice: toNum(row.maxPrice),
+    minScore: row.minScore,
+    autoCreateOffer: row.autoCreateOffer,
+    autoCreateTopN: row.autoCreateTopN,
+  };
+}
+
+/** brand + networkId 匹配 Merchant（大小写不敏感精确匹配），匹配不上 → null。 */
+async function matchMerchantId(
+  prisma: PrismaClient,
+  tenantId: string,
+  networkId: string,
+  brand: string | null | undefined
+): Promise<string | null> {
+  const b = brand?.trim();
+  if (!b) return null;
+  const merchants = (await prisma.merchant.findMany({
+    where: { tenantId, networkId, deletedAt: null },
+    select: { id: true, name: true },
+  })) as Array<{ id: string; name: string }>;
+  const lower = b.toLowerCase();
+  const hit = merchants.find((m) => m.name.toLowerCase() === lower);
+  return hit ? hit.id : null;
+}
+
+export async function syncCatalog(
+  deps: CatalogSyncDeps,
+  input: CatalogSyncInput
+): Promise<CatalogSyncSummary> {
+  const { prisma } = deps;
+  const { tenantId, userId, networkId } = input;
+  const getAdapterImpl = deps.getAdapterImpl ?? getAdapter;
+  const getSessionAdapterImpl = deps.getSessionAdapterImpl ?? getSessionAdapter;
+
+  const network = (await prisma.affiliateNetwork.findFirst({
+    where: { id: networkId, tenantId, deletedAt: null },
+  })) as NetworkRow | null;
+  if (!network) throw new NotFoundError("Network not found");
+  // 闭包内 TS  narrowing 会丢失，用 net 捕获非空。
+  const net = network;
+
+  // 1. B6 授权强制执行（无授权 403；管理员也不能绕过）。
+  const grant = await requireActiveGrant(prisma, {
+    tenantId,
+    userId,
+    capability: "catalog-sync",
+    whitelistValue: net.kind,
+  });
+  const channel: CatalogChannel = networkKindToChannel(net.kind);
+
+  // 2. 黑名单账号 → 直接跳过，不再浪费请求。
+  if (await isBlacklisted(prisma, tenantId, channel, "network_account", net.id)) {
+    const entry = (await prisma.catalogBlacklist.findUnique({
+      where: {
+        tenantId_channel_entityType_entityId: {
+          tenantId,
+          channel,
+          entityType: "network_account",
+          entityId: net.id,
+        },
+      },
+    })) as { reason?: string } | null;
+    const reason = `账号在黑名单中（${entry?.reason ?? "unknown"}），已自动跳过同步`;
+    await writeCatalogAudit(prisma, {
+      tenantId,
+      grantId: grant.id,
+      actorId: userId,
+      action: "CATALOG_SYNC_SKIPPED_BLACKLIST",
+      detail: { kind: net.kind, channel, networkId: net.id, reason },
+    });
+    return {
+      synced: 0,
+      created: 0,
+      updated: 0,
+      recommended: 0,
+      autoCreatedOffers: 0,
+      skipped: true,
+      skipReason: reason,
+    };
+  }
+
+  // 3. 模式（非法值 → 按 "api" 处理 + 审计）。
+  let mode: SyncMode = "api";
+  if (isSyncMode(net.syncMode)) {
+    mode = net.syncMode;
+  } else {
+    await writeCatalogAudit(prisma, {
+      tenantId,
+      grantId: grant.id,
+      actorId: userId,
+      action: "CATALOG_SYNC_INVALID_MODE",
+      detail: { kind: net.kind, syncMode: net.syncMode },
+    });
+  }
+
+  const syncStartedAt = new Date();
+  await writeCatalogAudit(prisma, {
+    tenantId,
+    grantId: grant.id,
+    actorId: userId,
+    action: "CATALOG_SYNC_START",
+    detail: { kind: net.kind, channel, mode, networkId: net.id },
+  });
+
+  const fail = async (message: string): Promise<never> => {
+    await prisma.affiliateNetwork.update({
+      where: { id: net.id },
+      data: { pullStatus: "FAILED", pullError: message.slice(0, 2000) },
+    });
+    await writeCatalogAudit(prisma, {
+      tenantId,
+      grantId: grant.id,
+      actorId: userId,
+      action: "CATALOG_SYNC_FAILED",
+      detail: { kind: net.kind, channel, mode, error: message.slice(0, 500) },
+    });
+    throw new AppError(message, { code: "CATALOG_SYNC_FAILED", statusCode: 500 });
+  };
+
+  /* ── 4. 拉取 ── */
+  const doPull = async (): Promise<SessionProduct[]> => {
+    if (mode === "api") {
+      const adapter = getAdapterImpl(net.kind);
+      if (adapter.supportsModes && !adapter.supportsModes.includes("api")) {
+        throw new ValidationError(
+          `${adapter.displayName} 官方商品 API 尚未确认，当前仅支持登录态(session)模式`
+        );
+      }
+      if (!net.apiKeyRef) {
+        throw new ValidationError(
+          "该网络尚未配置官方 API 凭证：请先在网络设置中填写 API Key，或切换为 session 模式"
+        );
+      }
+      const pepper = assertNetworkApiPepperConfigured();
+      const apiKey = decryptApiKey(net.apiKeyRef, pepper);
+      const ctx: AdapterContext = {
+        apiKey,
+        apiBaseUrl: net.apiBaseUrl ?? "",
+        tenantId,
+        fetchImpl: input.fetchImpl,
+      };
+      try {
+        const offers = await adapter.pullOffers(ctx);
+        return offers.map(offerToSessionProduct);
+      } catch (error) {
+        // API 明确 403 = 账号受限/权限回收 → 自动黑名单。
+        if (error instanceof NetworkAdapterError && error.status === 403) {
+          await addToBlacklist(prisma, {
+            tenantId,
+            channel,
+            entityType: "network_account",
+            entityId: net.id,
+            networkKind: net.kind,
+            reason: "api_account_restricted",
+            source: "auto",
+            grantId: grant.id,
+            evidence: { httpStatus: 403, mode: "api" },
+          });
+        }
+        throw error;
+      }
+    }
+    // session 模式
+    if (!net.sessionRef) {
+      throw new ValidationError(
+        "该网络尚未保存登录态：请先在商品库设置页保存该网络的登录态 Cookie"
+      );
+    }
+    const sessionAdapter = getSessionAdapterImpl(net.kind);
+    if (!(sessionAdapter instanceof BaseSessionAdapter)) {
+      throw new ValidationError(`该网络（${net.kind}）暂不支持 session 模式`);
+    }
+    const pepper = assertNetworkApiPepperConfigured();
+    const cookie = decryptApiKey(net.sessionRef, pepper);
+    const sessProducts = await sessionAdapter.pullViaSession({
+      cookie,
+      baseUrl: net.apiBaseUrl || undefined,
+      fetchImpl: input.fetchImpl,
+      sessionListPath: net.sessionListPath || undefined,
+    });
+    // session 成功 → strikes 清零。
+    await prisma.affiliateNetwork.update({
+      where: { id: net.id },
+      data: {
+        sessionStatus: "OK",
+        sessionError: null,
+        sessionUpdatedAt: new Date(),
+        sessionExpireStrikes: 0,
+      },
+    });
+    return sessProducts;
+  };
+
+  // 拉取错误 → 状态/审计/黑名单映射（返回 never，调用方直接 await）。
+  const handlePullError = async (error: unknown): Promise<never> => {
+    if (error instanceof SessionExpiredError) {
+      const strikes = (net.sessionExpireStrikes ?? 0) + 1;
+      const now = new Date();
+      if (error.restricted) {
+        // HTTP 403 明确账号受限 → 立即黑名单。
+        await addToBlacklist(prisma, {
+          tenantId,
+          channel,
+          entityType: "network_account",
+          entityId: net.id,
+          networkKind: net.kind,
+          reason: "session_account_restricted",
+          source: "auto",
+          grantId: grant.id,
+          evidence: { httpStatus: 403, mode: "session" },
+        });
+        await prisma.affiliateNetwork.update({
+          where: { id: net.id },
+          data: {
+            sessionStatus: "FAILED",
+            sessionError: error.message.slice(0, 500),
+            sessionUpdatedAt: now,
+          },
+        });
+        await writeCatalogAudit(prisma, {
+          tenantId,
+          grantId: grant.id,
+          actorId: userId,
+          action: "CATALOG_SESSION_EXPIRED",
+          detail: { kind: net.kind, restricted: true },
+        });
+      } else {
+        await prisma.affiliateNetwork.update({
+          where: { id: net.id },
+          data: {
+            sessionStatus: "EXPIRED",
+            sessionError: error.message.slice(0, 500),
+            sessionUpdatedAt: now,
+            sessionExpireStrikes: strikes,
+          },
+        });
+        await writeCatalogAudit(prisma, {
+          tenantId,
+          grantId: grant.id,
+          actorId: userId,
+          action: "CATALOG_SESSION_EXPIRED",
+          detail: { kind: net.kind, strikes },
+        });
+        if (strikes >= SESSION_EXPIRE_STRIKE_LIMIT) {
+          await addToBlacklist(prisma, {
+            tenantId,
+            channel,
+            entityType: "network_account",
+            entityId: net.id,
+            networkKind: net.kind,
+            reason: "session_expired_x3",
+            source: "auto",
+            grantId: grant.id,
+            evidence: { strikes, mode: "session" },
+          });
+        }
+      }
+      await prisma.affiliateNetwork.update({
+        where: { id: net.id },
+        data: { pullStatus: "FAILED", pullError: error.message.slice(0, 2000) },
+      });
+      throw new ConflictError("登录态过期，请在设置页重新保存");
+    }
+    if (error instanceof SessionRateLimitedError) {
+      await prisma.affiliateNetwork.update({
+        where: { id: net.id },
+        data: {
+          sessionStatus: "FAILED",
+          sessionError: error.message.slice(0, 500),
+          sessionUpdatedAt: new Date(),
+          pullStatus: "FAILED",
+          pullError: error.message.slice(0, 2000),
+        },
+      });
+      await writeCatalogAudit(prisma, {
+        tenantId,
+        grantId: grant.id,
+        actorId: userId,
+        action: "CATALOG_SESSION_RATE_LIMITED",
+        detail: { kind: net.kind },
+      });
+      // 429：不重试，直接降级。
+      throw new AppError(error.message, {
+        code: "SESSION_RATE_LIMITED",
+        statusCode: 429,
+      });
+    }
+    if (error instanceof SessionTemplateError) {
+      await prisma.affiliateNetwork.update({
+        where: { id: net.id },
+        data: {
+          sessionStatus: "FAILED",
+          sessionError: error.message.slice(0, 500),
+          sessionUpdatedAt: new Date(),
+        },
+      });
+      await writeCatalogAudit(prisma, {
+        tenantId,
+        grantId: grant.id,
+        actorId: userId,
+        action: "CATALOG_SESSION_TEMPLATE_UNVERIFIED",
+        detail: { kind: net.kind },
+      });
+      await fail(error.message);
+    }
+    if (error instanceof SessionParseError) {
+      await prisma.affiliateNetwork.update({
+        where: { id: net.id },
+        data: {
+          sessionStatus: "FAILED",
+          sessionError: error.message.slice(0, 500),
+          sessionUpdatedAt: new Date(),
+        },
+      });
+    }
+    if (error instanceof ValidationError) {
+      // 输入/配置类错误（无凭证、不支持的模式等）→ 记 FAILED 后原样抛回（400）。
+      await prisma.affiliateNetwork.update({
+        where: { id: net.id },
+        data: { pullStatus: "FAILED", pullError: error.message.slice(0, 2000) },
+      });
+      await writeCatalogAudit(prisma, {
+        tenantId,
+        grantId: grant.id,
+        actorId: userId,
+        action: "CATALOG_SYNC_FAILED",
+        detail: { kind: net.kind, channel, mode, error: error.message.slice(0, 500) },
+      });
+      throw error;
+    }
+    if (error instanceof ConflictError) {
+      await fail(error.message);
+    }
+    if (error instanceof AppError) throw error;
+    // fail() 永不返回（内部 throw）；return 仅为满足 never 类型。
+    return fail(error instanceof Error ? error.message : String(error));
+  };
+
+  let products: SessionProduct[];
+  try {
+    products = await doPull();
+  } catch (error) {
+    await handlePullError(error);
+    // unreachable（handlePullError 永不返回）：仅为满足 TS 明确赋值分析。
+    throw error;
+  }
+
+  /* ── 5. upsert ── */
+  let created = 0;
+  let updated = 0;
+  const upserted: ProductRow[] = [];
+  for (const p of products) {
+    const externalId = (p.externalId ?? "").trim();
+    if (!externalId) continue;
+    const merchantId = await matchMerchantId(prisma, tenantId, net.id, p.brand);
+    const data = {
+      name: p.name,
+      brand: p.brand ?? null,
+      asin: p.asin ?? null,
+      price: toNum(p.price),
+      commissionAmount: toNum(p.commissionAmount),
+      commissionRate: toNum(p.commissionRate),
+      currency: p.currency ?? "USD",
+      reviewCount: p.reviewCount ?? null,
+      promoUrl: p.promoUrl ?? p.url ?? null,
+      rawData: p.rawData as never,
+      syncedAt: new Date(),
+      merchantId,
+    };
+    const existing = (await prisma.networkProduct.findUnique({
+      where: {
+        tenantId_networkId_externalId: { tenantId, networkId: net.id, externalId },
+      },
+      select: { id: true },
+    })) as { id: string } | null;
+    let row: ProductRow;
+    if (existing) {
+      row = (await prisma.networkProduct.update({
+        where: { id: existing.id },
+        data: { ...data, syncStreak: { increment: 1 } },
+      })) as ProductRow;
+      updated += 1;
+    } else {
+      row = (await prisma.networkProduct.create({
+        data: {
+          id: randomUUID(),
+          tenantId,
+          networkId: net.id,
+          externalId,
+          ...data,
+          syncStreak: 1,
+        },
+      })) as ProductRow;
+      created += 1;
+    }
+    upserted.push(row);
+  }
+
+  /* ── 6. 消失商品 → 自动黑名单 ── */
+  const disappeared = (await prisma.networkProduct.findMany({
+    where: { tenantId, networkId: net.id, syncedAt: { lt: syncStartedAt } },
+    select: { id: true, externalId: true, name: true, syncedAt: true },
+  })) as Array<{ id: string; externalId: string; name: string; syncedAt: Date }>;
+  for (const d of disappeared) {
+    await addToBlacklist(prisma, {
+      tenantId,
+      channel,
+      entityType: "product",
+      entityId: d.id,
+      networkKind: net.kind,
+      reason: "sync_disappeared",
+      source: "auto",
+      grantId: grant.id,
+      evidence: {
+        externalId: d.externalId,
+        lastSyncedAt: new Date(d.syncedAt).toISOString(),
+      },
+    });
+  }
+
+  /* ── 黑名单集合（商品 + 商家），用于评分/建 Offer 过滤 ── */
+  const blackRows = (await prisma.catalogBlacklist.findMany({
+    where: { tenantId, channel, status: "active" },
+    select: { entityType: true, entityId: true },
+  })) as Array<{ entityType: string; entityId: string }>;
+  const blacklistedProducts = new Set(
+    blackRows.filter((r) => r.entityType === "product").map((r) => r.entityId)
+  );
+  const blacklistedMerchants = new Set(
+    blackRows.filter((r) => r.entityType === "merchant").map((r) => r.entityId)
+  );
+
+  /* ── 7. 评分（排除黑名单） ── */
+  const preset = await loadPreset(prisma, tenantId);
+  let recommended = 0;
+  const scored: Array<ProductRow & { score: number; isRecommended: boolean }> = [];
+  for (const row of upserted) {
+    if (blacklistedProducts.has(row.id)) continue;
+    if (row.merchantId && blacklistedMerchants.has(row.merchantId)) continue;
+    const r = scoreProduct(
+      {
+        price: toNum(row.price),
+        commissionAmount: toNum(row.commissionAmount),
+        commissionRate: toNum(row.commissionRate),
+        reviewCount: row.reviewCount,
+      },
+      preset
+    );
+    await prisma.networkProduct.update({
+      where: { id: row.id },
+      data: { recommended: r.recommended, recommendationScore: r.score },
+    });
+    if (r.recommended) recommended += 1;
+    scored.push({ ...row, score: r.score, isRecommended: r.recommended });
+  }
+
+  /* ── 8. 白名单建议：syncStreak 达到 3 → suggested（只建议，不自动加入） ── */
+  for (const row of upserted) {
+    if ((row.syncStreak ?? 0) >= 3) {
+      await suggestWhitelistEntry(prisma, {
+        tenantId,
+        channel,
+        entityType: "product",
+        entityId: row.id,
+        note: `连续 ${row.syncStreak} 期同步正常出现（${net.kind}）`,
+      });
+    }
+  }
+
+  /* ── 9. 自动建 Offer ── */
+  let autoCreatedOffers = 0;
+  if (preset.autoCreateOffer) {
+    const whiteRows = (await prisma.catalogWhitelist.findMany({
+      where: { tenantId, channel, entityType: "product", source: "manual" },
+      select: { entityId: true },
+    })) as Array<{ entityId: string }>;
+    const whitelisted = new Set(whiteRows.map((r) => r.entityId));
+    // 观察期商家：不置顶（中性对待）。
+    const observedMerchants = new Set<string>();
+    for (const s of scored) {
+      if (
+        s.merchantId &&
+        !observedMerchants.has(s.merchantId) &&
+        (await isMerchantObserved(prisma, tenantId, channel, "merchant", s.merchantId))
+      ) {
+        observedMerchants.add(s.merchantId);
+      }
+    }
+    const topN = Math.max(
+      AUTO_CREATE_TOP_N_MIN,
+      Math.min(AUTO_CREATE_TOP_N_MAX, preset.autoCreateTopN)
+    );
+    // 候选 = 本次同步且评分推荐（recommended）的商品；
+    // 排序：手动白名单优先（观察期商家商品不置顶），其余按 score 倒序。
+    const ordered = scored
+      .filter((s) => {
+        if (!s.isRecommended) return false;
+        if (blacklistedProducts.has(s.id)) return false;
+        if (s.merchantId && blacklistedMerchants.has(s.merchantId)) return false;
+        return true;
+      })
+      .sort((a, b) => {
+        const aPin =
+          whitelisted.has(a.id) &&
+          !(a.merchantId && observedMerchants.has(a.merchantId));
+        const bPin =
+          whitelisted.has(b.id) &&
+          !(b.merchantId && observedMerchants.has(b.merchantId));
+        if (aPin !== bPin) return aPin ? -1 : 1;
+        return b.score - a.score;
+      })
+      .slice(0, topN);
+    for (const s of ordered) {
+      try {
+        const { offerId, created: wasCreated } = await createOfferFromProduct(
+          deps,
+          net,
+          {
+            tenantId,
+            externalId: s.externalId,
+            name: s.name,
+            brand: s.brand,
+            price: toNum(s.price),
+            commissionAmount: toNum(s.commissionAmount),
+            commissionRate: toNum(s.commissionRate),
+            promoUrl: s.promoUrl,
+            url: s.url,
+          }
+        );
+        if (wasCreated) {
+          autoCreatedOffers += 1;
+          await writeCatalogAudit(prisma, {
+            tenantId,
+            grantId: grant.id,
+            actorId: userId,
+            action: "CATALOG_AUTO_OFFER_CREATED",
+            detail: {
+              productId: s.id,
+              offerId,
+              externalId: s.externalId,
+              kind: net.kind,
+            },
+          });
+        }
+      } catch (error) {
+        // 单个失败不中断整批（缺链接等），记审计继续。
+        await writeCatalogAudit(prisma, {
+          tenantId,
+          grantId: grant.id,
+          actorId: userId,
+          action: "CATALOG_AUTO_OFFER_FAILED",
+          detail: {
+            productId: s.id,
+            externalId: s.externalId,
+            error: (error instanceof Error ? error.message : String(error)).slice(0, 300),
+          },
+        });
+      }
+    }
+  }
+
+  /* ── 10. 成功收尾 ── */
+  const now = new Date();
+  await prisma.affiliateNetwork.update({
+    where: { id: net.id },
+    data: { lastPullAt: now, pullStatus: "SUCCESS", pullError: null },
+  });
+  await writeCatalogAudit(prisma, {
+    tenantId,
+    grantId: grant.id,
+    actorId: userId,
+    action: "CATALOG_SYNC_SUCCESS",
+    detail: {
+      kind: net.kind,
+      channel,
+      mode,
+      synced: upserted.length,
+      created,
+      updated,
+      recommended,
+      autoCreatedOffers,
+      disappearedBlacklisted: disappeared.length,
+    },
+  });
+  await incrementGrantUsage(prisma, grant);
+
+  return {
+    synced: upserted.length,
+    created,
+    updated,
+    recommended,
+    autoCreatedOffers,
+  };
+}

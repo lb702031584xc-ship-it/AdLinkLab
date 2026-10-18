@@ -52,5 +52,20 @@ export interface NetworkAdapter {
   readonly displayName: string;
   /** Production API base URL used when the user leaves apiBaseUrl empty. */
   readonly defaultBaseUrl: string;
+  /**
+   * 该网络支持的商品库同步模式。缺省（undefined）视为仅支持 "api"。
+   * session 模式由 BaseSessionAdapter 子类实现（见 ./session-adapter.ts）。
+   */
+  readonly supportsModes?: readonly SyncMode[];
   pullOffers(ctx: AdapterContext): Promise<NetworkOffer[]>;
+}
+
+/** 商品库同步模式：官方 API / 登录态采集。 */
+export type SyncMode = "api" | "session";
+
+/** 合法的 syncMode 取值（AffiliateNetwork.syncMode 只允许这两者，代码层校验）。 */
+export const SYNC_MODES: readonly SyncMode[] = ["api", "session"] as const;
+
+export function isSyncMode(v: unknown): v is SyncMode {
+  return v === "api" || v === "session";
 }

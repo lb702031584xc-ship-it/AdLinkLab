@@ -21,6 +21,7 @@ import type {
   AdapterContext,
   NetworkAdapter,
   NetworkOffer,
+  SyncMode,
 } from "./types.js";
 
 export const PARTNERBOOST_DEFAULT_BASE_URL = "https://app.partnerboost.com";
@@ -190,6 +191,7 @@ export class PartnerBoostAdapter implements NetworkAdapter {
   readonly kind = "partnerboost";
   readonly displayName = "PartnerBoost";
   readonly defaultBaseUrl = PARTNERBOOST_DEFAULT_BASE_URL;
+  readonly supportsModes: readonly SyncMode[] = ["api", "session"] as const;
 
   async pullOffers(
     ctx: AdapterContext,

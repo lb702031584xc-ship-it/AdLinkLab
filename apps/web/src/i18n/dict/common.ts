@@ -39,6 +39,7 @@ export const zh = {
     items: {
       affiliateBeginnerSop: "新手 7 天 SOP",
       connectNetworks: "连接联盟网络",
+      catalog: "商品库",
       offerList: "Offer 列表",
       offerNewImport: "新建/导入 Offer",
       keywords: "关键词",
@@ -156,6 +157,7 @@ export const en: typeof zh = {
     items: {
       affiliateBeginnerSop: "7-Day Starter SOP",
       connectNetworks: "Connect a Network",
+      catalog: "Product Catalog",
       offerList: "Offers",
       offerNewImport: "New / Import Offer",
       keywords: "Keywords",

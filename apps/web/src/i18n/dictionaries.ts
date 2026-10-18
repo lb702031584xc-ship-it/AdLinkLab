@@ -31,6 +31,7 @@ import { zh as cashbackTermsWatchZh, en as cashbackTermsWatchEn } from "./dict/c
 import { zh as cashbackLpScoreZh, en as cashbackLpScoreEn } from "./dict/cashback-lp-score";
 import { zh as cashbackRedirectCheckZh, en as cashbackRedirectCheckEn } from "./dict/cashback-redirect-check";
 import { zh as cashbackRateCompareZh, en as cashbackRateCompareEn } from "./dict/cashback-rate-compare";
+import { zh as catalogZh, en as catalogEn } from "./dict/catalog";
 
 export type Lang = "zh" | "en";
 
@@ -75,6 +76,7 @@ export const dictionaries = {
     cashbackLpScore: cashbackLpScoreZh,
     cashbackRedirectCheck: cashbackRedirectCheckZh,
     cashbackRateCompare: cashbackRateCompareZh,
+    catalog: catalogZh,
   },
   en: {
     common: commonEn,
@@ -110,6 +112,7 @@ export const dictionaries = {
     cashbackLpScore: cashbackLpScoreEn,
     cashbackRedirectCheck: cashbackRedirectCheckEn,
     cashbackRateCompare: cashbackRateCompareEn,
+    catalog: catalogEn,
   },
 };
 

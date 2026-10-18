@@ -16,12 +16,14 @@ import type { FastifyInstance } from "fastify";
 import { NotFoundError, ValidationError } from "@adlinklab/shared";
 import type { PrismaClient } from "@adlinklab/database";
 import { requireTenant, type AuthContext } from "../auth/tenant.js";
+import { requireSession } from "./auth.js";
 import {
   assertNetworkApiPepperConfigured,
   encryptApiKey,
 } from "../networks/network-crypto.js";
 import {
   getAdapter,
+  isSessionSupported,
   isSupportedNetworkKind,
   SUPPORTED_NETWORK_KINDS,
 } from "../networks/index.js";
@@ -29,6 +31,22 @@ import {
   pullNetwork,
   type NetworkPullServiceDeps,
 } from "../services/network-pull-service.js";
+import {
+  incrementGrantUsage,
+  requireActiveGrant,
+} from "../services/admin-grants.js";
+import { writeCatalogAudit } from "../services/catalog-blacklist.js";
+import { isSyncMode } from "../networks/types.js";
+
+/**
+ * 登录态采集 ToS 风险提示原文（文档 + 切换模式 API 的 400 响应共用）。
+ */
+export const SESSION_TOS_RISK_TEXT =
+  "登录态采集风险提示：使用登录态（Cookie）自动采集商品数据，可能违反 " +
+  "YeahPromos/PartnerBoost 服务条款中关于自动化访问的条款，存在账号被警告、" +
+  "限流或封禁的风险。请仅采集您自己账号可见的商品数据，不要高频抓取。" +
+  "如该联盟日后提供官方商品 API，请优先切换为官方 API 模式。" +
+  "继续即代表您已了解并自行承担该风险。";
 
 export interface NetworkRouteServices {
   prisma: PrismaClient;
@@ -78,6 +96,18 @@ function assertId(id: unknown): string {
   return s;
 }
 
+/** session 商品列表路径覆盖（可选；必须以 / 开头，≤500 字符）。 */
+function asSessionListPath(v: unknown): string | null | undefined {
+  if (v === undefined || v === null) return undefined;
+  const s = asTrimmedString(v);
+  if (!s) return null;
+  if (!s.startsWith("/")) {
+    throw new ValidationError("sessionListPath 必须以 / 开头");
+  }
+  if (s.length > 500) throw new ValidationError("sessionListPath 过长（上限 500）");
+  return s;
+}
+
 /** Public shape — credentials masked to a boolean flag. */
 export function serializeNetwork(row: {
   id: string;
@@ -93,6 +123,10 @@ export function serializeNetwork(row: {
   status: string;
   createdAt: Date;
   updatedAt: Date;
+  syncMode?: string | null;
+  sessionRef?: string | null;
+  sessionStatus?: string | null;
+  sessionListPath?: string | null;
 }) {
   return {
     id: row.id,
@@ -107,6 +141,10 @@ export function serializeNetwork(row: {
     status: row.status,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
+    syncMode: row.syncMode ?? "api",
+    sessionConfigured: Boolean(row.sessionRef),
+    sessionStatus: row.sessionStatus ?? "NEVER",
+    sessionListPath: row.sessionListPath ?? null,
   };
 }
 
@@ -210,6 +248,8 @@ export async function registerNetworkRoutes(
       }
       const apiBaseUrl = asApiBaseUrl(body.apiBaseUrl);
       if (apiBaseUrl !== undefined) patch.apiBaseUrl = apiBaseUrl;
+      const sessionListPath = asSessionListPath(body.sessionListPath);
+      if (sessionListPath !== undefined) patch.sessionListPath = sessionListPath;
 
       // apiKey rotation: string → re-encrypt; null → clear credentials.
       if (body.apiKey !== undefined) {
@@ -230,6 +270,58 @@ export async function registerNetworkRoutes(
         where: { id: row.id },
         data: patch,
       });
+      return {
+        network: serializeNetwork(
+          updated as Parameters<typeof serializeNetwork>[0]
+        ),
+      };
+    }
+  );
+
+  app.put<{ Params: { id: string }; Body: Record<string, unknown> }>(
+    "/api/v1/networks/:id/sync-mode",
+    async (request) => {
+      // 商品库同步模式切换：同样先 requireSession（B6 授权在下方强制执行）。
+      const info = await requireSession({ prisma: services.prisma }, request);
+      const tenantId = info.tenantId;
+      const id = assertId(request.params.id);
+      const row = await findNetwork(tenantId, id);
+      const body = request.body ?? {};
+      const syncMode = body.syncMode;
+      if (!isSyncMode(syncMode)) {
+        throw new ValidationError('syncMode 必须为 "api" 或 "session"');
+      }
+      // B6：切换同步模式要求 catalog-sync 授权（whitelist=kind），无授权 403。
+      const grant = await requireActiveGrant(services.prisma, {
+        tenantId,
+        userId: info.id,
+        capability: "catalog-sync",
+        whitelistValue: row.kind,
+      });
+      if (syncMode === "session") {
+        if (!isSessionSupported(row.kind)) {
+          throw new ValidationError(`该网络（${row.kind}）暂不支持 session 模式`);
+        }
+        // 切到 session 必须显式确认 ToS 风险，否则 400 并返回风险文本。
+        if (body.confirmTosRisk !== true) {
+          throw new ValidationError("切换到 session 模式必须确认 ToS 风险", {
+            tosRisk: SESSION_TOS_RISK_TEXT,
+          });
+        }
+      }
+      const from = (row as { syncMode?: string }).syncMode ?? "api";
+      const updated = await services.prisma.affiliateNetwork.update({
+        where: { id: row.id },
+        data: { syncMode },
+      });
+      await writeCatalogAudit(services.prisma, {
+        tenantId,
+        grantId: grant.id,
+        actorId: info.id,
+        action: "NETWORK_SYNC_MODE_CHANGED",
+        detail: { kind: row.kind, networkId: row.id, from, to: syncMode },
+      });
+      await incrementGrantUsage(services.prisma, grant);
       return {
         network: serializeNetwork(
           updated as Parameters<typeof serializeNetwork>[0]

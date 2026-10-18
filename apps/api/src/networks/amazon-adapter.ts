@@ -11,7 +11,7 @@
  * 安全：凭证加密存储，不打日志，不返回前端。
  */
 import { createHmac, createHash } from "node:crypto";
-import type { NetworkAdapter, NetworkOffer, AdapterContext } from "./types.js";
+import type { NetworkAdapter, NetworkOffer, AdapterContext, SyncMode } from "./types.js";
 
 // PA-API 5.0 各站点 endpoint
 const PA_API_HOSTS: Record<string, string> = {
@@ -384,6 +384,7 @@ export class AmazonAdapter implements NetworkAdapter {
   readonly kind = "amazon";
   readonly displayName = "Amazon";
   readonly defaultBaseUrl = "https://api.amazon.com";
+  readonly supportsModes: readonly SyncMode[] = ["api", "session"] as const;
 
   async pullOffers(ctx: AdapterContext): Promise<NetworkOffer[]> {
     // Amazon 走选品流程而非全量拉取，这里返回空，实际用 searchAmazonProducts
