@@ -24,12 +24,17 @@ export function shouldBlockCsrf(input: {
   const cookie = Array.isArray(input.cookie) ? input.cookie[0] : input.cookie;
   if (!origin || !cookie) return false;
   if (!cookie.includes(`${SESSION_COOKIE_NAME}=`)) return false;
-  let originHost: string;
+  let originUrl: URL;
   try {
-    originHost = new URL(origin).host;
+    originUrl = new URL(origin);
   } catch {
     return false;
   }
+  // 浏览器插件（chrome-extension://）是合法客户端：Origin 头由浏览器设定，
+  // 恶意网站无法伪造该 Origin，因此不视为 CSRF。插件用会话 Cookie 认证
+  // （apps/extension，credentials:include），P1-20 上线后曾误杀导致抓取 403。
+  if (originUrl.protocol === "chrome-extension:") return false;
+  const originHost = originUrl.host;
   if (!host) return false;
   return originHost.toLowerCase() !== host.toLowerCase();
 }

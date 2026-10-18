@@ -37,4 +37,25 @@ describe("P1-20 shouldBlockCsrf", () => {
       shouldBlockCsrf({ host: "adtlab.xyz", cookie: "alk_session=abc" })
     ).toBe(false);
   });
+
+  it("allows the browser extension (chrome-extension:// origin + session cookie)", () => {
+    // 插件抓取用 credentials:include 带会话 Cookie；Origin 由浏览器设定，网站无法伪造。
+    expect(
+      shouldBlockCsrf({
+        origin: "chrome-extension://abcdefghijklmnop",
+        host: "adtlab.xyz",
+        cookie: "alk_session=abc",
+      })
+    ).toBe(false);
+  });
+
+  it("still blocks forged http(s) cross-origin requests", () => {
+    expect(
+      shouldBlockCsrf({
+        origin: "http://evil.example.com",
+        host: "adtlab.xyz",
+        cookie: "alk_session=abc",
+      })
+    ).toBe(true);
+  });
 });
