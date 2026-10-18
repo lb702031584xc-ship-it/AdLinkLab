@@ -5,6 +5,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { loadWorkStateAction } from "@/lib/api/work-state-actions";
 import { getLastOfferId, setLastOfferId, getManualOffer } from "@/lib/current-offer";
 import { useWorkState } from "@/lib/use-work-state";
@@ -19,8 +20,7 @@ import {
   listGoogleAccountsAction,
 } from "@/lib/api/entity-actions";
 import { calcProfit } from "@/lib/profit-calc";
-import { listOfferCapturesAction, parseProductCaptureAiAction, parseOfferCaptureAiAction } from "@/lib/api/ai-actions";
-import { ocrScreenshotAction, type NetworkOcrMetrics } from "@/lib/api/traffic-actions";
+import { listOfferCapturesAction, parseProductCaptureAiAction } from "@/lib/api/ai-actions";
 import { CapturePicker } from "@/components/ai/capture-picker";
 import { AdPreview } from "@/components/ai/ad-preview";
 import {
@@ -1009,10 +1009,9 @@ export function AdsAutoClient({
         setPlan(res.data.plan);
         setCreativeCheck(res.data.creativeCheck ?? null);
         setEditedBudget(String(res.data.plan.campaign.dailyBudget.amount));
-        // 计划货币为准：已填的出价从旧货币换算到计划货币（预算刚从计划填入，已是计划货币，不换）。
+        // 计划货币为准：预算刚从计划填入，已是计划货币。出价统一走投流页快照，无需换算本地出价。
         const planCur = res.data.plan.campaign.dailyBudget.currency || "USD";
         if (planCur !== bidCurrency) {
-          setBidCpc((prev) => convertAmount(prev, bidCurrency, planCur));
           setBidCurrency(planCur);
           ensureFxRateFor(planCur);
         }
@@ -1123,8 +1122,8 @@ export function AdsAutoClient({
     setConfirming(true);
     setError(null);
     try {
-      const maxCpc =
-        bidStrategy !== "plan" && bidCpc ? parseFloat(bidCpc) || undefined : undefined;
+      // 出价统一：最高 CPC 取自投流页快照的推荐出价（已换算为计划货币）；无快照数据时不传。
+      const maxCpc = snapshotMaxCpc ?? undefined;
       const budgetNum = parseFloat(editedBudget);
       const res = await confirmAdPlanAction(plan.planId, maxCpc, {
         dailyBudget: Number.isFinite(budgetNum) && budgetNum > 0 ? budgetNum : undefined,
@@ -1145,11 +1144,9 @@ export function AdsAutoClient({
         if (s.ok) {
           setScriptSource(s.data.source);
           // 记录本次生成时的数值指纹（与 currentScriptFingerprint 同算法）。
-          const maxCpc =
-            bidStrategy !== "plan" && bidCpc ? parseFloat(bidCpc) || null : null;
           setScriptFingerprint(
             JSON.stringify({
-              maxCpc,
+              maxCpc: snapshotMaxCpc,
               budget: editedBudget,
               currency: bidCurrency,
               geo: editedGeo,
@@ -1166,14 +1163,10 @@ export function AdsAutoClient({
     }
   }
 
-  // Bid strategy state
-  const [bidStrategy, setBidStrategy] = useState<"plan" | "conservative" | "moderate" | "aggressive" | "roi" | "custom">("plan");
-  const [bidCommission, setBidCommission] = useState("");
-  const [bidCvr, setBidCvr] = useState("2");
-  /** 期望 ROI（投 1 期望产出 X）：填了就按 EPC ÷ ROI 给出价推荐。 */
-  const [bidRoi, setBidRoi] = useState("2");
-  const [bidCpc, setBidCpc] = useState("");
-  // bidCurrency / fxRate state 声明在 useWorkState 之前（见上方注释），这里只留 refs 与 helpers。
+  // 出价统一：出价只在投流页（/ai/traffic-planner）输入和测算，这里只读引用快照。
+  // 本地不再保留 bidStrategy / bidCommission / bidCvr / bidRoi / bidCpc 输入态；
+  // maxCpc 取自投流页快照的推荐出价（见下方 plannerProfit / recommendedBid）。
+  // bidCurrency / fxRate 保留：预算货币选择与 USD→计划货币展示换算仍需要它们。
 
   // 汇率：fxRate = "1 USD = X 目标货币"（如 7.10 表示 1 USD = 7.10 CNY）。
   // 只在 bidCurrency ≠ USD 时显示。用户手改过则按货币记住（不被默认值覆盖）。
@@ -1201,19 +1194,79 @@ export function AdsAutoClient({
     return String(Math.round(out * 10000) / 10000);
   };
 
-  /* Script 数值指纹：出价/预算/货币/地域/否词/排期任一改动，Script 即过期，提示重新生成。 */
-  const currentScriptFingerprint = (() => {
-    const maxCpc =
-      bidStrategy !== "plan" && bidCpc ? parseFloat(bidCpc) || null : null;
-    return JSON.stringify({
-      maxCpc,
+  // 出价区展示用换算因子：USD 推导值 × 它 = 计划货币下的值。
+  const fxRateNum = parseFloat(fxRate);
+  const fxFactor =
+    bidCurrency === "USD"
+      ? 1
+      : Number.isFinite(fxRateNum) && fxRateNum > 0
+        ? fxRateNum
+        : 1;
+
+  /* 出价统一：本地出价测算/数据获取全部删除，出价只读投流页快照。
+     快照字段（traffic-planner）：payout / networkCvr / targetReturnRatio，均为 USD 口径。 */
+  const [plannerPayout, setPlannerPayout] = useState<string | null>(null);
+  const [plannerCvrPct, setPlannerCvrPct] = useState<string | null>(null);
+  /** 目标产出比：只读，取自投流页快照（投流页是唯一输入地）。 */
+  const [plannerTargetRatio, setPlannerTargetRatio] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        // 库里 Offer 按 offerId 读快照；手动 Offer（offerId 为空）读手动快照（offerId null）。
+        const res = await loadWorkStateAction("traffic-planner", offerId);
+        if (cancelled || !res.ok || !res.data.state) return;
+        const snap = res.data.state as Record<string, unknown>;
+        const str = (v: unknown) =>
+          typeof v === "string" ? v.trim() : typeof v === "number" ? String(v) : "";
+        const p = str(snap.payout);
+        const cvr = str(snap.networkCvr);
+        const ratio = str(snap.targetReturnRatio);
+        if (offerId) {
+          if (p) setPlannerPayout(p);
+          if (cvr) setPlannerCvrPct(cvr);
+          if (ratio) setPlannerTargetRatio(ratio);
+        } else {
+          // 手动快照只补空不覆盖已有值（快照是异步到的，别覆盖已算出的值）。
+          if (p) setPlannerPayout((prev) => (prev != null && prev !== "" ? prev : p));
+          if (cvr) setPlannerCvrPct((prev) => (prev != null && prev !== "" ? prev : cvr));
+          if (ratio) setPlannerTargetRatio((prev) => (prev != null && prev !== "" ? prev : ratio));
+        }
+      } catch {
+        /* 取不到就显示空状态 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [offerId]);
+
+  const plannerProfit = (() => {
+    const payout = plannerPayout !== null ? parseFloat(plannerPayout) : NaN;
+    const cvrPct = plannerCvrPct !== null ? parseFloat(plannerCvrPct) : NaN;
+    const ratio = plannerTargetRatio !== null ? parseFloat(plannerTargetRatio) : NaN;
+    if (!Number.isFinite(payout) || payout <= 0) return null;
+    if (!Number.isFinite(cvrPct) || cvrPct <= 0) return null;
+    if (!Number.isFinite(ratio) || ratio <= 0) return null;
+    return calcProfit({ payout, cpc: 0, cvrF: cvrPct / 100, targetReturnRatio: ratio });
+  })();
+  const recommendedBid = plannerProfit?.maxCpcAtTargetRatio ?? null;
+  const plannerBreakEven = plannerProfit?.breakEvenCpc ?? null;
+  /** 确认/Script 用的最高 CPC：快照推荐出价（USD）→ 计划货币；无快照数据时不传（用计划默认）。 */
+  const snapshotMaxCpc =
+    recommendedBid != null
+      ? Math.round(recommendedBid * fxFactor * 10000) / 10000
+      : null;
+  /* Script 数值指纹：出价（快照推荐）/预算/货币/地域/否词/排期任一改动，Script 即过期，提示重新生成。 */
+  const currentScriptFingerprint = (() =>
+    JSON.stringify({
+      maxCpc: snapshotMaxCpc,
       budget: editedBudget,
       currency: bidCurrency,
       geo: editedGeo,
       negatives: editedNegativesText,
       schedules: editedSchedules,
-    });
-  })();
+    }))();
   const scriptStale =
     scriptSource != null &&
     scriptFingerprint != null &&
@@ -1228,24 +1281,15 @@ export function AdsAutoClient({
     }
   };
 
-  /** 切换计划货币：必须换算金额（editedBudget + bidCpc），不许只改标签。 */
+  /** 切换计划货币：必须换算金额（editedBudget），不许只改标签。
+      出价已统一走投流页快照，无需换算本地出价。 */
   const changePlanCurrency = (next: string) => {
     const target = next || "USD";
     if (target === bidCurrency) return;
     setEditedBudget((prev) => convertAmount(prev, bidCurrency, target));
-    setBidCpc((prev) => convertAmount(prev, bidCurrency, target));
     setBidCurrency(target);
     ensureFxRateFor(target);
   };
-
-  // 出价区展示用换算因子：USD 推导值 × 它 = 计划货币下的值。
-  const fxRateNum = parseFloat(fxRate);
-  const fxFactor =
-    bidCurrency === "USD"
-      ? 1
-      : Number.isFinite(fxRateNum) && fxRateNum > 0
-        ? fxRateNum
-        : 1;
 
   // 货币选项只有两项：[USD, X]，X = 已选账户货币（非 USD 时）否则 CNY，去重。
   const selectedAccountCurrency = (
@@ -1259,16 +1303,11 @@ export function AdsAutoClient({
         : "CNY",
     ])
   );
-  // 佣金是否从上方 Offer 带入（展示提示用）。
-  const [commissionFromOffer, setCommissionFromOffer] = useState<string | null>(null);
-  // Offer 名（关键词检查用，与佣金是否带入无关——之前误把 commissionFromOffer
-  // 当 offerName 传，佣金手填/无 offer 时它是 null，检查接口直接报 offerName 为空）。
+  // Offer 名（关键词检查用）。
   const [offerNameFromOffer, setOfferNameFromOffer] = useState<string | null>(null);
 
-  // 佣金从上方 Offer 带入：?offerId= 时按 commissionType 推导 payout
-  //（fixed → 固定金额；percentage → 均价 × 百分比）。只在输入框为空时带入，不覆盖手填。
-  const bidCommissionRef = useRef("");
-  bidCommissionRef.current = bidCommission;
+  // ?offerId= 时取 Offer 名给关键词检查用。出价相关（佣金/payout）不再这里带入，
+  // 统一走投流页快照（见下方 plannerPayout / plannerCvrPct）。
   useEffect(() => {
     if (!offerId) {
       setOfferNameFromOffer(null);
@@ -1278,201 +1317,14 @@ export function AdsAutoClient({
     void (async () => {
       const res = await getOfferAction(offerId);
       if (cancelled || !res.ok) return;
-      const o = res.data;
-      // Offer 名单独记下来给关键词检查用（与佣金是否带入无关）。
-      if (o.name) setOfferNameFromOffer(o.name);
-      // 用户已手填则不带入（ref 读最新值，避免闭包旧值）。
-      if (bidCommissionRef.current.trim()) return;
-      const value = Number(o.commissionValue);
-      if (!Number.isFinite(value) || value <= 0) return;
-      let payout: number | null = null;
-      if (o.commissionType === "fixed") payout = value;
-      else if (o.commissionType === "percentage") {
-        const avg = Number(o.avgPrice);
-        payout = Number.isFinite(avg) && avg > 0 ? (avg * value) / 100 : null;
-      }
-      if (payout !== null && payout > 0) {
-        setBidCommission(String(Math.round(payout * 100) / 100));
-        setCommissionFromOffer(o.name);
-      }
+      if (res.data.name) setOfferNameFromOffer(res.data.name);
     })();
     return () => {
       cancelled = true;
     };
-    // 只在 offerId 变化时带入一次；commission 变化不重跑（避免覆盖手填）。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offerId]);
 
-  /* 出价策略的数据获取：插件抓取 offer 页 → 填预估佣金；网络后台截图识别 → 填预期转化率。
-     与投流页同一套逻辑：% 是佣金、$ 是按转化计的预估 payout，不混淆；截图只认标 "EPC" 的数字。 */
-  const [bidCaptureBusy, setBidCaptureBusy] = useState(false);
-  const [bidCaptureMsg, setBidCaptureMsg] = useState("");
-  const fillBidFromCapture = async (c: { id: string }) => {
-    setBidCaptureBusy(true);
-    setBidCaptureMsg("");
-    try {
-      const res = await parseOfferCaptureAiAction(c.id);
-      if (!res.ok) {
-        setBidCaptureMsg(d.bidStrategy.captureFailed);
-        return;
-      }
-      const ex = res.data.offer;
-      let payout: number | null = null;
-      if (ex.commissionType === "percentage" && ex.commissionValue != null) {
-        const avg =
-          ex.averageOrderValue != null
-            ? ex.averageOrderValue
-            : ex.estimatedPayout != null && ex.commissionValue > 0
-              ? ex.estimatedPayout / (ex.commissionValue / 100)
-              : null;
-        if (avg != null && Number.isFinite(avg) && avg > 0) {
-          payout = (avg * ex.commissionValue) / 100;
-        } else if (ex.estimatedPayout != null) {
-          payout = ex.estimatedPayout;
-        }
-      } else if (ex.commissionType === "fixed" && ex.commissionValue != null) {
-        payout = ex.commissionValue;
-      } else if (ex.estimatedPayout != null) {
-        payout = ex.estimatedPayout;
-      }
-      if (payout != null && Number.isFinite(payout) && payout > 0) {
-        setBidCommission(String(Math.round(payout * 100) / 100));
-        setBidCaptureMsg(d.bidStrategy.captureFilled);
-      } else {
-        setBidCaptureMsg(d.bidStrategy.captureNone);
-      }
-    } finally {
-      setBidCaptureBusy(false);
-    }
-  };
-  const [bidOcrBusy, setBidOcrBusy] = useState(false);
-  const [bidOcrMsg, setBidOcrMsg] = useState("");
-  const bidOcrFileRef = useRef<HTMLInputElement>(null);
-  const ocrBidScreenshot = async (file: File) => {
-    setBidOcrBusy(true);
-    setBidOcrMsg("");
-    try {
-      const fd = new FormData();
-      fd.append("screenshot", file);
-      const res = await ocrScreenshotAction(fd, "network");
-      if (!res.ok) {
-        setBidOcrMsg(res.error);
-        return;
-      }
-      const m: NetworkOcrMetrics = res.data;
-      if (m.conversionRate != null) {
-        setBidCvr(String(m.conversionRate));
-        setBidOcrMsg(`${d.bidStrategy.ocrFilled}：${m.conversionRate}%（${d.bidStrategy.ocrReview}）`);
-      } else {
-        setBidOcrMsg(d.bidStrategy.ocrNone);
-      }
-    } finally {
-      setBidOcrBusy(false);
-      if (bidOcrFileRef.current) bidOcrFileRef.current.value = "";
-    }
-  };
-
-  // 出价测算：统一走 @/lib/profit-calc（与盈利测算/工作表同一套公式）。
-  const bidProfit = (() => {
-    const commission = parseFloat(bidCommission);
-    const cvrPct = parseFloat(bidCvr);
-    if (!Number.isFinite(commission) || commission <= 0) return null;
-    const cvrF = Number.isFinite(cvrPct) && cvrPct > 0 ? cvrPct / 100 : 0.02;
-    return calcProfit({ payout: commission, cpc: 0, cvrF });
-  })();
-
-  // 三档出价建议：盈亏平衡 CPC × 系数（保守 50% / 稳健 70% / 激进 90%）。
-  const bidSuggestions =
-    bidProfit?.breakEvenCpc !== null && bidProfit?.breakEvenCpc !== undefined
-      ? {
-          breakEven: bidProfit.breakEvenCpc,
-          conservative: bidProfit.breakEvenCpc * 0.5,
-          moderate: bidProfit.breakEvenCpc * 0.7,
-          aggressive: bidProfit.breakEvenCpc * 0.9,
-        }
-      : null;
-
-  // 推荐出价：取该 offer 的投流页快照 payout + CVR，用 calcProfit 算 EPC。
-  const [plannerPayout, setPlannerPayout] = useState<string | null>(null);
-  const [plannerCvrPct, setPlannerCvrPct] = useState<string | null>(null);
-  const [targetReturnRatio, setTargetReturnRatio] = useState("2");
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        // 库里 Offer 按 offerId 读快照；手动 Offer（offerId 为空）读手动快照（offerId null）。
-        const res = await loadWorkStateAction("traffic-planner", offerId);
-        if (cancelled || !res.ok || !res.data.state) return;
-        const snap = res.data.state as Record<string, unknown>;
-        const str = (v: unknown) =>
-          typeof v === "string" ? v.trim() : typeof v === "number" ? String(v) : "";
-        const p = str(snap.payout);
-        const cvr = str(snap.networkCvr);
-        if (offerId) {
-          if (p) setPlannerPayout(p);
-          if (cvr) setPlannerCvrPct(cvr);
-        } else {
-          // 手动快照只补空不覆盖已有值（快照是异步到的，别覆盖已算出的值）。
-          if (p) setPlannerPayout((prev) => (prev != null && prev !== "" ? prev : p));
-          if (cvr) setPlannerCvrPct((prev) => (prev != null && prev !== "" ? prev : cvr));
-        }
-      } catch {
-        /* 取不到就显示空状态 */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [offerId]);
-
-  const plannerProfit = (() => {
-    const payout = plannerPayout !== null ? parseFloat(plannerPayout) : NaN;
-    const cvrPct = plannerCvrPct !== null ? parseFloat(plannerCvrPct) : NaN;
-    const ratio = parseFloat(targetReturnRatio);
-    if (!Number.isFinite(payout) || payout <= 0) return null;
-    if (!Number.isFinite(cvrPct) || cvrPct <= 0) return null;
-    if (!Number.isFinite(ratio) || ratio <= 0) return null;
-    return calcProfit({ payout, cpc: 0, cvrF: cvrPct / 100, targetReturnRatio: ratio });
-  })();
-  const recommendedBid = plannerProfit?.maxCpcAtTargetRatio ?? null;
-  const plannerBreakEven = plannerProfit?.breakEvenCpc ?? null;
-
-  // 期望 ROI 出价推荐：EPC ÷ ROI（USD），展示时 × 换算因子。
-  const roiBidUsd = (() => {
-    const roi = parseFloat(bidRoi);
-    if (!Number.isFinite(roi) || roi <= 0) return null;
-    if (bidProfit == null) return null;
-    return bidProfit.epc / roi;
-  })();
-
-  // 选中档位的单次点击利润 = EPC − 该档 CPC（内部统一按 USD 算，展示时 × 换算因子）。
-  // 三档建议是 USD 推导值；自定义 bidCpc 是计划货币，需先换回 USD 再算。
-  const selectedTierCpcUsd =
-    bidStrategy === "conservative" ||
-    bidStrategy === "moderate" ||
-    bidStrategy === "aggressive"
-      ? (bidSuggestions?.[bidStrategy] ?? null)
-      : bidStrategy === "roi"
-        ? roiBidUsd
-        : bidStrategy === "custom"
-        ? (() => {
-            const c = parseFloat(bidCpc);
-            return Number.isFinite(c) ? c / fxFactor : null;
-          })()
-        : null;
-  const selectedPerClickProfit =
-    bidProfit !== null && selectedTierCpcUsd !== null
-      ? bidProfit.epc - selectedTierCpcUsd
-      : null;
-
-  function selectBidStrategy(s: "conservative" | "moderate" | "aggressive" | "roi") {
-    setBidStrategy(s);
-    const v = s === "roi" ? roiBidUsd : bidSuggestions?.[s];
-    if (v != null) {
-      // 采用换算后的值（计划货币），确认推出去的是计划货币的数。
-      setBidCpc((v * fxFactor).toFixed(4));
-    }
-  }
 
   async function onDownloadPack() {
     if (!plan) return;
@@ -1976,235 +1828,59 @@ export function AdsAutoClient({
             onSchedulesChange={setEditedSchedules}
           />
 
-          {/* Bid strategy selection */}
+          {/* 出价策略：只读引用投流页快照。出价只在投流页输入和测算，这里不做任何输入。 */}
           <div className={`mt-4 ${cardClass}`}>
             <h3 className="text-sm font-semibold text-ink">{d.bidStrategy.title}</h3>
             <p className="mt-1 text-sm text-ink/65">{d.bidStrategy.description}</p>
-            <div className="mt-3 grid gap-3 md:grid-cols-4">
-              <div>
-                <label className={labelClass}>
-                  {d.bidStrategy.commissionLabel} (USD)
-                </label>
-                <input
-                  inputMode="decimal"
-                  value={bidCommission}
-                  onChange={(e) => setBidCommission(e.target.value)}
-                  placeholder="12.50"
-                  className={inputClass}
-                />
-                {commissionFromOffer && (
-                  <p className="mt-1 text-xs text-ink/55">
-                    ✓ {d.bidStrategy.fromOffer}：{commissionFromOffer}
-                  </p>
-                )}
-              </div>
-              <div>
-                <label className={labelClass}>{d.bidStrategy.cvrLabel}</label>
-                <input
-                  inputMode="decimal"
-                  value={bidCvr}
-                  onChange={(e) => setBidCvr(e.target.value)}
-                  placeholder="2"
-                  className={inputClass}
-                />
-              </div>
-              <div>
-                <label className={labelClass}>{d.bidStrategy.roiLabel}</label>
-                <input
-                  inputMode="decimal"
-                  value={bidRoi}
-                  onChange={(e) => setBidRoi(e.target.value)}
-                  placeholder="2"
-                  className={inputClass}
-                />
-              </div>
-              <div>
-                <label className={labelClass}>{d.bidStrategy.currencyLabel}</label>
-                <select
-                  value={bidCurrency}
-                  onChange={(e) => changePlanCurrency(e.target.value)}
-                  className={inputClass}
-                >
-                  {planCurrencyOptions.map((c) => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            {/* 汇率：仅计划货币非 USD 时显示。1 USD = fxRate 计划货币。 */}
-            {bidCurrency !== "USD" && (
-              <div className="mt-3 flex flex-wrap items-end gap-2">
-                <div>
-                  <label className={labelClass}>{d.bidStrategy.fxRateLabel}</label>
-                  <input
-                    inputMode="decimal"
-                    value={fxRate}
-                    onChange={(e) => {
-                      setFxRate(e.target.value);
-                      fxRateEditedRef.current = true;
-                      fxRateCurrencyRef.current = bidCurrency;
-                    }}
-                    placeholder="7.10"
-                    className={`${inputClass} w-28`}
-                  />
-                </div>
-                <p className="text-xs text-ink/55">
-                  1 USD = {fxRate} {bidCurrency}
-                </p>
-              </div>
-            )}
-            {/* 出价数据表：始终渲染，佣金未填时显示 — */}
-            {/* 数据获取：插件抓取填预估佣金 / 网络后台截图识别填预期转化率 */}
-            <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-ink/10 pt-3">
-              <span className="text-xs font-medium text-ink/70">{d.bidStrategy.dataTools}：</span>
-              <CapturePicker onPick={fillBidFromCapture} label={d.bidStrategy.captureLabel} />
-              {bidCaptureBusy ? <span className="text-xs text-ink/50">{d.bidStrategy.captureBusy}</span> : null}
-              <label className="inline-flex cursor-pointer items-center gap-1 rounded-lg bg-signal/10 px-2.5 py-1 text-xs font-medium text-signal transition hover:bg-signal/20">
-                {bidOcrBusy ? d.bidStrategy.ocrBusy : d.bidStrategy.ocrLabel}
-                <input
-                  ref={bidOcrFileRef}
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  disabled={bidOcrBusy}
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) void ocrBidScreenshot(f);
-                  }}
-                />
-              </label>
-            </div>
-            {bidCaptureMsg ? <p className="mt-1 text-xs text-ink/60">{bidCaptureMsg}</p> : null}
-            {bidOcrMsg ? <p className="mt-1 text-xs text-ink/60">{bidOcrMsg}</p> : null}
-            <dl className="mt-3 grid grid-cols-2 gap-2 text-sm md:grid-cols-3">
-              <div className="rounded-lg bg-ink/[0.03] px-3 py-2">
-                <dt className="text-ink/55">{d.bidStrategy.breakEven}</dt>
-                <dd className="mt-0.5 font-medium text-ink">
-                  {bidSuggestions
-                    ? `${(bidSuggestions.breakEven * fxFactor).toFixed(4)} ${bidCurrency}`
-                    : "—"}
-                </dd>
-              </div>
-              <div className="rounded-lg bg-ink/[0.03] px-3 py-2">
-                <dt className="text-ink/55">{d.bidStrategy.epc}</dt>
-                <dd className="mt-0.5 font-medium text-ink">
-                  {bidProfit !== null
-                    ? `${(bidProfit.epc * fxFactor).toFixed(4)} ${bidCurrency}`
-                    : "—"}
-                </dd>
-              </div>
-              <div className="rounded-lg bg-ink/[0.03] px-3 py-2">
-                <dt className="text-ink/55">{d.bidStrategy.perClickProfit}</dt>
-                <dd
-                  className={`mt-0.5 font-medium ${
-                    selectedPerClickProfit !== null
-                      ? selectedPerClickProfit >= 0
-                        ? "text-emerald-700"
-                        : "text-red-600"
-                      : "text-ink"
-                  }`}
-                >
-                  {selectedPerClickProfit !== null
-                    ? `${selectedPerClickProfit * fxFactor >= 0 ? "+" : ""}${(selectedPerClickProfit * fxFactor).toFixed(4)} ${bidCurrency}`
-                    : "—"}
-                </dd>
-              </div>
-            </dl>
-            {bidSuggestions && (
-              <div className="mt-3 grid gap-2 md:grid-cols-5">
-                <button
-                  type="button"
-                  onClick={() => setBidStrategy("plan")}
-                  className={`rounded-lg border px-3 py-2 text-sm ${bidStrategy === "plan" ? "border-ink bg-ink text-white" : "border-ink/15"}`}
-                >
-                  {d.bidStrategy.usePlanDefault}
-                </button>
-                {roiBidUsd != null ? (
-                  <button
-                    type="button"
-                    onClick={() => selectBidStrategy("roi")}
-                    className={`rounded-lg border px-3 py-2 text-sm ${bidStrategy === "roi" ? "border-ink bg-ink text-white" : "border-ink/15"}`}
-                  >
-                    {d.bidStrategy.roiBid}: {(roiBidUsd * fxFactor).toFixed(4)}
-                  </button>
-                ) : null}
-                {(["conservative", "moderate", "aggressive"] as const).map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => selectBidStrategy(s)}
-                    className={`rounded-lg border px-3 py-2 text-sm ${bidStrategy === s ? "border-ink bg-ink text-white" : "border-ink/15"}`}
-                  >
-                    {d.bidStrategy[s]}: {(bidSuggestions[s] * fxFactor).toFixed(4)}
-                  </button>
-                ))}
-              </div>
-            )}
-            <div className="mt-3">
-              <label className={labelClass}>{d.bidStrategy.customCpc}</label>
-              <input
-                inputMode="decimal"
-                value={bidCpc}
-                onChange={(e) => { setBidCpc(e.target.value); setBidStrategy("custom"); }}
-                placeholder={d.bidStrategy.customPlaceholder}
-                className={`${inputClass} max-w-xs`}
-              />
-            </div>
-            {/* 推荐出价：保本 CPC + EPC ÷ (1 + 目标 ROI)，取自投流页测算 */}
-            <div className="mt-4 rounded-lg border border-ink/10 bg-ink/[0.02] p-3">
-              <p className="text-sm font-semibold text-ink">{d.bidStrategy.recommendedTitle}</p>
-              {plannerProfit ? (
-                <>
-                  <dl className="mt-2 grid grid-cols-2 gap-2 text-sm">
-                    <div>
-                      <dt className="text-ink/55">{d.bidStrategy.recommendedBreakEven}</dt>
-                      <dd className="mt-0.5 font-medium text-ink">
-                        {plannerBreakEven !== null
-                          ? `${(plannerBreakEven * fxFactor).toFixed(4)} ${bidCurrency}`
-                          : "—"}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="text-ink/55">{d.bidStrategy.recommendedValue}</dt>
-                      <dd className="mt-0.5 font-medium text-ink">
-                        {recommendedBid !== null
-                          ? `${(recommendedBid * fxFactor).toFixed(4)} ${bidCurrency}`
-                          : "—"}
-                      </dd>
-                    </div>
-                  </dl>
-                  <div className="mt-2 flex flex-wrap items-end gap-2">
-                    <div>
-                      <label className={labelClass}>{d.bidStrategy.targetReturnRatioLabel}</label>
-                      <input
-                        inputMode="decimal"
-                        value={targetReturnRatio}
-                        onChange={(e) => setTargetReturnRatio(e.target.value)}
-                        placeholder="2"
-                        className={`${inputClass} w-24`}
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (recommendedBid === null) return;
-                        // 采用换算后的值（计划货币），确认推出去的是计划货币的数。
-                        setBidCpc((recommendedBid * fxFactor).toFixed(4));
-                        setBidStrategy("custom");
-                      }}
-                      disabled={recommendedBid === null}
-                      className="rounded-lg bg-ink px-3 py-2 text-sm font-medium text-paper disabled:opacity-50"
-                    >
-                      {d.bidStrategy.adoptRecommended}
-                    </button>
+            {plannerProfit ? (
+              <>
+                <dl className="mt-3 grid grid-cols-2 gap-2 text-sm md:grid-cols-4">
+                  <div className="rounded-lg bg-ink/[0.03] px-3 py-2">
+                    <dt className="text-ink/55">{d.bidStrategy.recommendedBreakEven}</dt>
+                    <dd className="mt-0.5 font-medium text-ink">
+                      {plannerBreakEven !== null
+                        ? `${(plannerBreakEven * fxFactor).toFixed(4)} ${bidCurrency}`
+                        : "—"}
+                    </dd>
                   </div>
-                  <p className="mt-1 text-xs text-ink/55">{d.bidStrategy.recommendedHint}</p>
-                </>
-              ) : (
-                <p className="mt-1 text-sm text-ink/60">{d.bidStrategy.noPlannerData}</p>
-              )}
-            </div>
-            <p className="mt-2 text-xs text-ink/55">{d.bidStrategy.currencyHint}</p>
+                  <div className="rounded-lg bg-ink/[0.03] px-3 py-2">
+                    <dt className="text-ink/55">{d.bidStrategy.recommendedValue}</dt>
+                    <dd className="mt-0.5 font-medium text-ink">
+                      {snapshotMaxCpc !== null
+                        ? `${snapshotMaxCpc.toFixed(4)} ${bidCurrency}`
+                        : "—"}
+                    </dd>
+                  </div>
+                  <div className="rounded-lg bg-ink/[0.03] px-3 py-2">
+                    <dt className="text-ink/55">{d.bidStrategy.targetReturnRatioLabel}</dt>
+                    <dd className="mt-0.5 font-medium text-ink">
+                      {plannerTargetRatio ?? "—"}
+                    </dd>
+                  </div>
+                  <div className="rounded-lg bg-ink/[0.03] px-3 py-2">
+                    <dt className="text-ink/55">{d.bidStrategy.currencyLabel}</dt>
+                    <dd className="mt-0.5 font-medium text-ink">{bidCurrency}</dd>
+                  </div>
+                </dl>
+                <p className="mt-2 text-xs text-ink/55">{d.bidStrategy.recommendedHint}</p>
+                <Link
+                  href={offerId ? `/ai/traffic-planner?offerId=${encodeURIComponent(offerId)}` : "/ai/traffic-planner"}
+                  className="mt-2 inline-block text-sm font-medium text-signal underline"
+                >
+                  {d.bidStrategy.goToPlanner}
+                </Link>
+              </>
+            ) : (
+              <div className="mt-3 rounded-lg border border-dashed border-ink/20 p-4 text-center">
+                <p className="text-sm text-ink/70">{d.bidStrategy.emptyDesc}</p>
+                <Link
+                  href={offerId ? `/ai/traffic-planner?offerId=${encodeURIComponent(offerId)}` : "/ai/traffic-planner"}
+                  className="mt-2 inline-block rounded-lg bg-ink px-3 py-2 text-sm font-medium text-paper"
+                >
+                  {d.bidStrategy.emptyButton}
+                </Link>
+              </div>
+            )}
           </div>
 
           <div className={`mt-4 ${cardClass}`}>
