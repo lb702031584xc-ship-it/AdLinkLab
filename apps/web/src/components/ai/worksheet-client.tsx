@@ -1062,6 +1062,11 @@ export function WorksheetClient({
 
   // 分析对象：可从 offer 库选择，或手动输入
   const [offer, setOffer] = useState<WorksheetOffer | null>(initialOffer);
+  /** 明确采用 offer 的次数：库里选择 / 手动应用 / 清除时 +1，传给 ④ 作 key 强制重挂。
+      ④ 不能只看 initialOffer 的 id 判切换——手动 offer 的 id 永远是 ""，手动 A→手动 B
+      会被误判为"没切换"而残留旧数据；也不能看名字，打字改名时 key 每敲一字母就变。
+      只有明确采用时才 +1，打字改名不触发。 */
+  const [offerSession, setOfferSession] = useState(0);
   const [manualOpen, setManualOpen] = useState(false);
   const [mName, setMName] = useState("");
   const [mNetwork, setMNetwork] = useState("");
@@ -1070,12 +1075,19 @@ export function WorksheetClient({
   const applyManualOffer = () => {
     const name = mName.trim();
     if (!name) return;
+    // 手动采用也是切 offer：清空旧 offer 的步骤结果，避免残留/污染新 offer（与库里选择一致）。
+    setTermsVerdict(null);
+    setComplianceResults(null);
+    setComplianceCounted(true);
+    setProfitState(null);
+    setTrafficResult(null);
     setOffer({
       id: "",
       name,
       network: mNetwork.trim(),
       destinationUrl: mUrl.trim(),
     });
+    setOfferSession((n) => n + 1);
     setManualOpen(false);
   };
 
@@ -1640,6 +1652,7 @@ export function WorksheetClient({
               setProfitState(null);
               setTrafficResult(null);
               setOffer(sel);
+              setOfferSession((n) => n + 1);
               setLastOfferId(sel?.id ?? null);
               setManualOpen(false);
               // 再加载新 offer 的快照（有则恢复）
@@ -1676,6 +1689,7 @@ export function WorksheetClient({
               type="button"
               onClick={() => {
                 setOffer(null);
+                setOfferSession((n) => n + 1);
                 setLastOfferId(null);
               }}
               className="text-xs text-ink/40 hover:text-red-600"
@@ -1919,6 +1933,7 @@ export function WorksheetClient({
         onToggle={() => toggleStep(5)}
       >
         <TrafficPlannerClient
+          key={offerSession}
           showSetupNudge={false}
           hideHeader
           onResult={setTrafficResult}
