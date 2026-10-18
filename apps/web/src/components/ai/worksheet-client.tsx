@@ -11,7 +11,14 @@ import {
   evaluateDemandGate,
   type DemandGateKeyword,
 } from "@/lib/demand-gate";
-import { judgeKeywordRelevanceAction } from "@/lib/api/ai-actions";
+/* 关键词结论：verdict 口径唯一来源是需求验证页（/keywords/starter），工作表只消费结论。 */
+import { verdictOf, type DemandRow } from "@/components/keywords/demand-check-client";
+/* 一票否决 min 口径：唯一实现（与 blueprint §7 共用）。 */
+import {
+  leg,
+  synthesizeVerdict,
+  type VerdictLegs,
+} from "../../../../../packages/shared/src/verdict";
 import {
   listWorkStateHistoryAction,
   loadWorkStateAction,
@@ -623,15 +630,11 @@ function DemandGateStep({
   onChange,
   initialValues,
   offerId,
-  offerName,
-  offerDescription,
   isAmazon,
 }: {
   onChange: (s: DemandGateState | null) => void;
   initialValues?: DemandGateState["inputs"];
   offerId?: string | null;
-  offerName: string;
-  offerDescription: string;
   isAmazon: boolean;
 }) {
   const t = useDict();
@@ -644,23 +647,13 @@ function DemandGateStep({
   const [amazonSales, setAmazonSales] = useState(initialValues?.amazonSales ?? "");
   const [amazonReviews, setAmazonReviews] = useState(initialValues?.amazonReviews ?? "");
   const [amazonRating, setAmazonRating] = useState(initialValues?.amazonRating ?? "");
-  const [kwList, setKwList] = useState<Array<{ keyword: string; volume: string }>>(
-    () => (initialValues?.judgments ?? []).map((j) => ({ keyword: j.keyword, volume: j.volume }))
-  );
-  const [judgments, setJudgments] = useState<Record<string, { relevant: boolean; reason: string }>>(
-    () => {
-      const m: Record<string, { relevant: boolean; reason: string }> = {};
-      for (const j of initialValues?.judgments ?? []) {
-        m[j.keyword.trim().toLowerCase()] = { relevant: j.relevant, reason: j.reason };
-      }
-      return m;
-    }
-  );
-  const [judging, setJudging] = useState(false);
-  const [judgeError, setJudgeError] = useState<string | null>(null);
+  /* 关键词只从需求验证页快照读（查/选/改都在 /keywords/starter 做，工作表只消费结论）。
+     行里带 volume/competition/intent/trend，供 verdictOf 算结论。 */
+  const [kwRows, setKwRows] = useState<DemandRow[]>([]);
   const snapshotAppliedRef = useRef(false);
 
-  /* 快照晚到：只填空字段；判断结果只合并未判过的词 */
+  /* 快照晚到：只填空字段（域名/亚马逊输入区）。关键词结论只从需求验证页快照读，
+     不再合并工作表旧快照的 judgments（旧版内嵌 AI 判断已下线）。 */
   useEffect(() => {
     if (!initialValues || snapshotAppliedRef.current) return;
     snapshotAppliedRef.current = true;
@@ -671,25 +664,11 @@ function DemandGateStep({
     if (!amazonSales && initialValues.amazonSales) setAmazonSales(initialValues.amazonSales);
     if (!amazonReviews && initialValues.amazonReviews) setAmazonReviews(initialValues.amazonReviews);
     if (!amazonRating && initialValues.amazonRating) setAmazonRating(initialValues.amazonRating);
-    setJudgments((prev) => {
-      const next = { ...prev };
-      for (const j of initialValues.judgments ?? []) {
-        const key = j.keyword.trim().toLowerCase();
-        if (!next[key]) next[key] = { relevant: j.relevant, reason: j.reason };
-      }
-      return next;
-    });
-    setKwList((prev) => {
-      const seen = new Set(prev.map((k) => k.keyword.trim().toLowerCase()));
-      const add = (initialValues.judgments ?? [])
-        .filter((j) => !seen.has(j.keyword.trim().toLowerCase()))
-        .map((j) => ({ keyword: j.keyword, volume: j.volume }));
-      return add.length ? [...prev, ...add] : prev;
-    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialValues]);
 
-  /* 关键词：从需求验证页快照取（SEMrush 数据在那页，page key = keyword-research）。 */
+  /* 关键词结论：从需求验证页快照取全行（page key = keyword-research）。
+     verdict 口径唯一来源是那页的 verdictOf，这里只读。 */
   useEffect(() => {
     if (!offerId) return;
     let cancelled = false;
@@ -697,21 +676,19 @@ function DemandGateStep({
       try {
         const res = await loadWorkStateAction("keyword-research", offerId);
         if (cancelled || !res.ok || !res.data.state) return;
-        const rows = (res.data.state.rows ?? []) as Array<{ keyword?: string; volume?: string }>;
+        const rows = (res.data.state.rows ?? []) as Partial<DemandRow>[];
         const incoming = rows
-          .map((r) => ({ keyword: (r.keyword ?? "").trim(), volume: (r.volume ?? "").trim() }))
-          .filter((r) => r.keyword);
+          .filter((r) => r && typeof r.keyword === "string" && r.keyword.trim())
+          .map((r) => ({
+            id: typeof r.id === "string" ? r.id : r.keyword!.trim(),
+            keyword: r.keyword!.trim(),
+            volume: typeof r.volume === "string" ? r.volume : "",
+            trend: r.trend === "up" || r.trend === "down" ? r.trend : ("flat" as const),
+            competition: r.competition === "low" || r.competition === "high" ? r.competition : ("medium" as const),
+            intent: r.intent === "review" || r.intent === "compare" || r.intent === "info" ? r.intent : ("buy" as const),
+          }));
         if (incoming.length === 0) return;
-        setKwList((prev) => {
-          const byKey = new Map(prev.map((k) => [k.keyword.trim().toLowerCase(), k]));
-          for (const k of incoming) {
-            const key = k.keyword.toLowerCase();
-            const cur = byKey.get(key);
-            // 需求验证页的量是最新的，覆盖；没量的旧词保留
-            byKey.set(key, { keyword: cur?.keyword ?? k.keyword, volume: k.volume || cur?.volume || "" });
-          }
-          return [...byKey.values()];
-        });
+        setKwRows(incoming);
       } catch {
         /* 取不到就不填 */
       }
@@ -721,18 +698,34 @@ function DemandGateStep({
     };
   }, [offerId]);
 
+  /* 关键词 verdict 口径唯一来源：需求验证页的 verdictOf（good/caution 算相关，bad 不算）。
+     工作表不再内嵌 AI 判断关键词相关性——查/选/判都在 /keywords/starter。 */
   const gateKeywords: DemandGateKeyword[] = useMemo(
     () =>
-      kwList.map((k) => ({
-        keyword: k.keyword,
+      kwRows.map((r) => ({
+        keyword: r.keyword,
         volume: (() => {
-          const n = parseFloat(k.volume);
+          const n = parseFloat(r.volume);
           return Number.isFinite(n) && n >= 0 ? n : null;
         })(),
-        relevant: judgments[k.keyword.trim().toLowerCase()]?.relevant ?? null,
+        relevant: verdictOf(r) !== "bad",
       })),
-    [kwList, judgments]
+    [kwRows]
   );
+
+  /* 结论卡统计：值得跟进 / 谨慎 / 放弃。 */
+  const verdictCounts = useMemo(() => {
+    let good = 0;
+    let caution = 0;
+    let bad = 0;
+    for (const r of kwRows) {
+      const v = verdictOf(r);
+      if (v === "good") good += 1;
+      else if (v === "caution") caution += 1;
+      else bad += 1;
+    }
+    return { good, caution, bad };
+  }, [kwRows]);
 
   const result = useMemo(() => {
     const num = (s: string) => {
@@ -762,13 +755,21 @@ function DemandGateStep({
     }
     const status: StepStatus =
       result.verdict === "pass" ? "pass" : result.verdict === "caution" ? "warn" : "fail";
-    const judged = gateKeywords
-      .filter((k) => k.relevant !== null)
-      .map((k) => {
-        const j = judgments[k.keyword.trim().toLowerCase()]!;
-        const vol = kwList.find((x) => x.keyword.trim().toLowerCase() === k.keyword.trim().toLowerCase())?.volume ?? "";
-        return { keyword: k.keyword, volume: vol, relevant: j.relevant, reason: j.reason };
-      });
+    /* judgments 快照形状保持兼容：relevant 来自需求验证页 verdict（good/caution=相关），
+       reason 写 verdict 档位，供给流量门取词等下游使用。 */
+    const judged = kwRows.map((row) => {
+      const v = verdictOf(row);
+      const volume = (() => {
+        const n = parseFloat(row.volume);
+        return Number.isFinite(n) && n >= 0 ? String(n) : "";
+      })();
+      return {
+        keyword: row.keyword,
+        volume,
+        relevant: v !== "bad",
+        reason: v,
+      };
+    });
     onChange({
       status,
       summary: `${g.relevantVolume} ${fmt(result.relevantVolume, 0)} · ${g.estimatedClicks} ${result.estimatedClicks !== null ? fmt(result.estimatedClicks, 0) : "—"} · ${g.relevantRatio} ${result.relevanceRatio !== null ? `${fmt(result.relevanceRatio * 100)}%` : "—"}`,
@@ -785,39 +786,6 @@ function DemandGateStep({
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result]);
-
-  const judge = async () => {
-    const todo = kwList.filter((k) => judgments[k.keyword.trim().toLowerCase()] == null);
-    if (todo.length === 0 || judging) return;
-    setJudging(true);
-    setJudgeError(null);
-    try {
-      const res = await judgeKeywordRelevanceAction(
-        offerName,
-        offerDescription,
-        todo.map((k) => ({
-          keyword: k.keyword,
-          volume: (() => {
-            const n = parseFloat(k.volume);
-            return Number.isFinite(n) && n >= 0 ? n : null;
-          })(),
-        }))
-      );
-      if (!res.ok) {
-        setJudgeError(res.error);
-        return;
-      }
-      setJudgments((prev) => {
-        const next = { ...prev };
-        for (const j of res.data.judgments) {
-          next[j.keyword.trim().toLowerCase()] = { relevant: j.relevant, reason: j.reason };
-        }
-        return next;
-      });
-    } finally {
-      setJudging(false);
-    }
-  };
 
   const inputClass =
     "w-full rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm text-ink placeholder:text-ink/35 focus:border-signal focus:outline-none";
@@ -944,61 +912,38 @@ function DemandGateStep({
         </div>
       ) : null}
 
-      <div className="mt-4 flex flex-wrap items-center gap-3">
-        <p className="text-sm font-medium text-ink">
-          {g.keywordsTitle} ({kwList.length})
-        </p>
-        <button
-          type="button"
-          onClick={judge}
-          disabled={judging || kwList.length === 0}
-          className="rounded-lg bg-ink px-3 py-1.5 text-xs font-medium text-white hover:bg-ink/85 disabled:opacity-50"
-        >
-          {judging ? g.judging : g.judgeButton}
-        </button>
-        <Link
-          href={`/keywords/starter?offerId=${encodeURIComponent(offerId)}`}
-          className="text-xs text-signal hover:underline"
-        >
-          {g.goDemandPage} →
-        </Link>
-      </div>
-      {judgeError ? <p className="mt-1 text-xs text-red-600">{judgeError}</p> : null}
-      {kwList.length === 0 ? (
-        <p className="mt-2 text-sm text-ink/55">{g.noKeywords}</p>
-      ) : (
-        <div className="mt-2 max-h-64 overflow-y-auto rounded-lg border border-ink/10">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-ink/[0.03]">
-              <tr>
-                <th className="px-3 py-1.5 font-medium text-ink/70">{g.colKeyword}</th>
-                <th className="px-3 py-1.5 font-medium text-ink/70">{g.colVolume}</th>
-                <th className="px-3 py-1.5 font-medium text-ink/70">{g.colRelevant}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {kwList.map((k) => {
-                const j = judgments[k.keyword.trim().toLowerCase()];
-                return (
-                  <tr key={k.keyword} className="border-t border-ink/5">
-                    <td className="px-3 py-1.5 font-medium text-ink">{k.keyword}</td>
-                    <td className="px-3 py-1.5 text-ink/70">{k.volume || "—"}</td>
-                    <td className="px-3 py-1.5" title={j?.reason}>
-                      {j == null ? (
-                        <span className="text-ink/40">{g.notJudged}</span>
-                      ) : j.relevant ? (
-                        <span className="text-green-700">✅ {g.relevantYes}{j.reason ? ` · ${j.reason}` : ""}</span>
-                      ) : (
-                        <span className="text-ink/50">❌ {g.relevantNo}{j.reason ? ` · ${j.reason}` : ""}</span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+      {/* 关键词结论卡：查/选/改只在 /keywords/starter 做，这里只消费 verdictOf 结论。 */}
+      <div className="mt-4 rounded-lg border border-ink/10 bg-white p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm font-medium text-ink">
+            {g.keywordsConclusionTitle} ({kwRows.length})
+          </p>
+          <Link
+            href={`/keywords/starter?tab=research&offerId=${encodeURIComponent(offerId)}`}
+            className="rounded-lg bg-ink px-3 py-1.5 text-xs font-medium text-white hover:bg-ink/85"
+          >
+            {g.goKeywords} →
+          </Link>
         </div>
-      )}
+        {kwRows.length === 0 ? (
+          <p className="mt-2 text-sm text-ink/55">{g.noKeywords}</p>
+        ) : (
+          <>
+            <div className="mt-2 flex flex-wrap gap-2 text-sm">
+              <span className="rounded-full bg-green-100 px-3 py-1 font-medium text-green-800">
+                ✅ {g.kwVerdictGood} {verdictCounts.good}
+              </span>
+              <span className="rounded-full bg-amber-100 px-3 py-1 font-medium text-amber-800">
+                ⚠️ {g.kwVerdictCaution} {verdictCounts.caution}
+              </span>
+              <span className="rounded-full bg-red-100 px-3 py-1 font-medium text-red-700">
+                ❌ {g.kwVerdictBad} {verdictCounts.bad}
+              </span>
+            </div>
+            <p className="mt-2 text-xs text-ink/55">{g.keywordsConclusionHint}</p>
+          </>
+        )}
+      </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <span className={`rounded-full px-3 py-1 text-sm font-semibold ${statusCls}`}>{statusText}</span>
@@ -1551,10 +1496,9 @@ export function WorksheetClient({
           ? w.verdict.noGo
           : w.verdict.incomplete;
 
-  /* P0-1 一票否决汇总条（只展示已有分析结果的合成，不改任何判定逻辑）：
-     条款 stop（= DO_NOT_RUN）/ 盈利 EPC ≤ CPC / 流量门 passed=false 任一命中 → 红条；
-     仅 unknown（条款/盈利/流量门尚未分析或暂无数据）且无红条 → 黄条；两者都没有 → 不显示。
-     流量门 unknown（passed=null，暂无数据）绝不判 fail，只进黄条。
+  /* P0-1 一票否决汇总条；P2-2 口径：判定 = min(条款门禁, 盈利, 流量门, 初筛)，
+     min 逻辑走 packages/shared#synthesizeVerdict（与 blueprint §7 同一套，不许另写一遍）。
+     初筛 kill 直接作为 prescreen 腿传入（stop）；三档横幅（红/琥珀/黄）与原行为一致。
      注意：工作表 ⑤ 是投流决策（TrafficPlanner），与流量门（TrafficGate）是两回事。 */
   const profitVeto = useMemo(() => {
     const inp = profitState?.inputs;
@@ -1577,38 +1521,46 @@ export function WorksheetClient({
     return Number.isFinite(r.epc) && r.epc <= c ? { epc: r.epc, cpc: c } : null;
   }, [profitState]);
 
-  const vetoReasons: string[] = [];
-  if (termsVerdict === "stop") vetoReasons.push(w.vetoBanner.termsStop);
-  if (profitVeto) {
-    vetoReasons.push(
-      w.vetoBanner.profitEpc
-        .replace("{epc}", fmt(profitVeto.epc))
-        .replace("{cpc}", fmt(profitVeto.cpc)),
-    );
-  }
-  if (trafficGate?.passed === false) {
-    vetoReasons.push(
-      w.vetoBanner.trafficGateFail.replace("{reason}", trafficGate.reason),
-    );
-  }
-  /* 初筛 kill：视为综合项 fail，直接进一票否决红条（与条款 DO_NOT_RUN /
-     盈利 EPC≤CPC / 流量门 fail 同级），并提示不用往下做 AI 深判。 */
-  const prescreenKillRow = prescreenRows.find((r) => r.status === "kill");
-  if (prescreenKillRow) {
-    vetoReasons.push(
-      w.prescreen.vetoReason.replace("{reason}", prescreenKillRow.reason),
-    );
-  }
-  const vetoUnknowns: string[] = [];
-  if (termsVerdict === null) vetoUnknowns.push(w.vetoBanner.termsUnknown);
-  if (profitState === null) vetoUnknowns.push(w.vetoBanner.profitUnknown);
-  if (trafficGate === null || trafficGate.passed === null) {
-    vetoUnknowns.push(w.vetoBanner.trafficGateUnknown);
-  }
+  const vetoLegs: VerdictLegs = {
+    terms:
+      termsVerdict === "stop"
+        ? leg("stop", w.vetoBanner.termsStop)
+        : termsVerdict === null
+          ? leg("unknown", w.vetoBanner.termsUnknown)
+          : leg("go"),
+    profit: profitVeto
+      ? leg(
+          "stop",
+          w.vetoBanner.profitEpc
+            .replace("{epc}", fmt(profitVeto.epc))
+            .replace("{cpc}", fmt(profitVeto.cpc))
+        )
+      : profitState === null
+        ? leg("unknown", w.vetoBanner.profitUnknown)
+        : leg("go"),
+    trafficGate:
+      trafficGate?.passed === false
+        ? leg("stop", w.vetoBanner.trafficGateFail.replace("{reason}", trafficGate.reason))
+        : trafficGate?.caution
+          ? leg("caution", trafficGate.caution)
+          : trafficGate === null || trafficGate.passed === null
+            ? leg("unknown", w.vetoBanner.trafficGateUnknown)
+            : leg("go"),
+    /* 初筛 kill：视为综合项 fail，直接进一票否决红条（与条款 DO_NOT_RUN /
+       盈利 EPC≤CPC / 流量门 fail 同级），并提示不用往下做 AI 深判。 */
+    prescreen: (() => {
+      const killRow = prescreenRows.find((r) => r.status === "kill");
+      return killRow
+        ? leg("stop", w.prescreen.vetoReason.replace("{reason}", killRow.reason))
+        : leg("go");
+    })(),
+  };
+  const vetoSynth = synthesizeVerdict(vetoLegs);
+  const vetoReasons = vetoSynth.verdict === "stop" ? vetoSynth.reasons : [];
   /* 流量门 caution 档（有数据支撑的警告，非否决）：单独琥珀条展示，
      不进红条（不 kill），优先级低于一票否决、高于"未确认项"。 */
-  const cautionReasons: string[] = [];
-  if (trafficGate?.caution) cautionReasons.push(trafficGate.caution);
+  const cautionReasons = vetoSynth.verdict === "caution" ? vetoSynth.reasons : [];
+  const vetoUnknowns = vetoSynth.verdict === "unknown" ? vetoSynth.reasons : [];
 
   const toggleStep = (n: number) => setOpenStep((o) => (o === n ? 0 : n));
 
@@ -1792,7 +1744,7 @@ export function WorksheetClient({
         }
       />
 
-      {/* P0-1 一票否决汇总条；P2-2 口径：判定 = min(条款门禁, 盈利, 流量门)，三条腿中最弱的一条决定判定。 */}
+      {/* P0-1 一票否决汇总条；P2-2 口径：判定 = min(条款门禁, 盈利, 流量门, 初筛)，四条腿中最弱的一条决定判定。 */}
       {vetoReasons.length > 0 ? (
         <div className="rounded-xl border border-red-300 bg-red-50 p-5" role="alert">
           <p className="text-base font-bold text-red-800">{w.vetoBanner.titleRed}</p>
@@ -2202,8 +2154,6 @@ export function WorksheetClient({
           onChange={setDemandGateState}
           initialValues={demandGateState?.inputs}
           offerId={offer?.id ?? null}
-          offerName={offer?.name ?? ""}
-          offerDescription={offer ? `${offer.name} ${offer.network}` : ""}
           isAmazon={offer?.source === "amazon"}
           key={offer?.id ?? "manual"}
         />

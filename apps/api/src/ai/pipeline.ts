@@ -11,9 +11,13 @@
  * not real-time affiliate data.
  *
  * P2-2 — 判定口径统一（唯一口径，见 docs/verdict-synthesis.md）：
- * verdict = min(条款门禁, 盈利, 流量门) —— 三条腿中最弱的一条决定最终判定；
+ * verdict = min(条款门禁, 盈利, 流量门, 初筛) —— 四条腿中最弱的一条决定最终判定；
  * 任一腿失败 → 失败；有未知且无失败 → 谨慎并标注缺哪条证据；三条都通过 → 通过。
  * 流量门 unknown 绝不改写成 fail（K4）；盈利只用代码公式（K3）。
+ * 口径的唯一代码实现：@adlinklab/shared 的 synthesizeVerdict（packages/shared/src/verdict.ts），
+ * blueprint §7 与工作表一票否决横幅都调它；本文件的 synthesizeDecision 是 AI 分析的
+ * 评分制决策（DO_NOT_RUN/MANUAL_REVIEW/TEST/RUN），与 min 口径是两套不同的判定，
+ * 不要混用。
  */
 import { createHash, randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";

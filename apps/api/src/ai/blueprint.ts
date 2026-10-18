@@ -20,7 +20,9 @@ import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@adlinklab/database";
 import {
   belowMinCommission,
+  leg,
   minCommissionStopReason,
+  synthesizeVerdict,
 } from "@adlinklab/shared";
 import {
   AiError,
@@ -471,82 +473,87 @@ export async function generateBlueprint(
           : "测试期 $10–15/天（payout 薄，预算从小）",
   };
 
-  // 7. 综合决策（确定性规则）
+  // 7. 综合决策（确定性规则；min 口径走 @adlinklab/shared#synthesizeVerdict，
+  //    与工作表一票否决横幅同一套 min 逻辑，不许在这里另写一遍）。
   // 佣金门槛与推演/工作表/商品库三处共用同一常量 + 同一 AI 设置覆盖项。
   const minCommission = await getMinCommissionUsd(deps.prisma);
-  const reasons: string[] = [];
-  let level: BlueprintVerdictLevel = "caution";
   const termsVerdict = terms.result?.overallVerdict ?? null;
-  if (termsVerdict === "stop") {
-    level = "stop";
+  const termsLeg =
+    termsVerdict === "stop"
+      ? leg(
+          "stop",
+          language === "en"
+            ? "Offer terms verdict is STOP — do not run paid traffic to this offer."
+            : "条款解析结论为 STOP——不要给这个 offer 投付费流量。"
+        )
+      : termsVerdict === "caution"
+        ? leg(
+            "caution",
+            language === "en"
+              ? "Offer terms verdict is CAUTION — respect the flagged restrictions."
+              : "条款解析结论为 CAUTION——遵守标出的限制条款。"
+          )
+        : termsVerdict === "go"
+          ? leg("go")
+          : leg(
+              "unknown",
+              !termsText
+                ? language === "en"
+                  ? "No terms text provided — verdict capped at CAUTION until terms are reviewed."
+                  : "未提供条款文本——在人工核对条款前结论最高为 CAUTION。"
+                : null
+            );
+  // 盈利腿：佣金门槛（经济性）→ stop；payout 算不出 → unknown；
+  // payout < 20 → caution（< 5 时沿用旧 thin 文案）；≥ 20 → go。
+  const profitLeg =
+    payout == null
+      ? leg(
+          "unknown",
+          language === "en"
+            ? "Payout could not be computed — fill in price/commission."
+            : "payout 算不出来——请补全价格/佣金。"
+        )
+      : belowMinCommission(payout, minCommission)
+        ? leg("stop", minCommissionStopReason(payout, input.currency, minCommission, language))
+        : payout < 20
+          ? leg(
+              "caution",
+              payout < 5
+                ? language === "en"
+                  ? `Payout ${input.currency} ${payout} is thin — break-even CPC leaves almost no room; prefer content/SEO or a higher-payout offer.`
+                  : `payout 仅 ${input.currency} ${payout}——保本 CPC 几乎没有操作空间，优先考虑内容/SEO 或更高 payout 的 offer。`
+                : language === "en"
+                  ? `Payout ${input.currency} ${payout} is modest — break-even CPC leaves limited room; start with a small test budget.`
+                  : `payout ${input.currency} ${payout} 偏薄——保本 CPC 操作空间有限，小预算测试。`
+            )
+          : leg("go");
+  const synthesized = synthesizeVerdict({ terms: termsLeg, profit: profitLeg });
+  const reasons: string[] = [...synthesized.reasons];
+  // BlueprintVerdictLevel 没有 unknown：unknown 按 caution 展示（原行为亦如此）。
+  let level: BlueprintVerdictLevel =
+    synthesized.verdict === "stop" ? "stop" : synthesized.verdict === "go" ? "go" : "caution";
+  const llmFailed = [terms.error, keywords.error, adPlan.error, traffic.error].filter(Boolean);
+  if (llmFailed.length > 0) {
     reasons.push(
       language === "en"
-        ? "Offer terms verdict is STOP — do not run paid traffic to this offer."
-        : "条款解析结论为 STOP——不要给这个 offer 投付费流量。"
+        ? `${llmFailed.length} AI section(s) failed to generate — review before spending.`
+        : `有 ${llmFailed.length} 个 AI 板块生成失败——投放前请人工补齐。`
     );
-  } else {
-    if (!termsText) {
-      reasons.push(
-        language === "en"
-          ? "No terms text provided — verdict capped at CAUTION until terms are reviewed."
-          : "未提供条款文本——在人工核对条款前结论最高为 CAUTION。"
-      );
-    } else if (termsVerdict === "caution") {
-      reasons.push(
-        language === "en"
-          ? "Offer terms verdict is CAUTION — respect the flagged restrictions."
-          : "条款解析结论为 CAUTION——遵守标出的限制条款。"
-      );
-    }
-    if (payout == null) {
-      reasons.push(
-        language === "en"
-          ? "Payout could not be computed — fill in price/commission."
-          : "payout 算不出来——请补全价格/佣金。"
-      );
-    } else if (belowMinCommission(payout, minCommission)) {
-      // 佣金门槛（经济性）：单次转化佣金过低 → 直接 stop（不值得测试）。
-      // 与条款 stop 区分：reason 明确写经济性原因，不写成政策禁止。
-      level = "stop";
-      reasons.push(
-        minCommissionStopReason(payout, input.currency, minCommission, language)
-      );
-    } else if (payout < 5) {
-      // 旧 thin 提示：仅当管理员把门槛调到 5 以下时可达；默认 8 下被上一分支覆盖。
-      reasons.push(
-        language === "en"
-          ? `Payout ${input.currency} ${payout} is thin — break-even CPC leaves almost no room; prefer content/SEO or a higher-payout offer.`
-          : `payout 仅 ${input.currency} ${payout}——保本 CPC 几乎没有操作空间，优先考虑内容/SEO 或更高 payout 的 offer。`
-      );
-    }
-    const llmFailed = [terms.error, keywords.error, adPlan.error, traffic.error].filter(Boolean);
-    if (llmFailed.length > 0) {
-      reasons.push(
-        language === "en"
-          ? `${llmFailed.length} AI section(s) failed to generate — review before spending.`
-          : `有 ${llmFailed.length} 个 AI 板块生成失败——投放前请人工补齐。`
-      );
-    }
-    if (
-      termsVerdict === "go" &&
-      payout != null &&
-      payout >= 20 &&
-      llmFailed.length === 0
-    ) {
-      level = "go";
-      reasons.push(
-        language === "en"
-          ? "Terms allow paid traffic and payout supports a workable break-even CPC — proceed with the monitoring rules."
-          : "条款允许投放且 payout 撑得起保本 CPC——按监控规则小预算起量。"
-      );
-    }
-    if (reasons.length === 0) {
-      reasons.push(
-        language === "en"
-          ? "No hard blockers found — start small and let the monitoring rules decide."
-          : "未发现硬性阻碍——小预算起步，让监控规则做决定。"
-      );
-    }
+    if (level === "go") level = "caution";
+  }
+  if (level === "go") {
+    reasons.push(
+      language === "en"
+        ? "Terms allow paid traffic and payout supports a workable break-even CPC — proceed with the monitoring rules."
+        : "条款允许投放且 payout 撑得起保本 CPC——按监控规则小预算起量。"
+    );
+  }
+  if (reasons.length === 0) {
+    reasons.push(
+      language === "en"
+        ? "No hard blockers found — start small and let the monitoring rules decide."
+        : "未发现硬性阻碍——小预算起步，让监控规则做决定。"
+    );
   }
 
   const blueprint: OfferBlueprint = {

@@ -20,9 +20,9 @@ import { CapturePicker } from "@/components/ai/capture-picker";
 type Trend = "up" | "flat" | "down";
 type Competition = "low" | "medium" | "high";
 type Intent = "buy" | "review" | "compare" | "info";
-type Verdict = "good" | "caution" | "bad";
+export type DemandVerdict = "good" | "caution" | "bad";
 
-interface DemandRow {
+export interface DemandRow {
   id: string;
   keyword: string;
   volume: string; // 手填数字字符串
@@ -82,7 +82,7 @@ function beatable(
   return "yes";
 }
 
-function verdictOf(row: DemandRow): Verdict {
+export function verdictOf(row: DemandRow): DemandVerdict {
   const dl = demandLevel(row.volume);
   if (dl === "none") return "bad";
   const b = beatable(row.competition, row.intent, row.trend);
@@ -117,7 +117,7 @@ const scoreCls = (s: number) =>
       ? "bg-amber-100 text-amber-800"
       : "bg-ink/10 text-ink/60";
 
-const verdictCls: Record<Verdict, string> = {
+const verdictCls: Record<DemandVerdict, string> = {
   good: "bg-emerald-100 text-emerald-800",
   caution: "bg-amber-100 text-amber-800",
   bad: "bg-red-100 text-red-700",
