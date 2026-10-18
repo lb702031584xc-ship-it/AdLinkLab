@@ -914,6 +914,32 @@ export async function parseProductCaptureAi(
   );
 }
 
+/** Offer 页抓取解析：佣金（%/固定）/ 预估 payout / 均价 / Cookie 天数。 */
+export interface OfferPageCapture {
+  offerName: string | null;
+  network: string | null;
+  commissionValue: number | null;
+  commissionType: "percentage" | "fixed" | null;
+  estimatedPayout: number | null;
+  averageOrderValue: number | null;
+  currency: string | null;
+  cookieDays: number | null;
+  evidence: { commission: string | null; payout: string | null; price: string | null };
+}
+
+export async function parseOfferCaptureAi(
+  captureId: string,
+  language?: string
+): Promise<{ offer: OfferPageCapture; summaryText: string }> {
+  return aiFetch<{ offer: OfferPageCapture; summaryText: string }>(
+    "/api/v1/ai/parse-offer-capture",
+    {
+      method: "POST",
+      body: JSON.stringify({ captureId, language }),
+    }
+  );
+}
+
 /** 抓取页面 AI 提取关键词：AI 认表格、逐行提取、判断购买意图。 */
 export async function parseKeywordCaptureAi(
   captureId: string,

@@ -17,6 +17,7 @@ import {
   parseKeywordCaptureAiAction,
   parseIntelCaptureAction,
   parseEcommerceCaptureAction,
+  parseOfferCaptureAiAction,
   getLongtailSuggestionsAction,
   type AiActionResult,
 } from "@/lib/api/ai-actions";
@@ -199,6 +200,7 @@ export function TrafficPlannerClient({
   initialOffer,
   offers,
   initialInputs,
+  onProfitInputsChange,
 }: {
   showSetupNudge: boolean;
   /** Worksheet embedding: hide the page header (the step card provides it). */
@@ -210,10 +212,23 @@ export function TrafficPlannerClient({
   /** 独立页 offer 下拉列表（嵌入时不传，不显示下拉）。 */
   offers?: PlannerOffer[];
   /**
-   * 上游（工作表 ④ 盈利测算）同步来的值：payout/CVR/退款率/均价/佣金率。
+   * 上游（工作表 ③ 盈利测算）同步来的值：payout/CVR/退款率/均价/佣金率。
    * 恢复完成后应用到对应字段（只覆盖这些字段，关键词/情报等仍用本页快照）。
    */
   initialInputs?: { payout?: string; cvr?: string; refundRate?: string; avgPrice?: string; commissionRate?: string };
+  /**
+   * 下游同步（工作表嵌入时）：本页盈利测算输入（payout/CVR/退款率/扣量/均价/佣金率/模式）
+   * 变化后同步回工作表 ④（一个地方输入，相同参数别处也有）。防回环：同一组值只发一次，工作表侧等值跳过。
+   */
+  onProfitInputsChange?: (inputs: {
+    payout: string;
+    cvr: string;
+    refundRate: string;
+    shavePct: string;
+    avgPrice: string;
+    commissionRate: string;
+    profitMode: ProfitMode;
+  }) => void;
 }) {
   const { lang } = useI18n();
   const d: Dict = lang === "zh" ? tpZh : tpEn;
@@ -282,6 +297,34 @@ export function TrafficPlannerClient({
     if (initialInputs.commissionRate != null) setCommissionRate(initialInputs.commissionRate);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialInputs]);
+
+  /* ⑤→④ 同步：本页盈利测算输入变化后（打字/抓取填入/反推），防抖同步回工作表 ④。
+     防回环：同一组值只发一次；工作表侧等值跳过；快照恢复只补空不覆盖（见 applySnapshot），
+     所以恢复不会把 ④ 的值冲掉、也不会把恢复值误当成用户编辑发回去。 */
+  const lastProfitSyncKeyRef = useRef<string | null>(null);
+  const profitSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const profitSyncKey = `${payout}::${networkCvr}::${refundRate}::${shavePct}::${avgPrice}::${commissionRate}::${profitMode}`;
+  useEffect(() => {
+    if (!onProfitInputsChange) return;
+    if (profitSyncKey === lastProfitSyncKeyRef.current) return;
+    if (profitSyncTimerRef.current) clearTimeout(profitSyncTimerRef.current);
+    profitSyncTimerRef.current = setTimeout(() => {
+      lastProfitSyncKeyRef.current = profitSyncKey;
+      onProfitInputsChange({
+        payout,
+        cvr: networkCvr,
+        refundRate,
+        shavePct,
+        avgPrice,
+        commissionRate,
+        profitMode,
+      });
+    }, 500);
+    return () => {
+      if (profitSyncTimerRef.current) clearTimeout(profitSyncTimerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profitSyncKey, onProfitInputsChange]);
   // Offervault
   const [bestPayout, setBestPayout] = useState("");
   const [bestPayoutNetwork, setBestPayoutNetwork] = useState("");
@@ -401,6 +444,45 @@ export function TrafficPlannerClient({
     setCvrSource("epc");
   };
 
+  /* 抓取 offer 页填入 EPC / payout / CVR：% 是佣金，$ 是预估 payout，两者不混淆。
+     填入后经 ⑤→④ 同步回工作表 ④，自动化广告页读本页快照，三个地方都有。 */
+  const [offerCaptureMsg, setOfferCaptureMsg] = useState("");
+  const [offerCaptureBusy, setOfferCaptureBusy] = useState(false);
+  const fillOfferPageFromCapture = async (c: OfferCaptureItem) => {
+    setOfferCaptureBusy(true);
+    setOfferCaptureMsg("");
+    try {
+      const res = await parseOfferCaptureAiAction(c.id);
+      if (!res.ok) {
+        setOfferCaptureMsg(d.offerCaptureFailed);
+        return;
+      }
+      const ex = res.data.offer;
+      if (ex.commissionValue == null && ex.estimatedPayout == null) {
+        setOfferCaptureMsg(d.offerCaptureNone);
+        return;
+      }
+      if (ex.estimatedPayout != null) setEpc(String(ex.estimatedPayout));
+      let basePayout: number | null = null;
+      if (ex.commissionType === "percentage" && ex.commissionValue != null) {
+        if (ex.averageOrderValue != null) setAvgPrice(String(ex.averageOrderValue));
+        setCommissionRate(String(ex.commissionValue));
+        if (ex.averageOrderValue != null) basePayout = (ex.averageOrderValue * ex.commissionValue) / 100;
+      } else if (ex.commissionType === "fixed" && ex.commissionValue != null) {
+        setPayout(String(ex.commissionValue));
+        basePayout = ex.commissionValue;
+      }
+      /* CVR = EPC ÷ payout（与下方“用 EPC 反推 CVR”同口径），来源标实测。 */
+      if (ex.estimatedPayout != null && basePayout != null && basePayout > 0) {
+        setNetworkCvr(((ex.estimatedPayout / basePayout) * 100).toFixed(2));
+        setCvrSource("epc");
+      }
+      setOfferCaptureMsg(d.offerCaptureFilled.replace("{summary}", res.data.summaryText));
+    } finally {
+      setOfferCaptureBusy(false);
+    }
+  };
+
   /* 一键直达用的关键词：首个已填关键词，否则用 offer 名。 */
   const kwForLinks =
     keywords.find((k) => k.keyword.trim())?.keyword.trim() || offerName;
@@ -498,9 +580,19 @@ export function TrafficPlannerClient({
     if (s.profitMode === "ecommerce" || s.profitMode === "affiliate")
       setProfitMode(s.profitMode);
     /* 模式字段：快照为空时不覆盖（offer 库参数为准；空快照是"没填过"不是"清空"）。 */
-    if (str(s.avgPrice)) setAvgPrice(str(s.avgPrice));
-    if (str(s.commissionRate)) setCommissionRate(str(s.commissionRate));
-    if (str(s.shavePct)) setShavePct(str(s.shavePct));
+    /* ④ 同步字段（payout/CVR/退款率/扣量/均价/佣金率/EPC）：
+       嵌入且 ④ 有值时，恢复只补空（④ 的值优先，恢复若覆盖会把 ④ 的值冲掉，还会触发 ⑤→④ 回传形成乒乓）；
+       独立页（无上游 ④ 输入）时仍按原来覆盖（快照是用户上次保存的值，优先于 offer 默认值）。
+       扣量默认 "0" 当空处理，否则快照里的扣量永远恢复不进来。 */
+    const keepUpstream = initialInputs != null;
+    const syncField = (prev: string, next: string, emptyZero = false) => {
+      if (!keepUpstream) return next; // 独立页：快照覆盖
+      const isEmpty = prev.trim() === "" || (emptyZero && prev.trim() === "0");
+      return isEmpty ? next : prev;
+    };
+    if (str(s.avgPrice)) setAvgPrice((prev) => syncField(prev, str(s.avgPrice)));
+    if (str(s.commissionRate)) setCommissionRate((prev) => syncField(prev, str(s.commissionRate)));
+    if (str(s.shavePct)) setShavePct((prev) => syncField(prev, str(s.shavePct), true));
     /* 目标产出比：旧快照的 ROI%（targetRoiPct）按 比值 = 1 + ROI% / 100 换算。 */
     if (str(s.targetReturnRatio) || str(s.targetRoiPct))
       setTargetReturnRatio(
@@ -511,15 +603,15 @@ export function TrafficPlannerClient({
       );
     /* offer 字段：快照为空时不覆盖（库参数为准；空快照是"没填过"不是"清空"） */
     if (str(s.offerName)) setOfferName(str(s.offerName));
-    if (str(s.payout)) setPayout(str(s.payout));
+    if (str(s.payout)) setPayout((prev) => syncField(prev, str(s.payout)));
     if (str(s.network)) setNetwork(str(s.network));
     if (str(s.cookieDays)) setCookieDays(str(s.cookieDays));
-    setEpc(str(s.epc));
-    setNetworkCvr(str(s.networkCvr));
+    setEpc((prev) => syncField(prev, str(s.epc)));
+    setNetworkCvr((prev) => syncField(prev, str(s.networkCvr)));
     if (s.cvrSource === "epc") setCvrSource("epc");
     else if (s.cvrSource === "manual") setCvrSource("manual");
     setBingCpc(str(s.bingCpc));
-    setRefundRate(str(s.refundRate));
+    setRefundRate((prev) => syncField(prev, str(s.refundRate)));
     setBestPayout(str(s.bestPayout));
     setBestPayoutNetwork(str(s.bestPayoutNetwork));
     setSpyfuKeywords(str(s.spyfuKeywords));
@@ -1454,6 +1546,14 @@ export function TrafficPlannerClient({
                 disabled={profitMode === "ecommerce"}
                 placeholder="20"
               />
+              {/* payout 数据来源：offer 详情页（Offervault 查同款 offer） */}
+              <span className="mt-1 block">
+                <a href={siteUrl("offervault", offerName)} target="_blank" rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 rounded-lg bg-signal/10 px-2.5 py-1 text-xs font-medium text-signal transition hover:bg-signal/20">
+                  ↗ {d.srcOffervault}
+                </a>
+                <span className="ml-1 text-xs text-ink/50">{d.srcPayoutHint}</span>
+              </span>
             </label>
             <label className="block">
               <span className={labelCls}>{d.network}</span>
@@ -1474,6 +1574,18 @@ export function TrafficPlannerClient({
             <label className="block">
               <span className={labelCls}>{d.epc}</span>
               <input className={inputCls} type="number" min="0" step="0.01" value={epc} onChange={(e) => setEpc(e.target.value)} placeholder="0.50" />
+              {/* EPC / CVR 数据来源：联盟网络后台 offer 详情页 */}
+              <span className="mt-1 block">
+                {networkDashboardSite(network) ? (
+                  <a href={siteUrl(networkDashboardSite(network), "")} target="_blank" rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 rounded-lg bg-signal/10 px-2.5 py-1 text-xs font-medium text-signal transition hover:bg-signal/20">
+                    ↗ {d.srcNetworkDashboard.replace("{network}", network)}
+                  </a>
+                ) : (
+                  <span className="text-xs text-ink/50">{d.srcNetworkHint}</span>
+                )}
+                <span className="ml-1 text-xs text-ink/50">{d.srcEpcCvrHint}</span>
+              </span>
             </label>
             <label className="block">
               <span className={labelCls}>{d.networkCvr}</span>
@@ -1503,6 +1615,18 @@ export function TrafficPlannerClient({
                 <input className={inputCls} type="number" min="0" max="100" step="0.1" value={shavePct} onChange={(e) => setShavePct(e.target.value)} placeholder="0" />
               </label>
             )}
+          </div>
+          {/* 抓取 offer 页填入 EPC / payout / CVR（插件抓取 → AI 提取 → 填入本页，同步到工作表 ④） */}
+          <div className="mt-3 border-t border-ink/10 pt-3">
+            <span className="text-xs font-medium text-ink/70">{d.offerCapturePick}：</span>
+            <div className="mt-1">
+              <CapturePicker onPick={fillOfferPageFromCapture} />
+            </div>
+            {offerCaptureBusy ? (
+              <p className="mt-1 text-xs text-ink/55">{d.offerCaptureBusy}</p>
+            ) : offerCaptureMsg ? (
+              <p className="mt-1 text-xs text-ink/70">{offerCaptureMsg}</p>
+            ) : null}
           </div>
           {/* 出价参考：EPC / 保本 CPC / 推荐出价（profit-calc 算出，指导值） */}
           <div className="mt-3 rounded-lg border border-ink/10 bg-ink/[0.02] p-3">
@@ -1540,50 +1664,6 @@ export function TrafficPlannerClient({
               <p className="text-xs text-ink/50">{d.bidNoData}</p>
             )}
             <p className="mt-2 text-xs text-ink/50">{d.bidFormulaHint}</p>
-          </div>
-          {/* 数据来源 · 一键直达（可多选，免费优先）：每个出价参数去哪拿真实数据 */}
-          <div className="mt-3 rounded-lg border border-ink/10 bg-ink/[0.02] p-3">
-            <div className="text-sm font-semibold text-ink">{d.bidDataSources}</div>
-            <p className="mt-1 text-xs text-ink/50">{d.bidDataSourcesHint}</p>
-            <div className="mt-2 space-y-2 text-xs">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="w-24 shrink-0 font-medium text-ink/70">{d.srcPayout}</span>
-                <a href={siteUrl("offervault", offerName)} target="_blank" rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 rounded-lg bg-signal/10 px-2.5 py-1 font-medium text-signal transition hover:bg-signal/20">
-                  ↗ {d.srcOffervault}
-                </a>
-                <span className="text-ink/50">{d.srcPayoutHint}</span>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="w-24 shrink-0 font-medium text-ink/70">{d.srcEpcCvr}</span>
-                {networkDashboardSite(network) ? (
-                  <a href={siteUrl(networkDashboardSite(network), "")} target="_blank" rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 rounded-lg bg-signal/10 px-2.5 py-1 font-medium text-signal transition hover:bg-signal/20">
-                    ↗ {d.srcNetworkDashboard.replace("{network}", network)}
-                  </a>
-                ) : (
-                  <span className="text-ink/50">{d.srcNetworkHint}</span>
-                )}
-                <span className="text-ink/50">{d.srcEpcCvrHint}</span>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="w-24 shrink-0 font-medium text-ink/70">{d.srcCpcVolume}</span>
-                <a href={siteUrl("planner", kwForLinks)} target="_blank" rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 rounded-lg bg-signal/10 px-2.5 py-1 font-medium text-signal transition hover:bg-signal/20">
-                  ↗ {d.srcKeywordPlanner}
-                </a>
-                <a href={siteUrl("trends", kwForLinks)} target="_blank" rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 rounded-lg bg-signal/10 px-2.5 py-1 font-medium text-signal transition hover:bg-signal/20">
-                  ↗ {d.srcTrends}
-                </a>
-                <a href={siteUrl("semrush", kwForLinks)} target="_blank" rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 rounded-lg bg-signal/10 px-2.5 py-1 font-medium text-signal transition hover:bg-signal/20">
-                  ↗ {d.srcSemrush}
-                </a>
-                <span className="text-ink/50">{d.srcCpcVolumeHint}</span>
-              </div>
-              <p className="text-ink/50">{d.srcCaptureHint}</p>
-            </div>
           </div>
           {/* 电商查询：电商 offer 在 Offervault 没有数据，直接查产品本身 */}
           <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-ink/10 pt-3">
@@ -1878,6 +1958,23 @@ export function TrafficPlannerClient({
             <button className={btnGhost} onClick={importLaunchKeywords}>
               {d.importLaunchKeywords}
             </button>
+          </div>
+          {/* CPC / 搜索量数据来源：关键词规划师（免费）+ Trends（免费）+ SEMrush（付费） */}
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+            <span className="font-medium text-ink/70">{d.srcCpcVolume}：</span>
+            <a href={siteUrl("planner", kwForLinks)} target="_blank" rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 rounded-lg bg-signal/10 px-2.5 py-1 font-medium text-signal transition hover:bg-signal/20">
+              ↗ {d.srcKeywordPlanner}
+            </a>
+            <a href={siteUrl("trends", kwForLinks)} target="_blank" rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 rounded-lg bg-signal/10 px-2.5 py-1 font-medium text-signal transition hover:bg-signal/20">
+              ↗ {d.srcTrends}
+            </a>
+            <a href={siteUrl("semrush", kwForLinks)} target="_blank" rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 rounded-lg bg-signal/10 px-2.5 py-1 font-medium text-signal transition hover:bg-signal/20">
+              ↗ {d.srcSemrush}
+            </a>
+            <span className="text-ink/50">{d.srcCpcVolumeHint}</span>
           </div>
           <CapturePicker onPick={fillKwFromCapture} />
           {kwParsing && (

@@ -8,6 +8,7 @@ import { useI18n } from "@/i18n/I18nProvider";
 import { coachCheckAction, type CoachFinding } from "@/lib/api/coach-actions";
 import { CoachGate, hasCoachBlock } from "@/components/coach/coach-gate";
 import { CapturePicker } from "@/components/ai/capture-picker";
+import { parseOfferCaptureAiAction } from "@/lib/api/ai-actions";
 import { extractBrandName } from "@/lib/brand-extract";
 
 const inputClassName =
@@ -73,6 +74,14 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
   const [festivalTheme, setFestivalTheme] = useState("none");
   const [error, setError] = useState<string | null>(null);
   const [coachFindings, setCoachFindings] = useState<CoachFinding[]>([]);
+  /** 抓取提取 offer 佣金/payout：加载态 + 结果文案 + 原文证据（用户核对）。 */
+  const [captureExtracting, setCaptureExtracting] = useState(false);
+  const [captureExtractMsg, setCaptureExtractMsg] = useState<string | null>(null);
+  const [captureExtractEvidence, setCaptureExtractEvidence] = useState<{
+    commission: string | null;
+    payout: string | null;
+    price: string | null;
+  } | null>(null);
   const { t } = useI18n();
   const f = t.entities.forms.offer;
 
@@ -297,9 +306,62 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
           onPick={(c) => {
             if (c.finalUrl) setDestinationUrl(c.finalUrl);
             if (c.title && !name.trim()) setName(c.title);
-            if (c.price != null && !avgPrice.trim()) setAvgPrice(String(c.price));
+            /* 佣金/payout：AI 从抓取页提取（区分 % 佣金与 $ payout）。
+               均价优先用提取的均价（产品价），兜底用抓取的 price；佣金只补空不覆盖手填。 */
+            void (async () => {
+              setCaptureExtracting(true);
+              setCaptureExtractMsg(null);
+              setCaptureExtractEvidence(null);
+              const fillAvgPrice = (o: { averageOrderValue: number | null }) => {
+                if (avgPrice.trim()) return;
+                if (o.averageOrderValue != null) setAvgPrice(String(o.averageOrderValue));
+                else if (c.price != null) setAvgPrice(String(c.price));
+              };
+              try {
+                const r = await parseOfferCaptureAiAction(c.id);
+                if (!r.ok) {
+                  setCaptureExtractMsg(f.captureExtractFailed);
+                  fillAvgPrice({ averageOrderValue: null });
+                  return;
+                }
+                const o = r.data.offer;
+                if (!commissionValue.trim() && o.commissionValue != null && o.commissionType) {
+                  setCommissionValue(String(o.commissionValue));
+                  setCommissionType(o.commissionType);
+                }
+                if (o.network && !network.trim()) setNetwork(o.network);
+                if (o.offerName && !name.trim()) setName(o.offerName);
+                fillAvgPrice(o);
+                if (o.commissionValue != null || o.estimatedPayout != null || o.averageOrderValue != null) {
+                  setCaptureExtractMsg(f.captureExtracted.replace("{summary}", r.data.summaryText));
+                  setCaptureExtractEvidence(o.evidence);
+                } else {
+                  setCaptureExtractMsg(f.captureExtractNone);
+                }
+              } catch {
+                setCaptureExtractMsg(f.captureExtractFailed);
+                fillAvgPrice({ averageOrderValue: null });
+              } finally {
+                setCaptureExtracting(false);
+              }
+            })();
           }}
         />
+        {captureExtracting && (
+          <p className="mt-1 text-xs text-ink/50">{f.captureExtracting}</p>
+        )}
+        {captureExtractMsg && (
+          <div className="mt-1 text-xs text-ink/60">
+            <p>{captureExtractMsg}</p>
+            {captureExtractEvidence && (
+              <p className="mt-0.5 text-ink/50">
+                {[captureExtractEvidence.commission, captureExtractEvidence.payout, captureExtractEvidence.price]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </p>
+            )}
+          </div>
+        )}
         <div className="mt-2">
           <CoachGate dict={t.coach} findings={coachFindings} />
         </div>

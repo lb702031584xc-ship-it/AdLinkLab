@@ -77,6 +77,10 @@ import {
   type BlueprintInput,
 } from "../ai/blueprint.js";
 import { DataForSeoProvider } from "../traffic/dataforseo.js";
+import {
+  extractOfferPageWithAi,
+  type OfferPageCapture,
+} from "../ai/offer-page-capture-ai.js";
 
 /**
  * Phase 11 — AI offer risk analysis (one tenant per user; session auth only).
@@ -1896,6 +1900,47 @@ export async function registerAiRoutes(
     // P0-6 — helper 内部调用未透传 usage，只记 calls=1。
     await trackHelperLlmCall(info.tenantId, settings.model as string);
     return product;
+  });
+
+  /**
+   * Offer 页抓取解析：插件抓到的联盟网络 offer 详情页正文 →
+   * 佣金（%/固定）/ 预估 payout / 均价 / Cookie 天数（找不到为 null，绝不编造）。
+   * 关键：百分比是佣金，美元金额是预估 payout，两者不混淆。
+   */
+  app.post("/api/v1/ai/parse-offer-capture", async (request) => {
+    const info = await requireSession(deps, request);
+    // P0-6 — 配额守门（超限 429）。
+    await enforceAiQuota(prisma, info.tenantId);
+    const body = (request.body ?? {}) as { captureId?: unknown; language?: unknown };
+    const captureId = typeof body.captureId === "string" ? body.captureId : "";
+    if (!captureId) throw new ValidationError("captureId is required");
+    const row = await deps.prisma.offerCapture.findFirst({
+      where: { id: captureId, tenantId: info.tenantId },
+      select: { pageText: true },
+    });
+    if (!row) throw new ValidationError("抓取记录不存在");
+    const settings = await readSettings(prisma);
+    if (!isConfigured(settings)) {
+      throw new AppError("AI is not configured", {
+        code: "AI_NOT_CONFIGURED",
+        statusCode: 400,
+      });
+    }
+    const pepper = assertAiSettingsPepperConfigured();
+    const apiKey = decryptSecret(settings.apiKeyEnc as string, pepper);
+    const offer: { offer: OfferPageCapture; summaryText: string } =
+      await extractOfferPageWithAi(
+        {
+          baseUrl: settings.baseUrl as string,
+          model: settings.model as string,
+          apiKey,
+          language: body.language === "en" ? "en" : "zh",
+        },
+        row.pageText ?? ""
+      );
+    // P0-6 — helper 内部调用未透传 usage，只记 calls=1。
+    await trackHelperLlmCall(info.tenantId, settings.model as string);
+    return offer;
   });
 
   /**

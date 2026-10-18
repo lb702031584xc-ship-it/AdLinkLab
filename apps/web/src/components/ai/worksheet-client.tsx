@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useDict } from "@/i18n/use-dict";
 import { EntityPageHeader } from "@/components/entities/ui";
@@ -97,6 +97,7 @@ function ProfitStep({
   initialCommissionRate,
   initialValues,
   offerId,
+  syncInputs,
 }: {
   onChange: (s: ProfitStepState | null) => void;
   initialPayout?: string;
@@ -108,6 +109,11 @@ function ProfitStep({
   initialValues?: ProfitStepState["inputs"];
   /** 当前 offer：用于从投放选词快照取参考 CPC。 */
   offerId?: string | null;
+  /**
+   * ⑤→④ 同步：投流页改了盈利输入后覆盖本步对应字段（最后一次编辑优先）。
+   * 与快照恢复的“只补空”不同，这里是显式同步，必须覆盖；seq 变化才应用一次。
+   */
+  syncInputs?: { inputs: NonNullable<ProfitStepState["inputs"]>; seq: number } | null;
 }) {
   const t = useDict();
   const d = t.ai.profit;
@@ -167,6 +173,25 @@ function ProfitStep({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialValues]);
+
+  /* ⑤→④ 同步：投流页改了盈利输入，覆盖本步对应字段（最后一次编辑优先）。
+     CPC / 目标产出比投流页没有，不覆盖；来源标 planner（投流决策 ⑤）。 */
+  useEffect(() => {
+    if (!syncInputs) return;
+    const inp = syncInputs.inputs;
+    setMode(inp.mode);
+    setAvgPrice(inp.avgPrice);
+    setCommissionRate(inp.commissionRate);
+    setPayout(inp.payout);
+    setCvrPct(inp.cvrPct);
+    setRefundPct(inp.refundPct);
+    setShavePct(inp.shavePct);
+    setFieldProv("avgPrice", "planner");
+    setFieldProv("commissionRate", "planner");
+    setFieldProv("payout", "planner");
+    setFieldProv("cvrPct", "planner");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [syncInputs]);
 
   /* CPC 联动：为空时从该 offer 的投放选词快照取参考 CPC 均值 */
   useEffect(() => {
@@ -1130,6 +1155,65 @@ export function WorksheetClient({
   const [complianceCounted, setComplianceCounted] = useState(true);
   const [demandGateState, setDemandGateState] = useState<DemandGateState | null>(null);
   const [profitState, setProfitState] = useState<ProfitStepState | null>(null);
+  /* ⑤→④ 同步：投流页改了盈利输入后，覆盖 ④ 的对应字段（ProfitStep 用 syncInputs 应用）。
+     ④ 还没算过时先记到 profitSyncPending，ProfitStep 挂载时作为 initialValues 补进空字段。 */
+  const [profitSync, setProfitSync] = useState<{
+    inputs: NonNullable<ProfitStepState["inputs"]>;
+    seq: number;
+  } | null>(null);
+  const [profitSyncPending, setProfitSyncPending] = useState<
+    NonNullable<ProfitStepState["inputs"]> | null
+  >(null);
+  const profitSyncSeqRef = useRef(0);
+  const handlePlannerProfitChange = useCallback(
+    (inputs: {
+      payout: string;
+      cvr: string;
+      refundRate: string;
+      shavePct: string;
+      avgPrice: string;
+      commissionRate: string;
+      profitMode: "ecommerce" | "affiliate";
+    }) => {
+      const merged: NonNullable<ProfitStepState["inputs"]> = {
+        payout: inputs.payout,
+        cpc: profitState?.inputs?.cpc ?? "",
+        cvrPct: inputs.cvr,
+        refundPct: inputs.refundRate,
+        shavePct: inputs.shavePct,
+        mode: inputs.profitMode === "ecommerce" ? "ecommerce" : "other",
+        avgPrice: inputs.avgPrice,
+        commissionRate: inputs.commissionRate,
+        targetReturnRatio: profitState?.inputs?.targetReturnRatio ?? "2",
+      };
+      const cur = profitState?.inputs;
+      if (
+        cur &&
+        cur.payout === merged.payout &&
+        cur.cvrPct === merged.cvrPct &&
+        cur.refundPct === merged.refundPct &&
+        cur.shavePct === merged.shavePct &&
+        cur.avgPrice === merged.avgPrice &&
+        cur.commissionRate === merged.commissionRate &&
+        cur.mode === merged.mode
+      )
+        return; // 等值跳过，防回环
+      if (!profitState) {
+        /* ④ 还没算过：只有填了真实值才记（mode 恒有值、扣量默认 0 都不算）。 */
+        if (
+          [merged.payout, merged.cvrPct, merged.refundPct, merged.avgPrice, merged.commissionRate].some(
+            (v) => String(v).trim(),
+          )
+        )
+          setProfitSyncPending(merged);
+        return;
+      }
+      setProfitState({ ...profitState, inputs: merged });
+      profitSyncSeqRef.current += 1;
+      setProfitSync({ inputs: merged, seq: profitSyncSeqRef.current });
+    },
+    [profitState],
+  );
   /* P0-1：流量门（TrafficGate，K4）检测结果。passed 三态：true 通过 /
      false 不通过 / null unknown（暂无数据，绝不判 fail）。 */
   const [trafficGate, setTrafficGate] = useState<TrafficGate | null>(null);
@@ -1922,7 +2006,8 @@ export function WorksheetClient({
           initialMode={initialProfitMode}
           initialAvgPrice={initialAvgPrice}
           initialCommissionRate={initialCommissionRate}
-          initialValues={profitState?.inputs}
+          initialValues={profitState?.inputs ?? profitSyncPending ?? undefined}
+          syncInputs={profitSync}
           offerId={offer?.id ?? null}
           key={offer?.id ?? "manual"}
         />
@@ -1943,6 +2028,7 @@ export function WorksheetClient({
           showSetupNudge={false}
           hideHeader
           onResult={setTrafficResult}
+          onProfitInputsChange={handlePlannerProfitChange}
           initialInputs={
             profitState?.inputs
               ? {

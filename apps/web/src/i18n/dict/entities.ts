@@ -447,6 +447,10 @@ export const zh = {
       endsAt: "结束时间（可选）",
       creating: "创建中…",
       submit: "创建 Offer",
+      captureExtracting: "正在从抓取页提取佣金/payout…",
+      captureExtracted: "已从抓取页提取：{summary}",
+      captureExtractNone: "这页没提取到佣金/payout（可能不是 offer 详情页），请手动填写。",
+      captureExtractFailed: "提取失败，请手动填写。",
     },
     offerSelectionTest: {
       title: "测试 Offer 选择",
@@ -936,6 +940,10 @@ export const en: typeof zh = {
       endsAt: "Ends At (optional)",
       creating: "Creating…",
       submit: "Create Offer",
+      captureExtracting: "Extracting commission/payout from the capture…",
+      captureExtracted: "Extracted from capture: {summary}",
+      captureExtractNone: "No commission/payout found on this page (maybe not an offer details page). Fill in manually.",
+      captureExtractFailed: "Extraction failed, fill in manually.",
     },
     offerSelectionTest: {
       title: "Test Offer Selection",

@@ -41,6 +41,8 @@ import {
   parseEcommerceCapture,
   parseKeywordCaptureAi,
   parseProductCaptureAi,
+  parseOfferCaptureAi,
+  type OfferPageCapture,
   type ProductCapture,
   parseIntelCapture,
   type OfferCaptureDetail,
@@ -524,6 +526,21 @@ export async function parseProductCaptureAiAction(
   try {
     const lang = await getLang();
     return { ok: true, data: await parseProductCaptureAi(captureId, lang) };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof AiApiError ? e.message : "AI 解析抓取失败",
+    };
+  }
+}
+
+/** Offer 页抓取解析：佣金（%/固定）/ 预估 payout / 均价 / Cookie 天数。 */
+export async function parseOfferCaptureAiAction(
+  captureId: string
+): Promise<AiActionResult<{ offer: OfferPageCapture; summaryText: string }>> {
+  try {
+    const lang = await getLang();
+    return { ok: true, data: await parseOfferCaptureAi(captureId, lang) };
   } catch (e) {
     return {
       ok: false,
