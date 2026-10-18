@@ -7,6 +7,7 @@ import { zh as rateWatchZh, en as rateWatchEn } from "@/i18n/dict/cashback-rate-
 import { zh as termsWatchZh, en as termsWatchEn } from "@/i18n/dict/cashback-terms-watch";
 import { zh as redirectCheckZh, en as redirectCheckEn } from "@/i18n/dict/cashback-redirect-check";
 import { zh as rateCompareZh, en as rateCompareEn } from "@/i18n/dict/cashback-rate-compare";
+import { zh as arbCoachZh, en as arbCoachEn } from "@/i18n/dict/arb-coach";
 import { LangSwitcher } from "@/components/lang-switcher";
 import { getCurrentUser, getViewTenant } from "@/lib/api/auth";
 import { clearViewTenantAction, logoutAction } from "@/lib/api/auth-actions";
@@ -52,6 +53,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   const termsWatchDict = lang === "en" ? termsWatchEn : termsWatchZh;
   const redirectCheckDict = lang === "en" ? redirectCheckEn : redirectCheckZh;
   const rateCompareDict = lang === "en" ? rateCompareEn : rateCompareZh;
+  const arbCoachDict = lang === "en" ? arbCoachEn : arbCoachZh;
   const navSections: NavSection[] = isResearcher
     ? [{ title: "🧪 Research", items: [researchNavItem] }]
     : [
@@ -62,6 +64,10 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
             { href: "/dashboard", label: t.common.nav.dashboard },
             { href: "/quickstart", label: t.quickstart.pageTitle },
           ],
+        },
+        {
+          title: arbCoachDict.pageTitle,
+          items: [{ href: "/coach", label: arbCoachDict.pageTitle }],
         },
         {
           title: s.affiliate,
