@@ -112,3 +112,36 @@ describe("ocrImageText", () => {
     ).rejects.toBeInstanceOf(OcrError);
   });
 });
+
+describe("extractNetworkMetricsFromText", () => {
+  it("网络后台英文截图文本", async () => {
+    const { extractNetworkMetricsFromText } = await import("./ocr.js");
+    const r = extractNetworkMetricsFromText(`
+      Offer Details
+      EPC $1.25
+      Conversion Rate 2.5%
+      Clicks 12,345
+      Commission: 13%
+      Est. Payout: $23.4
+    `);
+    expect(r.epc).toBe(1.25);
+    expect(r.conversionRate).toBe(2.5);
+    expect(r.clicks).toBe(12345);
+  });
+
+  it("Est. Payout 不当 EPC（页面只有 payout 时 epc 为 null）", async () => {
+    const { extractNetworkMetricsFromText } = await import("./ocr.js");
+    const r = extractNetworkMetricsFromText(`
+      Commission: 13%
+      Est. Payout: $23.4
+    `);
+    expect(r.epc).toBeNull();
+    expect(r.conversionRate).toBeNull();
+  });
+
+  it("缺失字段 → null，不抛错", async () => {
+    const { extractNetworkMetricsFromText } = await import("./ocr.js");
+    const r = extractNetworkMetricsFromText(`Some random dashboard text`);
+    expect(r).toEqual({ epc: null, conversionRate: null, clicks: null });
+  });
+});

@@ -91,6 +91,7 @@ async function buildApp(
   opts: {
     scrapeImpl?: (url: string) => Promise<OfferMetrics>;
     ocrImpl?: (buf: Buffer) => Promise<Record<string, unknown>>;
+    ocrNetworkImpl?: (buf: Buffer) => Promise<Record<string, unknown>>;
     redis?: unknown;
   } = {}
 ) {
@@ -118,6 +119,7 @@ async function buildApp(
     scrapeImpl: (opts.scrapeImpl ?? (async () => fakeMetrics)) as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ocrImpl: opts.ocrImpl as any,
+    ocrNetworkImpl: opts.ocrNetworkImpl as any,
   });
   return app;
 }
@@ -287,6 +289,27 @@ describe("POST /api/v1/offer-metrics/ocr", () => {
       headers: { "content-type": "multipart/form-data; boundary=----x" },
     });
     expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("kind=network：走网络后台识别（EPC/转化率/点击数）", async () => {
+    const networkOk = {
+      epc: 1.25,
+      conversionRate: 2.5,
+      clicks: 12345,
+      confidence: 87,
+      needsReview: true,
+    };
+    const app = await buildApp(fake, { ocrNetworkImpl: async () => networkOk });
+    const { payload, headers } = multipart("shot.png", "image/png", Buffer.from("fakeimg"));
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/offer-metrics/ocr?kind=network",
+      payload,
+      headers,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ epc: 1.25, conversionRate: 2.5 });
     await app.close();
   });
 

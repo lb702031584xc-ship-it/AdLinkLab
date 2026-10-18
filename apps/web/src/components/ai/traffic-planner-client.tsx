@@ -22,6 +22,10 @@ import {
   type AiActionResult,
 } from "@/lib/api/ai-actions";
 import {
+  ocrScreenshotAction,
+  type NetworkOcrMetrics,
+} from "@/lib/api/traffic-actions";
+import {
   mergeLongtailCandidates,
   type LongtailCandidate,
 } from "@/lib/longtail";
@@ -444,7 +448,8 @@ export function TrafficPlannerClient({
     setCvrSource("epc");
   };
 
-  /* 抓取 offer 页填入 EPC / payout / CVR：% 是佣金，$ 是预估 payout，两者不混淆。
+  /* 抓取 offer 页填入佣金 / 均价：% 是佣金，$ 是预估 payout（每次转化的收益），两者不混淆。
+     关键：预估 payout 是按转化计的，绝不能填进按点击计的 EPC（会把出价算高几十倍）。
      填入后经 ⑤→④ 同步回工作表 ④，自动化广告页读本页快照，三个地方都有。 */
   const [offerCaptureMsg, setOfferCaptureMsg] = useState("");
   const [offerCaptureBusy, setOfferCaptureBusy] = useState(false);
@@ -462,24 +467,64 @@ export function TrafficPlannerClient({
         setOfferCaptureMsg(d.offerCaptureNone);
         return;
       }
-      if (ex.estimatedPayout != null) setEpc(String(ex.estimatedPayout));
-      let basePayout: number | null = null;
       if (ex.commissionType === "percentage" && ex.commissionValue != null) {
-        if (ex.averageOrderValue != null) setAvgPrice(String(ex.averageOrderValue));
+        // 均价：优先用页面给的，没有就用 预估 payout ÷ 佣金率 反推（如 $23.4 ÷ 13% ≈ $180）。
+        const derivedAvg =
+          ex.averageOrderValue != null
+            ? ex.averageOrderValue
+            : ex.estimatedPayout != null && ex.commissionValue > 0
+              ? ex.estimatedPayout / (ex.commissionValue / 100)
+              : null;
+        if (derivedAvg != null && Number.isFinite(derivedAvg) && derivedAvg > 0) {
+          setAvgPrice(String(Math.round(derivedAvg * 100) / 100));
+        }
         setCommissionRate(String(ex.commissionValue));
-        if (ex.averageOrderValue != null) basePayout = (ex.averageOrderValue * ex.commissionValue) / 100;
       } else if (ex.commissionType === "fixed" && ex.commissionValue != null) {
         setPayout(String(ex.commissionValue));
-        basePayout = ex.commissionValue;
       }
-      /* CVR = EPC ÷ payout（与下方“用 EPC 反推 CVR”同口径），来源标实测。 */
-      if (ex.estimatedPayout != null && basePayout != null && basePayout > 0) {
-        setNetworkCvr(((ex.estimatedPayout / basePayout) * 100).toFixed(2));
-        setCvrSource("epc");
-      }
+      /* EPC 与网络平均转化率不从这里填：页面上的预估 payout 是按转化计的，
+         EPC 要的是网络后台按点击计的实测数（去后台复制或截图识别）。 */
       setOfferCaptureMsg(d.offerCaptureFilled.replace("{summary}", res.data.summaryText));
     } finally {
       setOfferCaptureBusy(false);
+    }
+  };
+
+  /* 截图识别：网络后台 offer 详情页截图 → 识别 EPC / 转化率 / 点击数 → 填入（识别值需人工核对）。
+     注意：只认明确标 "EPC" 的数字；"Est. Payout $X" 是按转化计的，不当 EPC。 */
+  const [networkOcrMsg, setNetworkOcrMsg] = useState("");
+  const [networkOcrBusy, setNetworkOcrBusy] = useState(false);
+  const networkOcrFileRef = useRef<HTMLInputElement>(null);
+  const ocrNetworkScreenshot = async (file: File) => {
+    setNetworkOcrBusy(true);
+    setNetworkOcrMsg("");
+    try {
+      const fd = new FormData();
+      fd.append("screenshot", file);
+      const res = await ocrScreenshotAction(fd, "network");
+      if (!res.ok) {
+        setNetworkOcrMsg(res.error);
+        return;
+      }
+      const m: NetworkOcrMetrics = res.data;
+      const filled: string[] = [];
+      if (m.epc != null) {
+        setEpc(String(m.epc));
+        filled.push(`EPC $${m.epc}`);
+      }
+      if (m.conversionRate != null) {
+        setNetworkCvr(String(m.conversionRate));
+        setCvrSource("manual");
+        filled.push(`${d.networkCvr} ${m.conversionRate}%`);
+      }
+      setNetworkOcrMsg(
+        filled.length > 0
+          ? `${d.networkOcrFilled}：${filled.join("、")}（${d.networkOcrReview}）`
+          : d.networkOcrNone
+      );
+    } finally {
+      setNetworkOcrBusy(false);
+      if (networkOcrFileRef.current) networkOcrFileRef.current.value = "";
     }
   };
 
@@ -1616,7 +1661,18 @@ export function TrafficPlannerClient({
               </label>
             )}
           </div>
-          {/* 抓取 offer 页填入 EPC / payout / CVR（插件抓取 → AI 提取 → 填入本页，同步到工作表 ④） */}
+          {/* 后台拿不到数据时的 fallback 指引（EPC 为空时显示） */}
+          {!epc.trim() ? (
+            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+              <p className="text-xs font-semibold text-amber-900">{d.noDataGuideTitle}</p>
+              <ol className="mt-1 list-decimal space-y-0.5 pl-4 text-xs text-amber-900/90">
+                {d.noDataGuide.map((s) => (
+                  <li key={s}>{s}</li>
+                ))}
+              </ol>
+            </div>
+          ) : null}
+          {/* 抓取 offer 页填入佣金 / 均价（插件抓取 → AI 提取 → 填入本页，同步到工作表 ④） */}
           <div className="mt-3 border-t border-ink/10 pt-3">
             <span className="text-xs font-medium text-ink/70">{d.offerCapturePick}：</span>
             <div className="mt-1">
@@ -1626,6 +1682,34 @@ export function TrafficPlannerClient({
               <p className="mt-1 text-xs text-ink/55">{d.offerCaptureBusy}</p>
             ) : offerCaptureMsg ? (
               <p className="mt-1 text-xs text-ink/70">{offerCaptureMsg}</p>
+            ) : null}
+          </div>
+          {/* 截图识别：网络后台 offer 详情页截图 → EPC / 转化率 / 点击数 */}
+          <div className="mt-3 border-t border-ink/10 pt-3">
+            <span className="text-xs font-medium text-ink/70">{d.networkOcrTitle}：</span>
+            <span className="ml-1 text-xs text-ink/50">{d.networkOcrHint}</span>
+            <div className="mt-1 flex items-center gap-2">
+              <input
+                ref={networkOcrFileRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void ocrNetworkScreenshot(f);
+                }}
+              />
+              <button
+                type="button"
+                disabled={networkOcrBusy}
+                onClick={() => networkOcrFileRef.current?.click()}
+                className={`${btnGhost} disabled:opacity-50`}
+              >
+                {networkOcrBusy ? d.networkOcrBusy : d.networkOcrButton}
+              </button>
+            </div>
+            {networkOcrMsg ? (
+              <p className="mt-1 text-xs text-ink/70">{networkOcrMsg}</p>
             ) : null}
           </div>
           {/* 出价参考：EPC / 保本 CPC / 推荐出价（profit-calc 算出，指导值） */}

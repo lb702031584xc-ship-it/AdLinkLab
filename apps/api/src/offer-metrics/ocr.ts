@@ -137,6 +137,87 @@ export async function ocrImageText(
   }
 }
 
+export interface NetworkOcrMetrics {
+  /** 网络后台 EPC（美元/次点击）；截图里没有 → null */
+  epc: number | null;
+  /** 网络平均转化率（%）；截图里没有 → null */
+  conversionRate: number | null;
+  /** 点击数；截图里没有 → null */
+  clicks: number | null;
+  /** tesseract 平均置信度 0-100（识别失败时为 null）。 */
+  confidence: number | null;
+  /** 识别值仅供参考，必须人工核对。 */
+  needsReview: true;
+}
+
+/**
+ * 从网络后台截图 OCR 全文里提取 EPC / 转化率 / 点击数（大小写不敏感）。纯函数，可单测。
+ * 注意：offer 详情页的 "Est. Payout: $X" 是每次转化的预估收益，不是 EPC，
+ * 这里只认明确标 "EPC" 的数字，不把 payout 当 EPC。
+ */
+export function extractNetworkMetricsFromText(
+  text: string
+): Omit<NetworkOcrMetrics, "confidence" | "needsReview"> {
+  const t = (text ?? "").replace(/\s+/g, " ");
+  let epc: number | null = null;
+  let conversionRate: number | null = null;
+  let clicks: number | null = null;
+
+  const em = t.match(/(?:\bEPC\b|E\.?\s?P\.?\s?C\.?)\s*[:：]?\s*\$?\s*([\d,]+(?:\.\d+)?)/i);
+  if (em) {
+    const v = num(em[1]!);
+    if (v !== null && v >= 0 && v < 100000) epc = v;
+  }
+
+  const cm = t.match(
+    /(?:conversion\s*rate|conv\.?\s*rate|\bCVR\b|转化率)\s*[:：]?\s*([\d.]+)\s*%/i
+  );
+  if (cm) {
+    const v = Number(cm[1]);
+    if (Number.isFinite(v) && v >= 0 && v <= 100) conversionRate = v;
+  }
+
+  const km = t.match(/(?:\bclicks\b|点击(?:数|量)?)\s*[:：]?\s*([\d,]+)/i);
+  if (km) {
+    const v = num(km[1]!);
+    if (v !== null && v >= 0) clicks = Math.round(v);
+  }
+
+  return { epc, conversionRate, clicks };
+}
+
+/**
+ * 对网络后台截图做 OCR 并提取 EPC / 转化率 / 点击数。图片只在内存里处理，不落盘、不存库。
+ * 全文识别失败 → 抛 OcrError（422）。
+ */
+export async function ocrImageNetworkMetrics(
+  image: Buffer,
+  deps: OcrDeps = {}
+): Promise<NetworkOcrMetrics> {
+  if (!image || image.length === 0) {
+    throw new OcrError("图片为空，无法识别");
+  }
+  const recognize = deps.recognizeImpl ?? recognizeWithTesseract;
+  let text: string;
+  let confidence: number | null;
+  try {
+    const r = await recognize(image);
+    text = r.text;
+    confidence = r.confidence;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new OcrError(`截图识别失败（${msg}），请换一张更清晰的截图重试`);
+  }
+  if (!text || !text.trim()) {
+    throw new OcrError("截图中未识别出任何文字，请换一张更清晰的截图重试");
+  }
+  return {
+    ...extractNetworkMetricsFromText(text),
+    confidence,
+    needsReview: true as const,
+  };
+}
+
 /**
  * 对图片做 OCR 并提取指标。图片只在内存里处理，不落盘、不存库。
  * 全文识别失败 → 抛 OcrError（422）。

@@ -246,15 +246,33 @@ export interface OcrMetrics {
   needsReview: true;
 }
 
+/** 网络后台截图 OCR 识别出的指标（识别值，需人工核对）。 */
+export interface NetworkOcrMetrics {
+  epc: number | null;
+  conversionRate: number | null;
+  clicks: number | null;
+  confidence: number | null;
+  needsReview: true;
+}
+
 /**
  * 截图 OCR 识别（第四批）。
- * 后端契约：POST /api/v1/offer-metrics/ocr（multipart 单图 ≤8MB）
- *   → OcrMetrics；识别失败 422。
+ * 后端契约：POST /api/v1/offer-metrics/ocr[?kind=network]（multipart 单图 ≤8MB）
+ *   → OcrMetrics（商品页）或 NetworkOcrMetrics（kind=network，网络后台截图）；识别失败 422。
  * 图片只转发给后端在内存里处理，不落盘。
  */
 export async function ocrScreenshotAction(
-  formData: FormData
-): Promise<TrafficGateActionResult<OcrMetrics>> {
+  formData: FormData,
+  kind?: "product"
+): Promise<TrafficGateActionResult<OcrMetrics>>;
+export async function ocrScreenshotAction(
+  formData: FormData,
+  kind: "network"
+): Promise<TrafficGateActionResult<NetworkOcrMetrics>>;
+export async function ocrScreenshotAction(
+  formData: FormData,
+  kind: "product" | "network" = "product"
+): Promise<TrafficGateActionResult<OcrMetrics | NetworkOcrMetrics>> {
   const file = formData.get("screenshot");
   if (!(file instanceof File) || file.size === 0) {
     return { ok: false, error: "请先选择一张截图。" };
@@ -268,12 +286,15 @@ export async function ocrScreenshotAction(
   out.append("screenshot", file, file.name || "screenshot.png");
   let res: Response;
   try {
-    res = await fetch(`${base}/api/v1/offer-metrics/ocr`, {
-      method: "POST",
-      headers: { ...authHeaders },
-      body: out,
-      cache: "no-store",
-    });
+    res = await fetch(
+      `${base}/api/v1/offer-metrics/ocr${kind === "network" ? "?kind=network" : ""}`,
+      {
+        method: "POST",
+        headers: { ...authHeaders },
+        body: out,
+        cache: "no-store",
+      }
+    );
   } catch {
     return { ok: false, error: "网络请求失败，请稍后重试。" };
   }
@@ -292,7 +313,7 @@ export async function ocrScreenshotAction(
     return { ok: false, error: message };
   }
   try {
-    const data = (await res.json()) as OcrMetrics;
+    const data = (await res.json()) as OcrMetrics | NetworkOcrMetrics;
     return { ok: true, data };
   } catch (e) {
     return mapError(e, "识别结果解析失败。");

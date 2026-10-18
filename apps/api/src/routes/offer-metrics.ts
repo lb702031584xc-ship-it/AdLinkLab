@@ -26,7 +26,7 @@ import {
 } from "../auth/sessions.js";
 import { scrapeOfferMetrics, type OfferMetrics } from "../offer-metrics/scrape.js";
 import { scoreOfferMetrics } from "../offer-metrics/score.js";
-import { ocrImageMetrics } from "../offer-metrics/ocr.js";
+import { ocrImageMetrics, ocrImageNetworkMetrics } from "../offer-metrics/ocr.js";
 
 interface Deps {
   prisma: PrismaClient;
@@ -36,6 +36,8 @@ interface Deps {
   scrapeImpl?: typeof scrapeOfferMetrics;
   /** Injectable for tests. */
   ocrImpl?: typeof ocrImageMetrics;
+  /** Injectable for tests (kind=network). */
+  ocrNetworkImpl?: typeof ocrImageNetworkMetrics;
 }
 
 export interface RateLimitRedis {
@@ -279,6 +281,12 @@ export async function registerOfferMetricsRoutes(
     }
 
     const ocr = deps.ocrImpl ?? ocrImageMetrics;
+    const ocrNetwork = deps.ocrNetworkImpl ?? ocrImageNetworkMetrics;
+    // kind=network：识别网络后台截图（EPC / 转化率 / 点击数）；默认识别商品页（价格/评分/评价/销量）。
+    const query = (request.query ?? {}) as Record<string, unknown>;
+    if (query.kind === "network") {
+      return await ocrNetwork(buf);
+    }
     return await ocr(buf);
   });
 }
