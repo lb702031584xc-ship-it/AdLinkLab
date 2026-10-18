@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { TrafficGate } from "@/lib/api/amazon-types";
 import {
   ocrScreenshotAction,
@@ -145,6 +145,7 @@ export function TrafficGateCard({
   dict: d,
   onRecheck,
   recheckBusy,
+  onManualInputChange,
 }: {
   gate: TrafficGate | null | undefined;
   loading: boolean;
@@ -155,6 +156,15 @@ export function TrafficGateCard({
    */
   onRecheck?: (input: TrafficGateRecheckInput) => void;
   recheckBusy?: boolean;
+  /**
+   * SEMrush 三字段（自然流量/付费流量/付费关键词数）变化时上报。
+   * 供工作表"初筛"复用同一输入（不另加输入框）；非法/未填时对应字段为 undefined。
+   */
+  onManualInputChange?: (v: {
+    organicTraffic?: number;
+    paidTraffic?: number;
+    paidKeywords?: number;
+  }) => void;
 }) {
   // 手动区默认展开条件：未检测（gate=null）或 unknown（暂无数据）时展开，其他时候折叠。
   const [manualOpen, setManualOpen] = useState<boolean | null>(null);
@@ -170,6 +180,31 @@ export function TrafficGateCard({
   const [semrushPaidKeywords, setSemrushPaidKeywords] = useState("");
   const [ocrError, setOcrError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+
+  /* SEMrush 三字段上报（供初筛复用）：与 submitManual 同一解析口径
+     （organic 正整数；paid/paidKeywords 非负整数，0 允许）；非法/未填 → undefined。 */
+  useEffect(() => {
+    if (!onManualInputChange) return;
+    const parsePosInt = (raw: string): number | undefined => {
+      const t = raw.trim();
+      if (!t) return undefined;
+      const n = Number(t);
+      if (!Number.isInteger(n) || n <= 0 || n > 1e12) return undefined;
+      return n;
+    };
+    const parseNonNegInt = (raw: string): number | undefined => {
+      const t = raw.trim();
+      if (!t) return undefined;
+      const n = Number(t);
+      if (!Number.isInteger(n) || n < 0 || n > 1e12) return undefined;
+      return n;
+    };
+    onManualInputChange({
+      organicTraffic: parsePosInt(semrushOrganic),
+      paidTraffic: parseNonNegInt(semrushPaid),
+      paidKeywords: parseNonNegInt(semrushPaidKeywords),
+    });
+  }, [semrushOrganic, semrushPaid, semrushPaidKeywords, onManualInputChange]);
 
   async function onOcrFile(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];

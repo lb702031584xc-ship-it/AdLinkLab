@@ -27,6 +27,21 @@ import { TrafficGateCard } from "@/components/traffic/traffic-gate-card";
 import { checkTrafficGateAction } from "@/lib/api/traffic-actions";
 import type { TrafficGate } from "@/lib/api/amazon-types";
 import type { AiUrlCheckResult, TrafficPlanResult } from "@/lib/api/ai";
+/* 初筛（零成本杀法则）：纯逻辑 + server actions。 */
+import {
+  initialPrescreenRows,
+  evaluateCommissionPrescreen,
+  evaluatePaidZeroPrescreen,
+  prescreenOverall,
+  type PrescreenRowId,
+  type PrescreenRowState,
+  type PrescreenRowStatus,
+} from "@/lib/prescreen";
+import {
+  checkOfferBlacklistAction,
+  getPaidZeroThresholdsAction,
+} from "@/lib/api/prescreen-actions";
+import { useI18n } from "@/i18n/I18nProvider";
 
 export type WorksheetSource = "affiliate" | "amazon" | "cashback";
 export type StepStatus = "pass" | "warn" | "fail" | null;
@@ -50,6 +65,15 @@ function statusBadge(s: StepStatus): string {
   if (s === "warn") return "bg-amber-100 text-amber-800";
   if (s === "fail") return "bg-red-100 text-red-800";
   return "bg-ink/10 text-ink/50";
+}
+
+/** 初筛行状态徽标：kill 红 / caution 黄 / pass 绿 / unknown 灰 / idle 浅灰。 */
+function prescreenBadge(s: PrescreenRowStatus): string {
+  if (s === "pass") return "bg-green-100 text-green-800";
+  if (s === "kill") return "bg-red-100 text-red-800";
+  if (s === "caution") return "bg-amber-100 text-amber-800";
+  if (s === "unknown") return "bg-ink/10 text-ink/50";
+  return "bg-ink/5 text-ink/40";
 }
 
 function fmt(n: number | null, digits = 2): string {
@@ -1228,6 +1252,27 @@ export function WorksheetClient({
   const [trafficGateLoading, setTrafficGateLoading] = useState(false);
   const [trafficGateError, setTrafficGateError] = useState<string | null>(null);
   const gateSeq = useRef(0);
+  /* 初筛（零成本杀法则）：4 条确定性规则按顺序跑，命中 kill 直接停。
+     位置：第 ① 步最顶部，流量门区之上。 */
+  const [prescreenRows, setPrescreenRows] = useState<PrescreenRowState[]>(() =>
+    initialPrescreenRows(),
+  );
+  const [prescreenRunning, setPrescreenRunning] = useState(false);
+  const [prescreenError, setPrescreenError] = useState<string | null>(null);
+  const prescreenSeq = useRef(0);
+  /** SEMrush 三字段：从流量门手动区上报（同一 state，不另加输入框）。 */
+  const [semrushInputs, setSemrushInputs] = useState<{
+    organicTraffic?: number;
+    paidTraffic?: number;
+    paidKeywords?: number;
+  }>({});
+  /* 初筛纯函数的中英文：跟随当前语言。 */
+  let prescreenLang: "zh" | "en" = "zh";
+  try {
+    prescreenLang = useI18n().lang === "en" ? "en" : "zh";
+  } catch {
+    prescreenLang = "zh";
+  }
   // offer 盈利字段 → 盈利测算 payout 预填：固定佣金直接用；按比例则 平均价×比例
   const initialPayout = (() => {
     if (!offer) return undefined;
@@ -1546,6 +1591,14 @@ export function WorksheetClient({
       w.vetoBanner.trafficGateFail.replace("{reason}", trafficGate.reason),
     );
   }
+  /* 初筛 kill：视为综合项 fail，直接进一票否决红条（与条款 DO_NOT_RUN /
+     盈利 EPC≤CPC / 流量门 fail 同级），并提示不用往下做 AI 深判。 */
+  const prescreenKillRow = prescreenRows.find((r) => r.status === "kill");
+  if (prescreenKillRow) {
+    vetoReasons.push(
+      w.prescreen.vetoReason.replace("{reason}", prescreenKillRow.reason),
+    );
+  }
   const vetoUnknowns: string[] = [];
   if (termsVerdict === null) vetoUnknowns.push(w.vetoBanner.termsUnknown);
   if (profitState === null) vetoUnknowns.push(w.vetoBanner.profitUnknown);
@@ -1561,14 +1614,15 @@ export function WorksheetClient({
 
   /* P0-1：流量门检测（第 ① 步内）。brand 取 Offer 名；domain 取 Offer URL 的
      hostname；keywords 取需求验证里已填的 SEMrush 关键词（前 5 个）。
-     extra 可带手动值：品牌名 / 手动月访问量 / SEMrush 域名概览三字段。 */
-  const runTrafficGateCheck = (extra?: {
+     extra 可带手动值：品牌名 / 手动月访问量 / SEMrush 域名概览三字段。
+     返回检测结果（供初筛第 4 条复用；同时照常落到下方流量门卡片）。 */
+  const fetchTrafficGate = (extra?: {
     brand?: string;
     manualMonthlyVisits?: number;
     organicTraffic?: number;
     paidTraffic?: number;
     paidKeywords?: number;
-  }) => {
+  }): Promise<TrafficGate | null> => {
     const seq = ++gateSeq.current;
     setTrafficGateLoading(true);
     setTrafficGateError(null);
@@ -1586,7 +1640,7 @@ export function WorksheetClient({
       .map((j) => j.keyword)
       .filter(Boolean)
       .slice(0, 5);
-    void checkTrafficGateAction({
+    return checkTrafficGateAction({
       brand,
       domain,
       keywords,
@@ -1595,14 +1649,133 @@ export function WorksheetClient({
       paidTraffic: extra?.paidTraffic,
       paidKeywords: extra?.paidKeywords,
     }).then((g) => {
-      if (seq !== gateSeq.current) return;
+      if (seq !== gateSeq.current) return null;
       setTrafficGateLoading(false);
       if (g.ok) {
         setTrafficGate(g.data);
-      } else {
-        setTrafficGateError(`${w.trafficGate.checkFailed}：${g.error}`);
+        return g.data;
       }
+      setTrafficGateError(`${w.trafficGate.checkFailed}：${g.error}`);
+      return null;
     });
+  };
+
+  const runTrafficGateCheck = (extra?: {
+    brand?: string;
+    manualMonthlyVisits?: number;
+    organicTraffic?: number;
+    paidTraffic?: number;
+    paidKeywords?: number;
+  }) => {
+    void fetchTrafficGate(extra);
+  };
+
+  /* 初筛一键跑：4 条零成本杀法则按顺序执行，任一 kill 立即停（不跑后面的，
+     省无用功）。kill 行直接进顶部一票否决红条（见 vetoReasons），并提示
+     不用往下做 AI 深判。 */
+  const runPrescreen = () => {
+    const seq = ++prescreenSeq.current;
+    const alive = () => seq === prescreenSeq.current;
+    setPrescreenRunning(true);
+    setPrescreenError(null);
+    const rows = initialPrescreenRows();
+    const setRow = (
+      id: PrescreenRowId,
+      status: PrescreenRowStatus,
+      reason: string,
+    ) => {
+      const r = rows.find((x) => x.id === id);
+      if (r) {
+        r.status = status;
+        r.reason = reason;
+      }
+      if (alive()) setPrescreenRows(rows.map((x) => ({ ...x })));
+    };
+    const finish = () => {
+      if (alive()) setPrescreenRunning(false);
+    };
+    (async () => {
+      try {
+        // ① 黑名单：有 offerId 才调接口；手动 offer（未入库）标 unknown，不杀。
+        if (offer?.id) {
+          const bl = await checkOfferBlacklistAction(offer.id);
+          if (!alive()) return;
+          if (bl.ok && bl.blacklisted) {
+            setRow(
+              "blacklist",
+              "kill",
+              w.prescreen.blacklisted.replace("{reason}", bl.reason ?? ""),
+            );
+            finish();
+            return;
+          }
+          if (!bl.ok) {
+            // 接口失败：fail-soft，标 unknown 不杀。
+            setRow(
+              "blacklist",
+              "unknown",
+              `${w.prescreen.blacklistError}：${bl.error}`,
+            );
+          } else {
+            setRow("blacklist", "pass", w.prescreen.blacklistPass);
+          }
+        } else {
+          setRow("blacklist", "unknown", w.prescreen.blacklistManual);
+        }
+        // ② $8 佣金门槛：payout 已知且 < $8 → kill；未知不杀。
+        const cm = evaluateCommissionPrescreen(initialPayout, prescreenLang);
+        if (!alive()) return;
+        setRow("commission", cm.status, cm.reason);
+        if (cm.status === "kill") {
+          finish();
+          return;
+        }
+        // ③ 付费为零规则：阈值走后端配置；kill 才停，caution/unknown 继续。
+        const th = await getPaidZeroThresholdsAction();
+        if (!alive()) return;
+        const pz = evaluatePaidZeroPrescreen(
+          semrushInputs.organicTraffic,
+          semrushInputs.paidTraffic,
+          semrushInputs.paidKeywords,
+          th.organicTrafficMin,
+          th.paidTrafficWarnRatio,
+          prescreenLang,
+        );
+        setRow("paidZero", pz.status, pz.reason);
+        if (pz.status === "kill") {
+          finish();
+          return;
+        }
+        // ④ 流量门免费档：复用现有检测（SEMrush 三字段读手动区同一 state）；
+        // 结果同时落到下方流量门卡片，不重复调接口。
+        const g = await fetchTrafficGate({
+          organicTraffic: semrushInputs.organicTraffic,
+          paidTraffic: semrushInputs.paidTraffic,
+          paidKeywords: semrushInputs.paidKeywords,
+        });
+        if (!alive()) return;
+        if (!g) {
+          // 检测失败（网络/服务端错误）：fail-soft，标 unknown 不杀。
+          setRow("trafficGate", "unknown", w.prescreen.gateError);
+        } else if (g.passed === true) {
+          if (g.caution) {
+            setRow("trafficGate", "caution", g.caution);
+          } else {
+            setRow("trafficGate", "pass", w.prescreen.gatePass);
+          }
+        } else if (g.passed === false) {
+          setRow("trafficGate", "kill", g.reason);
+        } else {
+          setRow("trafficGate", "unknown", w.prescreen.gateUnknown);
+        }
+        finish();
+      } catch (e) {
+        if (alive()) {
+          setPrescreenError(e instanceof Error ? e.message : String(e));
+          setPrescreenRunning(false);
+        }
+      }
+    })();
   };
 
   return (
@@ -1923,7 +2096,77 @@ export function WorksheetClient({
         open={openStep === 1}
         onToggle={() => toggleStep(1)}
       >
-        {/* P0-1：流量门检测（第 ① 步最顶部：先看到流量门，再看关键词；
+        {/* 初筛（零成本杀法则）：第 ① 步最顶部，流量门区之上。
+            4 条确定性规则按顺序跑，命中 kill 直接停，不浪费 AI 深判。 */}
+        <div className="mb-5 rounded-xl border border-ink/10 bg-ink/[0.02] p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-bold text-ink">{w.prescreen.title}</h3>
+            <button
+              type="button"
+              onClick={runPrescreen}
+              disabled={prescreenRunning}
+              className="rounded-lg bg-ink px-4 py-2 text-sm font-medium text-white hover:bg-ink/85 disabled:opacity-50"
+            >
+              {prescreenRunning ? w.prescreen.running : w.prescreen.runButton}
+            </button>
+          </div>
+          <p className="mt-1 text-xs text-ink/55">{w.prescreen.hint}</p>
+          <ul className="mt-3 space-y-2">
+            {prescreenRows.map((r) => (
+              <li key={r.id} className="flex items-start gap-2 text-sm">
+                <span
+                  className={`mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${prescreenBadge(r.status)}`}
+                >
+                  {w.prescreen.status[r.status]}
+                </span>
+                <span className="min-w-0">
+                  <span className="block font-medium text-ink">
+                    {w.prescreen.rows[r.id]}
+                  </span>
+                  {r.reason ? (
+                    <span className="block text-xs text-ink/60">{r.reason}</span>
+                  ) : null}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {prescreenError ? (
+            <p className="mt-2 text-sm text-red-600">{prescreenError}</p>
+          ) : null}
+          {prescreenOverall(prescreenRows) === "kill" ? (
+            <div
+              className="mt-3 rounded-lg border border-red-300 bg-red-50 p-3"
+              role="alert"
+            >
+              <p className="text-sm font-bold text-red-800">
+                {w.prescreen.killTitle}
+              </p>
+              <p className="mt-1 text-xs text-red-700">{w.prescreen.killHint}</p>
+            </div>
+          ) : null}
+          {prescreenOverall(prescreenRows) === "pass" ? (
+            <div className="mt-3 rounded-lg border border-green-300 bg-green-50 p-3">
+              <p className="text-sm font-bold text-green-800">
+                {w.prescreen.passTitle}
+              </p>
+              <button
+                type="button"
+                onClick={() => setOpenStep(2)}
+                className="mt-2 rounded-lg bg-green-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-800"
+              >
+                {w.prescreen.goStep2}
+              </button>
+            </div>
+          ) : null}
+          {prescreenOverall(prescreenRows) === "pending" &&
+          prescreenRows.some((r) => r.status !== "idle") ? (
+            <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3">
+              <p className="text-xs text-amber-800">{w.prescreen.pendingHint}</p>
+            </div>
+          ) : null}
+        </div>
+
+        {/* P0-1：流量门检测（第 ① 步内，初筛卡片之下）：先看到流量门，再看关键词；
             与需求验证同属"有没有量"，但判定口径不同：
             流量门看官网/品牌/关键词热度三信号，unknown 不判 fail）。
             手动点检测（配额考虑，不自动跑）。 */}
@@ -1949,6 +2192,7 @@ export function WorksheetClient({
               loading={trafficGateLoading}
               dict={w.trafficGate}
               onRecheck={(input) => runTrafficGateCheck(input)}
+              onManualInputChange={setSemrushInputs}
               recheckBusy={trafficGateLoading}
             />
           ) : null}
