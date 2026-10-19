@@ -15,6 +15,7 @@
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@adlinklab/database";
 import { ForbiddenError, ValidationError } from "@adlinklab/shared";
+import { isOwner } from "../auth/rbac.js";
 
 /** 可授权的能力（B1/B6：catalog-sync 与 direct-api-write 暂无执行代码，仅授权记录）。 */
 export const GRANT_CAPABILITIES = [
@@ -147,10 +148,15 @@ export async function requireActiveGrant(
   input: {
     tenantId: string;
     userId: string;
+    /** 调用方角色：owner 直接豁免（返回 null），admin 及以下仍需有效授权。 */
+    userRole: string;
     capability: GrantCapability;
     whitelistValue: string;
   }
-): Promise<GrantRow> {
+): Promise<GrantRow | null> {
+  // Owner 豁免：站长本人使用高风险能力不需要走申请/审批。
+  // 返回 null 表示豁免放行（调用方审计时标记 exempt: "owner"，不计 usage）。
+  if (isOwner(input.userRole)) return null;
   const grants = (await prisma.adminGrant.findMany({
     where: {
       tenantId: input.tenantId,

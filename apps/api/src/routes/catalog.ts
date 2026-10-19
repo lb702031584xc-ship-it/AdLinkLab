@@ -162,6 +162,7 @@ export async function registerCatalogRoutes(
         {
           tenantId: info.tenantId,
           userId: info.id,
+          userRole: info.role,
           networkId,
         }
       );
@@ -374,6 +375,7 @@ export async function registerCatalogRoutes(
         await requireActiveGrant(prisma, {
           tenantId: info.tenantId,
           userId: info.id,
+          userRole: info.role,
           capability: "catalog-sync",
           whitelistValue: n.kind,
         });
@@ -477,10 +479,11 @@ export async function registerCatalogRoutes(
       const info = await requireSession(deps, request);
       const networkId = assertId(request.body?.networkId, "networkId");
       const network = await findNetwork(prisma, info.tenantId, networkId);
-      // B6：保存登录态同样要求授权（whitelist=kind）。
+      // B6：保存登录态同样要求授权（whitelist=kind）；owner 豁免。
       const grant = await requireActiveGrant(prisma, {
         tenantId: info.tenantId,
         userId: info.id,
+        userRole: info.role,
         capability: "catalog-sync",
         whitelistValue: network.kind,
       });
@@ -508,13 +511,17 @@ export async function registerCatalogRoutes(
       });
       await writeCatalogAudit(prisma, {
         tenantId: info.tenantId,
-        grantId: grant.id,
+        grantId: grant?.id ?? null,
         actorId: info.id,
         // 绝不记 cookie 内容。
         action: "CATALOG_SESSION_SAVED",
-        detail: { kind: network.kind, networkId: network.id },
+        detail: {
+          kind: network.kind,
+          networkId: network.id,
+          ...(grant ? {} : { exempt: "owner" }),
+        },
       });
-      await incrementGrantUsage(prisma, grant);
+      if (grant) await incrementGrantUsage(prisma, grant);
       return { saved: true };
     }
   );
@@ -547,10 +554,11 @@ export async function registerCatalogRoutes(
     const info = await requireSession(deps, request);
     const networkId = assertId(request.body?.networkId, "networkId");
     const network = await findNetwork(prisma, info.tenantId, networkId);
-    // B6：保存登录账号同样要求授权（whitelist=kind）。
+    // B6：保存登录账号同样要求授权（whitelist=kind）；owner 豁免。
     const grant = await requireActiveGrant(prisma, {
       tenantId: info.tenantId,
       userId: info.id,
+      userRole: info.role,
       capability: "catalog-sync",
       whitelistValue: network.kind,
     });
@@ -588,13 +596,17 @@ export async function registerCatalogRoutes(
     });
     await writeCatalogAudit(prisma, {
       tenantId: info.tenantId,
-      grantId: grant.id,
+      grantId: grant?.id ?? null,
       actorId: info.id,
       // 绝不记用户名/密码内容，只记动作。
       action: "CATALOG_SESSION_CREDENTIALS_SAVED",
-      detail: { kind: network.kind, networkId: network.id },
+      detail: {
+        kind: network.kind,
+        networkId: network.id,
+        ...(grant ? {} : { exempt: "owner" }),
+      },
     });
-    await incrementGrantUsage(prisma, grant);
+    if (grant) await incrementGrantUsage(prisma, grant);
     return { saved: true };
   });
 

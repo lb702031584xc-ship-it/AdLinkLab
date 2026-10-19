@@ -102,6 +102,8 @@ export interface CatalogSyncDeps {
 export interface CatalogSyncInput {
   tenantId: string;
   userId: string;
+  /** 调用方角色：owner 豁免 B6 授权。 */
+  userRole: string;
   networkId: string;
   fetchImpl?: typeof fetch;
 }
@@ -334,7 +336,7 @@ export async function syncCatalog(
   input: CatalogSyncInput
 ): Promise<CatalogSyncSummary> {
   const { prisma } = deps;
-  const { tenantId, userId, networkId } = input;
+  const { tenantId, userId, userRole, networkId } = input;
   const getAdapterImpl = deps.getAdapterImpl ?? getAdapter;
   const getSessionAdapterImpl = deps.getSessionAdapterImpl ?? getSessionAdapter;
 
@@ -345,13 +347,15 @@ export async function syncCatalog(
   // 闭包内 TS  narrowing 会丢失，用 net 捕获非空。
   const net = network;
 
-  // 1. B6 授权强制执行（无授权 403；管理员也不能绕过）。
+  // 1. B6 授权强制执行（无授权 403；owner 豁免）。
   const grant = await requireActiveGrant(prisma, {
     tenantId,
     userId,
+    userRole,
     capability: "catalog-sync",
     whitelistValue: net.kind,
   });
+  // owner 豁免时 grant 为 null：审计 grantId 记 null（非 owner 不可能走到这里，null 即豁免）。
   const channel: CatalogChannel = networkKindToChannel(net.kind);
 
   // 2. 黑名单账号 → 直接跳过，不再浪费请求。
@@ -369,7 +373,7 @@ export async function syncCatalog(
     const reason = `账号在黑名单中（${entry?.reason ?? "unknown"}），已自动跳过同步`;
     await writeCatalogAudit(prisma, {
       tenantId,
-      grantId: grant.id,
+      grantId: grant?.id ?? null,
       actorId: userId,
       action: "CATALOG_SYNC_SKIPPED_BLACKLIST",
       detail: { kind: net.kind, channel, networkId: net.id, reason },
@@ -393,7 +397,7 @@ export async function syncCatalog(
   } else {
     await writeCatalogAudit(prisma, {
       tenantId,
-      grantId: grant.id,
+      grantId: grant?.id ?? null,
       actorId: userId,
       action: "CATALOG_SYNC_INVALID_MODE",
       detail: { kind: net.kind, syncMode: net.syncMode },
@@ -414,7 +418,7 @@ export async function syncCatalog(
     });
     await writeCatalogAudit(prisma, {
       tenantId,
-      grantId: grant.id,
+      grantId: grant?.id ?? null,
       actorId: userId,
       action: "CATALOG_SYNC_SKIPPED_EXPIRED",
       detail: {
@@ -443,7 +447,7 @@ export async function syncCatalog(
   const syncStartedAt = new Date();
   await writeCatalogAudit(prisma, {
     tenantId,
-    grantId: grant.id,
+    grantId: grant?.id ?? null,
     actorId: userId,
     action: "CATALOG_SYNC_START",
     detail: { kind: net.kind, channel, mode, networkId: net.id },
@@ -456,7 +460,7 @@ export async function syncCatalog(
     });
     await writeCatalogAudit(prisma, {
       tenantId,
-      grantId: grant.id,
+      grantId: grant?.id ?? null,
       actorId: userId,
       action: "CATALOG_SYNC_FAILED",
       detail: { kind: net.kind, channel, mode, error: message.slice(0, 500) },
@@ -500,7 +504,7 @@ export async function syncCatalog(
             networkKind: net.kind,
             reason: "api_account_restricted",
             source: "auto",
-            grantId: grant.id,
+            grantId: grant?.id ?? null,
             evidence: { httpStatus: 403, mode: "api" },
           });
         }
@@ -553,7 +557,7 @@ export async function syncCatalog(
           networkKind: net.kind,
           reason: "session_account_restricted",
           source: "auto",
-          grantId: grant.id,
+          grantId: grant?.id ?? null,
           evidence: { httpStatus: 403, mode: "session" },
         });
         await prisma.affiliateNetwork.update({
@@ -566,7 +570,7 @@ export async function syncCatalog(
         });
         await writeCatalogAudit(prisma, {
           tenantId,
-          grantId: grant.id,
+          grantId: grant?.id ?? null,
           actorId: userId,
           action: "CATALOG_SESSION_EXPIRED",
           detail: { kind: net.kind, restricted: true },
@@ -583,7 +587,7 @@ export async function syncCatalog(
         });
         await writeCatalogAudit(prisma, {
           tenantId,
-          grantId: grant.id,
+          grantId: grant?.id ?? null,
           actorId: userId,
           action: "CATALOG_SESSION_EXPIRED",
           detail: { kind: net.kind, strikes },
@@ -597,7 +601,7 @@ export async function syncCatalog(
             networkKind: net.kind,
             reason: "session_expired_x3",
             source: "auto",
-            grantId: grant.id,
+            grantId: grant?.id ?? null,
             evidence: { strikes, mode: "session" },
           });
         }
@@ -621,7 +625,7 @@ export async function syncCatalog(
       });
       await writeCatalogAudit(prisma, {
         tenantId,
-        grantId: grant.id,
+        grantId: grant?.id ?? null,
         actorId: userId,
         action: "CATALOG_SESSION_RATE_LIMITED",
         detail: { kind: net.kind },
@@ -643,7 +647,7 @@ export async function syncCatalog(
       });
       await writeCatalogAudit(prisma, {
         tenantId,
-        grantId: grant.id,
+        grantId: grant?.id ?? null,
         actorId: userId,
         action: "CATALOG_SESSION_TEMPLATE_UNVERIFIED",
         detail: { kind: net.kind },
@@ -668,7 +672,7 @@ export async function syncCatalog(
       });
       await writeCatalogAudit(prisma, {
         tenantId,
-        grantId: grant.id,
+        grantId: grant?.id ?? null,
         actorId: userId,
         action: "CATALOG_SYNC_FAILED",
         detail: { kind: net.kind, channel, mode, error: error.message.slice(0, 500) },
@@ -773,7 +777,7 @@ export async function syncCatalog(
       networkKind: net.kind,
       reason: "sync_disappeared",
       source: "auto",
-      grantId: grant.id,
+      grantId: grant?.id ?? null,
       evidence: {
         externalId: d.externalId,
         lastSyncedAt: new Date(d.syncedAt).toISOString(),
@@ -894,7 +898,7 @@ export async function syncCatalog(
           autoCreatedOffers += 1;
           await writeCatalogAudit(prisma, {
             tenantId,
-            grantId: grant.id,
+            grantId: grant?.id ?? null,
             actorId: userId,
             action: "CATALOG_AUTO_OFFER_CREATED",
             detail: {
@@ -909,7 +913,7 @@ export async function syncCatalog(
         // 单个失败不中断整批（缺链接等），记审计继续。
         await writeCatalogAudit(prisma, {
           tenantId,
-          grantId: grant.id,
+          grantId: grant?.id ?? null,
           actorId: userId,
           action: "CATALOG_AUTO_OFFER_FAILED",
           detail: {
@@ -930,7 +934,7 @@ export async function syncCatalog(
   });
   await writeCatalogAudit(prisma, {
     tenantId,
-    grantId: grant.id,
+    grantId: grant?.id ?? null,
     actorId: userId,
     action: "CATALOG_SYNC_SUCCESS",
     detail: {
@@ -948,7 +952,7 @@ export async function syncCatalog(
       disappearedBlacklisted: disappeared.length,
     },
   });
-  await incrementGrantUsage(prisma, grant);
+  if (grant) await incrementGrantUsage(prisma, grant);
 
   return {
     synced: upserted.length,

@@ -66,14 +66,15 @@ export async function registerTrackingLinkResolveRoutes(
     const isOwned = owned.includes(domain.toLowerCase());
     let grantId: string | null = null;
     if (!isOwned) {
-      // 非自有域名 → 必须有有效授权；无授权 → 403（requireActiveGrant 内抛）。
+      // 非自有域名 → 必须有有效授权；无授权 → 403（requireActiveGrant 内抛）；owner 豁免。
       const grant = await requireActiveGrant(prisma, {
         tenantId: info.tenantId,
         userId: info.id,
+        userRole: info.role,
         capability: "tracking-link-resolve",
         whitelistValue: domain.toLowerCase(),
       });
-      grantId = grant.id;
+      grantId = grant?.id ?? null;
     }
 
     const fetched = await fetchImpl(url);

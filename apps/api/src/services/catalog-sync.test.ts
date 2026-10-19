@@ -104,6 +104,14 @@ function setup(opts: {
 const input = {
   tenantId: TEST_TENANT,
   userId: TEST_USER,
+  userRole: "member",
+  networkId: TEST_NETWORK,
+};
+
+const ownerInput = {
+  tenantId: TEST_TENANT,
+  userId: TEST_USER,
+  userRole: "owner",
   networkId: TEST_NETWORK,
 };
 
@@ -111,6 +119,12 @@ describe("syncCatalog 授权与黑名单", () => {
   it("无 grant → 403", async () => {
     const { deps } = setup({ grantKind: null });
     await expect(syncCatalog(deps, input)).rejects.toThrow(ForbiddenError);
+  });
+
+  it("owner 无 grant 也能同步（豁免）", async () => {
+    const { deps } = setup({ grantKind: null });
+    const summary = await syncCatalog(deps, ownerInput);
+    expect(summary.skipped).not.toBe(true);
   });
 
   it("grant 白名单不含 kind → 403", async () => {

@@ -313,10 +313,11 @@ export async function registerNetworkRoutes(
       if (!isSyncMode(syncMode)) {
         throw new ValidationError('syncMode 必须为 "api" 或 "session"');
       }
-      // B6：切换同步模式要求 catalog-sync 授权（whitelist=kind），无授权 403。
+      // B6：切换同步模式要求 catalog-sync 授权（whitelist=kind），无授权 403；owner 豁免。
       const grant = await requireActiveGrant(services.prisma, {
         tenantId,
         userId: info.id,
+        userRole: info.role,
         capability: "catalog-sync",
         whitelistValue: row.kind,
       });
@@ -338,12 +339,18 @@ export async function registerNetworkRoutes(
       });
       await writeCatalogAudit(services.prisma, {
         tenantId,
-        grantId: grant.id,
+        grantId: grant?.id ?? null,
         actorId: info.id,
         action: "NETWORK_SYNC_MODE_CHANGED",
-        detail: { kind: row.kind, networkId: row.id, from, to: syncMode },
+        detail: {
+          kind: row.kind,
+          networkId: row.id,
+          from,
+          to: syncMode,
+          ...(grant ? {} : { exempt: "owner" }),
+        },
       });
-      await incrementGrantUsage(services.prisma, grant);
+      if (grant) await incrementGrantUsage(services.prisma, grant);
       return {
         network: serializeNetwork(
           updated as Parameters<typeof serializeNetwork>[0]
