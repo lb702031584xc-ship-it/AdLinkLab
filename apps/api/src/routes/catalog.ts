@@ -518,7 +518,7 @@ export async function registerCatalogRoutes(
         detail: {
           kind: network.kind,
           networkId: network.id,
-          ...(grant ? {} : { exempt: "owner" }),
+          ...(grant ? {} : { exempt: "owner-admin" }),
         },
       });
       if (grant) await incrementGrantUsage(prisma, grant);
@@ -603,7 +603,7 @@ export async function registerCatalogRoutes(
       detail: {
         kind: network.kind,
         networkId: network.id,
-        ...(grant ? {} : { exempt: "owner" }),
+        ...(grant ? {} : { exempt: "owner-admin" }),
       },
     });
     if (grant) await incrementGrantUsage(prisma, grant);

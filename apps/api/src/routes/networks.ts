@@ -347,7 +347,7 @@ export async function registerNetworkRoutes(
           networkId: row.id,
           from,
           to: syncMode,
-          ...(grant ? {} : { exempt: "owner" }),
+          ...(grant ? {} : { exempt: "owner-admin" }),
         },
       });
       if (grant) await incrementGrantUsage(services.prisma, grant);

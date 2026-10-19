@@ -21,7 +21,7 @@ export function isAdminRole(role: unknown): boolean {
   return role === "admin" || role === "owner";
 }
 
-/** 仅 owner（最高权限）：B6 高风险能力的授权豁免只给 owner，admin 仍需走申请/审批。 */
+/** 仅 owner（最高权限）。 */
 export function isOwner(role: unknown): boolean {
   return role === "owner";
 }
