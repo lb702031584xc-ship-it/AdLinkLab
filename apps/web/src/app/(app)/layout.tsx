@@ -66,7 +66,12 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         },
         {
           title: arbCoachDict.pageTitle,
-          items: [{ href: "/coach", label: arbCoachDict.pageTitle }],
+          items: [
+            { href: "/coach", label: arbCoachDict.nav.overview },
+            { href: "/coach/templates", label: arbCoachDict.nav.templates },
+            { href: "/coach/board", label: arbCoachDict.nav.board },
+            { href: "/coach/scale", label: arbCoachDict.nav.scale },
+          ],
         },
         {
           title: s.affiliate,

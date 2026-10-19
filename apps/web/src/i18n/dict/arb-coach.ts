@@ -21,6 +21,18 @@ export interface ArbCoachPhase {
   links: ArbCoachLink[];
 }
 
+export interface ArbCoachTemplate {
+  id: "beginner" | "intermediate" | "advanced";
+  /** 级别徽标，如 "🌱 初级"。 */
+  badge: string;
+  title: string;
+  budget: string;
+  desc: string;
+  /** 写入看板组合备注的关键参数摘要。 */
+  note: string;
+  stages: { title: string; params: string[] }[];
+}
+
 export interface ArbCoachDict {
   pageTitle: string;
   pageDesc: string;
@@ -68,6 +80,43 @@ export interface ArbCoachDict {
     reasonNoSpend: string;
     reasonNoPayout: string;
     newComboDefault: string;
+  };
+  nav: {
+    overview: string;
+    templates: string;
+    board: string;
+    scale: string;
+  };
+  templates: {
+    pageTitle: string;
+    pageDesc: string;
+    apply: string;
+    applied: string;
+    appliedToast: string;
+    paramsTitle: string;
+    budget: string;
+    items: ArbCoachTemplate[];
+  };
+  scale: {
+    pageTitle: string;
+    pageDesc: string;
+    add: string;
+    date: string;
+    combo: string;
+    action: string;
+    params: string;
+    note: string;
+    paramsPlaceholder: string;
+    notePlaceholder: string;
+    save: string;
+    cancel: string;
+    edit: string;
+    remove: string;
+    removeConfirm: string;
+    empty: string;
+    actionOptions: string[];
+    rulesTitle: string;
+    rules: string[];
   };
 }
 
@@ -224,6 +273,209 @@ export const zh: ArbCoachDict = {
     reasonNoPayout: "payout 未知，无法判定",
     newComboDefault: "新组合",
   },
+  nav: {
+    overview: "总览闯关",
+    templates: "组合模板",
+    board: "速测看板",
+    scale: "放量记录",
+  },
+  templates: {
+    pageTitle: "组合模板库",
+    pageDesc:
+      "三个档位的完整开测模板，参数来自课程原打法。选一个点“应用此模板”，看板里自动建好组合，直接开测。",
+    apply: "应用此模板",
+    applied: "已应用，去速测看板开测 →",
+    appliedToast: "模板已应用到速测看板",
+    paramsTitle: "各阶段参数",
+    budget: "预算",
+    items: [
+      {
+        id: "beginner",
+        badge: "🌱 初级",
+        title: "PopAds Popunder · $10 档",
+        budget: "$10",
+        desc: "零基础新手第一周：跑通联盟 → 追踪 → 流量 → 回传全链路，目标不是赚钱，是花小钱学会流程。",
+        note: "PopAds Popunder · 日预算$5 · Worldwide+Android+Chrome47+ · 频率1/24",
+        stages: [
+          {
+            title: "准备",
+            params: [
+              "BeMob 免费版",
+              "Mobipium 联盟账号（免费）",
+              "PopAds 预存 $10",
+              "拿到 bemob 的 postback URL",
+            ],
+          },
+          {
+            title: "追踪",
+            params: [
+              "命名 Country_Device_OS_Browser（如 WW_android_chrome）",
+              "Traffic Source=PopAds；Destination=Built-in flow",
+              "LANDINGS 关闭（直链）",
+              "5 个 Offer 各 weight=100；Cost=Auto；uniqueness=24h；USD",
+            ],
+          },
+          {
+            title: "Postback",
+            params: [
+              "BeMob → Affiliate Network → Mobipium 点 Edit 复制预设 postback",
+              "粘贴到 Mobipium Pixel 的 “Configure your Callback URL”",
+              "自己点一次做测试转化，确认报表能看到",
+            ],
+          },
+          {
+            title: "建组",
+            params: [
+              "日预算 $5；Adv type=Popunder",
+              "Worldwide + Android + Chrome 47+ + Smartphone",
+              "频率 1/24；排除 Adult 类目",
+              "Name 与 BeMob 一致；URL 粘贴 BeMob Campaign URL",
+            ],
+          },
+          {
+            title: "速测",
+            params: [
+              "花 $5–$10 后再分析",
+              "Offer 按转化排序，持续零转化暂停",
+              "⚠️ exclude www.google.com 的 bot referrer（成本虚高）",
+            ],
+          },
+          {
+            title: "放量",
+            params: [
+              "日预算 $5 → $10",
+              "GEO 收窄到盈利国家（德 / 瑞 / 韩 / 泰）",
+              "一次只改一个变量",
+            ],
+          },
+        ],
+      },
+      {
+        id: "intermediate",
+        badge: "🚀 中级",
+        title: "PropellerAds CPA Goal 2.0 · $100 档",
+        budget: "$100",
+        desc: "跑通初级链路后升级：CPA 出价模型 + 调查类 Offer，算法帮你调价，优化维度更多。",
+        note: "PropellerAds CPA Goal 2.0 · 出价=佣金×0.7 · 测试预算=100×佣金",
+        stages: [
+          {
+            title: "准备",
+            params: [
+              "Zeydoo 联盟账号（免费）",
+              "PropellerAds 最低预存 $100",
+              "BeMob 免费版继续用",
+            ],
+          },
+          {
+            title: "追踪",
+            params: [
+              "沿用初级的 BeMob 规范（命名 / 5 offer / weight=100）",
+              "Zeydoo 的 postback 同样从 BeMob 模板复制",
+            ],
+          },
+          {
+            title: "建组",
+            params: [
+              "格式 OnClick（Popunder）；定价 CPA Goal 2.0",
+              "CPA 出价 = 佣金 × 0.7",
+              "测试预算 = 100 × 佣金",
+              "GEO 问 AM 哪个表现好，别无脑选美国",
+              "排除已转化用户受众",
+            ],
+          },
+          {
+            title: "速测",
+            params: [
+              "优化维度：OS Version / Device / Browser / Language / Connection / ISP / Carrier",
+              "wifi 和 3G 分开建组（方便禁用坏运营商）",
+              "只用流量源 token 做优化",
+            ],
+          },
+          {
+            title: "放量",
+            params: [
+              "v1 定向放宽 → 优化明显项 → 复制为 v2 重启",
+              "优化要慢，避免不必要地限制量",
+              "zeydoo 调查类 Offer 用 CPA Goal 2.0 容易盈利",
+            ],
+          },
+        ],
+      },
+      {
+        id: "advanced",
+        badge: "🎯 高级",
+        title: "Zeropark 推送 · $1000+ 档",
+        budget: "$1000+",
+        desc: "推送通知推 CC 抽奖 Offer：5 创意 + 5 lander 起测，RON 定位 + 黑名单开路，$5000 后才谈白名单。",
+        note: "Zeropark 推送 · RON · 5创意+5 lander · 1x payout 零转化暂停 target",
+        stages: [
+          {
+            title: "准备",
+            params: [
+              "ClickDealer（抽奖 Offer 联盟）",
+              "Zeropark 推送流量（预算至少 $1000）",
+              "工具费约 $100–300/月；lander 用 S3 + CloudFront",
+            ],
+          },
+          {
+            title: "建组",
+            params: [
+              "5 个创意 + 5 个着陆页 + 1–2 个 Offer",
+              "定位 RON（全网络），有数据后再白名单",
+              "Bid 略高于建议出价（如 0.056 → 0.06）",
+              "移动 / 桌面分开建活动；频率 24h；语言定位",
+            ],
+          },
+          {
+            title: "速测",
+            params: [
+              "每个创意/lander 给 1–2x 佣金的测试花费",
+              "1x payout 零转化 → 暂停该 target",
+              "按 target 优化，不按 source",
+              "只用找到有效漏斗之后的数据",
+            ],
+          },
+          {
+            title: "放量",
+            params: [
+              "垂直扩展优先：删无利部分 + 敢提价，win ratio → 100%",
+              "白名单：10–20 个转化打底、$5000 花费后",
+              "创意 2–3 天耗尽，持续加新素材",
+              "水平扩展：榨干一个源再开下一个",
+            ],
+          },
+        ],
+      },
+    ],
+  },
+  scale: {
+    pageTitle: "放量记录",
+    pageDesc:
+      "每个放量动作记一笔：加预算 / 加白 / 暂停 / 复制，参数和结果都写下来，复盘时才知道哪一步赚的钱。",
+    add: "＋ 记录一次放量",
+    date: "日期",
+    combo: "组合",
+    action: "动作",
+    params: "参数",
+    note: "结果备注",
+    paramsPlaceholder: "如：日预算 $5→$10；GEO 收窄到德/瑞",
+    notePlaceholder: "如：3 天 ROI 35%，继续观察",
+    save: "保存",
+    cancel: "取消",
+    edit: "编辑",
+    remove: "删除",
+    removeConfirm: "确定删除这条放量记录吗？",
+    empty: "还没有放量记录——先在速测看板跑出 🚀 加量的组合。",
+    actionOptions: ["加预算", "加白", "暂停", "复制"],
+    rulesTitle: "📌 放量铁律",
+    rules: [
+      "垂直扩展优先：先把一个组合 / 一个源榨干，再开新的",
+      "先黑名单再白名单：白名单要 10–20 个转化打底、$5000 花费之后",
+      "创意 2–3 天耗尽：素材停了等于利润停了，持续加新素材",
+      "一次只改一个变量：预算和 GEO / 出价不要同时动",
+      "ROI 掉下 20% 的组合降预算或停，别用感情做决策",
+    ],
+  },
 };
 
 export const en: ArbCoachDict = {
@@ -378,5 +630,208 @@ export const en: ArbCoachDict = {
     reasonNoSpend: "No spend yet",
     reasonNoPayout: "Payout unknown, can't judge",
     newComboDefault: "New combo",
+  },
+  nav: {
+    overview: "Walkthrough",
+    templates: "Templates",
+    board: "Test board",
+    scale: "Scale log",
+  },
+  templates: {
+    pageTitle: "Combo template library",
+    pageDesc:
+      "Full launch templates for three tiers, parameters from the course playbook. Pick one, hit “Apply template” — a combo is created on the board, ready to test.",
+    apply: "Apply template",
+    applied: "Applied — start testing on the board →",
+    appliedToast: "Template applied to the test board",
+    paramsTitle: "Stage parameters",
+    budget: "Budget",
+    items: [
+      {
+        id: "beginner",
+        badge: "🌱 Beginner",
+        title: "PopAds Popunder · $10 tier",
+        budget: "$10",
+        desc: "Week one for total beginners: run the full network → tracker → traffic → postback loop. The goal is learning the loop cheaply, not profit.",
+        note: "PopAds Popunder · $5/day budget · Worldwide+Android+Chrome47+ · freq 1/24",
+        stages: [
+          {
+            title: "Setup",
+            params: [
+              "BeMob free plan",
+              "Mobipium network account (free)",
+              "PopAds $10 top-up",
+              "Grab your bemob postback URL",
+            ],
+          },
+          {
+            title: "Tracking",
+            params: [
+              "Naming Country_Device_OS_Browser (e.g. WW_android_chrome)",
+              "Traffic Source=PopAds; Destination=Built-in flow",
+              "LANDINGS off (direct link)",
+              "5 offers, each weight=100; Cost=Auto; uniqueness=24h; USD",
+            ],
+          },
+          {
+            title: "Postback",
+            params: [
+              "BeMob → Affiliate Network → in Mobipium click Edit to copy the preset postback",
+              "Paste it into Mobipium Pixel's “Configure your Callback URL”",
+              "Click once yourself as a test conversion and confirm it shows in reports",
+            ],
+          },
+          {
+            title: "Launch",
+            params: [
+              "$5/day budget; Ad type=Popunder",
+              "Worldwide + Android + Chrome 47+ + Smartphone",
+              "Frequency 1/24; exclude the Adult category",
+              "Name matches BeMob; URL = BeMob campaign URL",
+            ],
+          },
+          {
+            title: "Test",
+            params: [
+              "Analyze only after $5–$10 spent",
+              "Sort offers by conversions, pause sustained zero-converters",
+              "⚠️ Exclude the www.google.com bot referrer (inflated cost)",
+            ],
+          },
+          {
+            title: "Scale",
+            params: [
+              "$5 → $10/day budget",
+              "Narrow GEO to profitable countries (DE / SE / KR / TH)",
+              "Change one variable at a time",
+            ],
+          },
+        ],
+      },
+      {
+        id: "intermediate",
+        badge: "🚀 Intermediate",
+        title: "PropellerAds CPA Goal 2.0 · $100 tier",
+        budget: "$100",
+        desc: "After the beginner loop works: CPA bidding + survey offers — the algorithm tunes bids for you, with more optimization dimensions.",
+        note: "PropellerAds CPA Goal 2.0 · bid = payout × 0.7 · test budget = 100 × payout",
+        stages: [
+          {
+            title: "Setup",
+            params: [
+              "Zeydoo network account (free)",
+              "PropellerAds $100 minimum top-up",
+              "Keep using BeMob free plan",
+            ],
+          },
+          {
+            title: "Tracking",
+            params: [
+              "Same BeMob spec as beginner (naming / 5 offers / weight=100)",
+              "Zeydoo postback also copied from the BeMob template",
+            ],
+          },
+          {
+            title: "Launch",
+            params: [
+              "Format OnClick (Popunder); pricing = CPA Goal 2.0",
+              "CPA bid = payout × 0.7",
+              "Test budget = 100 × payout",
+              "Ask your AM which GEO performs — don't default to the US",
+              "Exclude converted-user audiences",
+            ],
+          },
+          {
+            title: "Test",
+            params: [
+              "Dimensions: OS Version / Device / Browser / Language / Connection / ISP / Carrier",
+              "Split wifi and 3G into separate campaigns (to kill bad carriers)",
+              "Optimize only on traffic-source tokens",
+            ],
+          },
+          {
+            title: "Scale",
+            params: [
+              "v1 loose targeting → optimize clear winners → duplicate as v2 and relaunch",
+              "Optimize slowly — don't throttle volume unnecessarily",
+              "Zeydoo survey offers profit easily on CPA Goal 2.0",
+            ],
+          },
+        ],
+      },
+      {
+        id: "advanced",
+        badge: "🎯 Advanced",
+        title: "Zeropark push · $1000+ tier",
+        budget: "$1000+",
+        desc: "Push notifications for CC sweepstakes: 5 creatives + 5 landers to start, RON targeting with blacklist first — whitelists only after $5000.",
+        note: "Zeropark push · RON · 5 creatives + 5 landers · pause target at 1x payout zero conversions",
+        stages: [
+          {
+            title: "Setup",
+            params: [
+              "ClickDealer (sweepstakes network)",
+              "Zeropark push traffic ($1000+ budget)",
+              "Tools ~$100–300/month; landers on S3 + CloudFront",
+            ],
+          },
+          {
+            title: "Launch",
+            params: [
+              "5 creatives + 5 landers + 1–2 offers",
+              "RON targeting; whitelists only after data",
+              "Bid slightly above suggested (e.g. 0.056 → 0.06)",
+              "Separate mobile / desktop campaigns; 24h frequency; language targeting",
+            ],
+          },
+          {
+            title: "Test",
+            params: [
+              "Give each creative/lander 1–2× payout in test spend",
+              "1× payout with zero conversions → pause that target",
+              "Optimize by target, not by source",
+              "Use only data after a working funnel is found",
+            ],
+          },
+          {
+            title: "Scale",
+            params: [
+              "Vertical first: cut losers + dare to raise bids, win ratio → 100%",
+              "Whitelist: 10–20 conversions minimum, after $5000 spend",
+              "Creatives burn out in 2–3 days — keep adding fresh ones",
+              "Horizontal: max out one source before opening the next",
+            ],
+          },
+        ],
+      },
+    ],
+  },
+  scale: {
+    pageTitle: "Scale log",
+    pageDesc:
+      "Log every scale move — budget up / whitelist / pause / duplicate — with parameters and results, so reviews show which step made the money.",
+    add: "＋ Log a scale move",
+    date: "Date",
+    combo: "Combo",
+    action: "Action",
+    params: "Params",
+    note: "Result note",
+    paramsPlaceholder: "e.g. daily budget $5→$10; GEO narrowed to DE/SE",
+    notePlaceholder: "e.g. 3-day ROI 35%, keep watching",
+    save: "Save",
+    cancel: "Cancel",
+    edit: "Edit",
+    remove: "Delete",
+    removeConfirm: "Delete this scale record?",
+    empty: "No scale records yet — get a 🚀 Scale combo on the test board first.",
+    actionOptions: ["Raise budget", "Whitelist", "Pause", "Duplicate"],
+    rulesTitle: "📌 Scale rules",
+    rules: [
+      "Vertical first: max out one combo / one source before opening new ones",
+      "Blacklist before whitelist: whitelists need 10–20 conversions and $5000 spend first",
+      "Creatives burn out in 2–3 days: when creatives stop, profit stops — keep adding fresh ones",
+      "One variable at a time: never change budget and GEO / bid together",
+      "Cut budget or pause any combo whose ROI drops below 20% — no emotional decisions",
+    ],
   },
 };
