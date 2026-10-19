@@ -23,7 +23,7 @@ import {
   type SessionListTemplate,
   type SessionProduct,
 } from "./session-adapter.js";
-import { PARTNERBOOST_DEFAULT_BASE_URL } from "./partnerboost-adapter.js";
+import { PARTNERBOOST_DEFAULT_BASE_URL, deriveLandingPageType } from "./partnerboost-adapter.js";
 
 /**
  * TODO(需真实账号验证)：默认商品列表路径为占位模板。
@@ -91,6 +91,11 @@ export class PartnerBoostSessionAdapter extends TemplateSessionAdapter {
       termsText:
         sessionAsString(pickField(item, "category", "discount", "coupon")) ?? null,
       url: promoUrl,
+      countryCode:
+        sessionAsString(
+          pickField(item, "country_code", "countryCode", "country")
+        ) ?? null,
+      landingPageType: deriveLandingPageType(promoUrl),
       brand: sessionAsString(pickField(item, "brand_name", "brandName", "brand")),
       asin: sessionAsString(pickField(item, "asin")),
       price: sessionAsNumber(

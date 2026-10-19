@@ -1135,6 +1135,12 @@ model NetworkProduct {
   reviewCount       Int?     @map("review_count")
   recommended       Boolean  @default(false)
   recommendationScore Decimal? @map("recommendation_score") @db.Decimal(9, 2)
+  /// 落地页类型：amazon_product（商品页）/ amazon_storefront（店铺页）/ dtc（品牌独立站）/ unknown。
+  landingPageType String?  @map("landing_page_type") @db.Text
+  /// 允许投放国家（PB country_code，如 US；多国家逗号分隔）。
+  countryCode     String?  @map("country_code") @db.Text
+  /// 商品状态：active（有效）/ inactive（手动下线）。默认 active。
+  status          String   @default("active") @db.Text
   promoUrl          String?  @map("promo_url")
   rawData           Json     @map("raw_data") @db.JsonB
   syncedAt          DateTime @map("synced_at") @db.Timestamptz(3)

@@ -730,6 +730,8 @@ export async function syncCatalog(
       currency: p.currency ?? "USD",
       reviewCount: p.reviewCount ?? null,
       promoUrl: p.promoUrl ?? p.url ?? null,
+      landingPageType: p.landingPageType ?? null,
+      countryCode: p.countryCode ?? null,
       rawData: p.rawData as never,
       syncedAt: new Date(),
       merchantId,
@@ -797,28 +799,43 @@ export async function syncCatalog(
     blackRows.filter((r) => r.entityType === "merchant").map((r) => r.entityId)
   );
 
-  /* ── 7. 评分（排除黑名单） ── */
+  /* ── 7. 评分（排除黑名单；全局暂停时跳过） ── */
+  let scoreCalcPaused = false;
+  try {
+    const aiSetting = (prisma as unknown as Record<string, unknown>)
+      .aiSetting as
+      | { findUnique: (args: unknown) => Promise<{ value: string } | null> }
+      | undefined;
+    const pauseRow = await aiSetting?.findUnique({
+      where: { key: "catalogScoreCalcPaused" },
+    });
+    scoreCalcPaused = pauseRow?.value === "1";
+  } catch {
+    scoreCalcPaused = false;
+  }
   const preset = await loadPreset(prisma, tenantId);
   let recommended = 0;
   const scored: Array<ProductRow & { score: number; isRecommended: boolean }> = [];
-  for (const row of upserted) {
-    if (blacklistedProducts.has(row.id)) continue;
-    if (row.merchantId && blacklistedMerchants.has(row.merchantId)) continue;
-    const r = scoreProduct(
-      {
-        price: toNum(row.price),
-        commissionAmount: toNum(row.commissionAmount),
-        commissionRate: toNum(row.commissionRate),
-        reviewCount: row.reviewCount,
-      },
-      preset
-    );
-    await prisma.networkProduct.update({
-      where: { id: row.id },
-      data: { recommended: r.recommended, recommendationScore: r.score },
-    });
-    if (r.recommended) recommended += 1;
-    scored.push({ ...row, score: r.score, isRecommended: r.recommended });
+  if (!scoreCalcPaused) {
+    for (const row of upserted) {
+      if (blacklistedProducts.has(row.id)) continue;
+      if (row.merchantId && blacklistedMerchants.has(row.merchantId)) continue;
+      const r = scoreProduct(
+        {
+          price: toNum(row.price),
+          commissionAmount: toNum(row.commissionAmount),
+          commissionRate: toNum(row.commissionRate),
+          reviewCount: row.reviewCount,
+        },
+        preset
+      );
+      await prisma.networkProduct.update({
+        where: { id: row.id },
+        data: { recommended: r.recommended, recommendationScore: r.score },
+      });
+      if (r.recommended) recommended += 1;
+      scored.push({ ...row, score: r.score, isRecommended: r.recommended });
+    }
   }
 
   /* ── 8. 白名单建议：syncStreak 达到 3 → suggested（只建议，不自动加入） ── */

@@ -20,6 +20,9 @@ function product(id: string, flags?: { blacklisted?: boolean; whitelisted?: bool
     recommendationScore: null,
     promoUrl: null,
     syncedAt: null,
+    landingPageType: null,
+    countryCode: null,
+    status: "active",
     blacklisted: flags?.blacklisted,
     whitelisted: flags?.whitelisted,
   };

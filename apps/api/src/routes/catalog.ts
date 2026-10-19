@@ -47,6 +47,7 @@ import {
   DEFAULT_PRESET,
   scoreProduct,
 } from "../services/catalog-screening.js";
+import { calcRecommendationScore } from "../services/recommendation-score.js";
 import {
   addToBlacklist,
   addWhitelistEntry,
@@ -122,6 +123,9 @@ function serializeProduct(r: Record<string, unknown>, whitelisted: boolean) {
     recommendationScore: numOrNull(r.recommendationScore),
     promoUrl: r.promoUrl,
     merchantId: r.merchantId ?? null,
+    landingPageType: (r.landingPageType as string) ?? null,
+    countryCode: (r.countryCode as string) ?? null,
+    status: (r.status as string) ?? "active",
     syncStreak: r.syncStreak ?? 0,
     whitelisted,
     syncedAt: (r.syncedAt as Date)?.toISOString?.() ?? null,
@@ -273,6 +277,115 @@ export async function registerCatalogRoutes(
     products.sort((a, b) => Number(b.pinned) - Number(a.pinned));
     return { total, page, pageSize, products, items: products };
   });
+
+  /* ── 批量操作：推荐指数计算 / 批量下线 / 全局暂停开关 ── */
+
+  const SCORE_CALC_PAUSED_KEY = "catalogScoreCalcPaused";
+
+  async function isScoreCalcPaused(): Promise<boolean> {
+    const row = (await prisma.aiSetting.findUnique({
+      where: { key: SCORE_CALC_PAUSED_KEY },
+    })) as { value: string } | null;
+    return row?.value === "1";
+  }
+
+  function asIdArray(v: unknown, label: string): string[] {
+    if (!Array.isArray(v)) throw new ValidationError(`${label} 必须是数组`);
+    const ids = v
+      .filter((x): x is string => typeof x === "string" && UUID_RE.test(x.trim()))
+      .map((x) => x.trim());
+    if (ids.length === 0) throw new ValidationError(`${label} 不能为空`);
+    if (ids.length > 500) throw new ValidationError("单次最多 500 个");
+    return [...new Set(ids)];
+  }
+
+  app.post<{ Body: { ids?: unknown } }>(
+    "/api/v1/catalog/products/calc-score",
+    async (request) => {
+      const info = await requireSession(deps, request);
+      const ids = asIdArray(request.body?.ids, "ids");
+      if (await isScoreCalcPaused()) {
+        throw new ValidationError("全局推荐指数计算已暂停");
+      }
+      // 推荐指数用固定权重公式（services/recommendation-score.ts），不绑定
+      // 用户筛选预设；缺数据的项按中性处理，$8 门槛直接限分。
+      let updated = 0;
+      const scored: Array<{ productId: string; score: number; recommended: boolean }> = [];
+      for (const id of ids) {
+        const p = (await prisma.networkProduct.findFirst({
+          where: { id, tenantId: info.tenantId },
+        })) as Record<string, unknown> | null;
+        if (!p) continue;
+        const r = calcRecommendationScore({
+          price: numOrNull(p.price),
+          commissionAmount: numOrNull(p.commissionAmount),
+          commissionRate: numOrNull(p.commissionRate),
+          reviewCount:
+            typeof p.reviewCount === "number" && Number.isFinite(p.reviewCount)
+              ? p.reviewCount
+              : null,
+        });
+        await prisma.networkProduct.update({
+          where: { id },
+          data: { recommended: r.recommended, recommendationScore: r.score },
+        });
+        updated += 1;
+        scored.push({ productId: id, score: r.score, recommended: r.recommended });
+      }
+      await writeCatalogAudit(prisma, {
+        tenantId: info.tenantId,
+        actorId: info.id,
+        action: "CATALOG_CALC_SCORE",
+        detail: { requested: ids.length, updated },
+      });
+      return { updated, requested: ids.length, scored };
+    }
+  );
+
+  app.post<{ Body: { ids?: unknown } }>(
+    "/api/v1/catalog/products/offline",
+    async (request) => {
+      const info = await requireSession(deps, request);
+      const ids = asIdArray(request.body?.ids, "ids");
+      const res = await prisma.networkProduct.updateMany({
+        where: { id: { in: ids }, tenantId: info.tenantId },
+        data: { status: "inactive" },
+      });
+      await writeCatalogAudit(prisma, {
+        tenantId: info.tenantId,
+        actorId: info.id,
+        action: "CATALOG_PRODUCTS_OFFLINE",
+        detail: { requested: ids.length, updated: res.count },
+      });
+      return { updated: res.count, requested: ids.length };
+    }
+  );
+
+  app.get("/api/v1/catalog/score-calc-paused", async (request) => {
+    await requireSession(deps, request);
+    return { paused: await isScoreCalcPaused() };
+  });
+
+  app.put<{ Body: { paused?: unknown } }>(
+    "/api/v1/catalog/score-calc-paused",
+    async (request) => {
+      const info = await requireSession(deps, request);
+      await requireAdmin(deps, request);
+      const paused = request.body?.paused === true;
+      await prisma.aiSetting.upsert({
+        where: { key: SCORE_CALC_PAUSED_KEY },
+        update: { value: paused ? "1" : "0" },
+        create: { key: SCORE_CALC_PAUSED_KEY, value: paused ? "1" : "0" },
+      });
+      await writeCatalogAudit(prisma, {
+        tenantId: info.tenantId,
+        actorId: info.id,
+        action: "CATALOG_SCORE_CALC_PAUSE_SET",
+        detail: { paused },
+      });
+      return { paused };
+    }
+  );
 
   /* ── 筛选预设 ── */
 

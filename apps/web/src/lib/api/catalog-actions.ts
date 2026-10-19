@@ -75,6 +75,9 @@ export interface CatalogProduct {
   recommendationScore: number | null;
   promoUrl: string | null;
   syncedAt: string | null;
+  landingPageType: string | null;
+  countryCode: string | null;
+  status: string;
   /** Optional for forward-compat: the backend list-flag batch is still landing. */
   blacklisted?: boolean;
   whitelisted?: boolean;
@@ -613,4 +616,49 @@ export async function batchCreateOffersAction(productIds: string[]) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ productIds: ids }),
   }), ["/catalog", "/offers"]);
+}
+
+export async function calcScoreAction(productIds: string[]) {
+  if (productIds.length === 0) {
+    return { ok: false as const, error: "No products selected" };
+  }
+  return attempt(() => apiFetch<{ updated: number; requested: number }>(
+    "/api/v1/catalog/products/calc-score",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ids: productIds }),
+    }
+  ), ["/catalog"]);
+}
+
+export async function offlineProductsAction(productIds: string[]) {
+  if (productIds.length === 0) {
+    return { ok: false as const, error: "No products selected" };
+  }
+  return attempt(() => apiFetch<{ updated: number; requested: number }>(
+    "/api/v1/catalog/products/offline",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ids: productIds }),
+    }
+  ), ["/catalog"]);
+}
+
+export async function getScoreCalcPausedAction() {
+  return attempt(() => apiFetch<{ paused: boolean }>(
+    "/api/v1/catalog/score-calc-paused"
+  ), []);
+}
+
+export async function setScoreCalcPausedAction(paused: boolean) {
+  return attempt(() => apiFetch<{ paused: boolean }>(
+    "/api/v1/catalog/score-calc-paused",
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ paused }),
+    }
+  ), []);
 }

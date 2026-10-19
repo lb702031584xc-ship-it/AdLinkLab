@@ -20,6 +20,10 @@ export interface NetworkOffer {
   termsText?: string | null;
   /** Landing / tracking URL when the network exposes one. */
   url?: string | null;
+  /** 落地页类型：amazon_storefront / amazon_product / dtc / unknown。 */
+  landingPageType?: string | null;
+  /** 允许投放国家（如 US；多国家逗号分隔），null = 未知。 */
+  countryCode?: string | null;
   /** Full raw API object for debugging / future field extraction. */
   rawData: Record<string, unknown>;
 }

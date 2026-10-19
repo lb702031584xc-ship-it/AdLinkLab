@@ -9,20 +9,24 @@ import {
   addBlacklistAction,
   addWhitelistAction,
   batchCreateOffersAction,
+  calcScoreAction,
   confirmWhitelistAction,
   deleteBlacklistAction,
   deleteWhitelistAction,
   evaluateMerchantsAction,
+  getScoreCalcPausedAction,
   getSessionStatusAction,
   importBlacklistAction,
   listBlacklistAction,
   listCatalogProductsAction,
   listMerchantSignalsAction,
   listWhitelistAction,
+  offlineProductsAction,
   recheckBlacklistAction,
   saveScreeningPresetAction,
   saveSessionCookieAction,
   screenCatalogAction,
+  setScoreCalcPausedAction,
   setSyncModeAction,
   syncCatalogAction,
   type BatchCreateResult,
@@ -1521,6 +1525,89 @@ export function CatalogClient({
     await reloadProducts(page);
   }
 
+  const [calcScoring, setCalcScoring] = useState(false);
+  const [offlining, setOfflining] = useState(false);
+  const [scorePaused, setScorePaused] = useState(false);
+  const [togglingPause, setTogglingPause] = useState(false);
+
+  useEffect(() => {
+    void (async () => {
+      const res = await getScoreCalcPausedAction();
+      if (res.ok) setScorePaused(res.data.paused);
+    })();
+  }, []);
+
+  function landingPageTypeLabel(t: string | null): string {
+    switch (t) {
+      case "amazon_product":
+        return d.products.landingAmazonProduct;
+      case "amazon_store":
+        return d.products.landingAmazonStore;
+      case "dtc":
+        return d.products.landingDtc;
+      default:
+        return d.products.landingUnknown;
+    }
+  }
+
+  async function onCalcScore() {
+    if (selectedIds.size === 0 || calcScoring) {
+      setMsg(d.products.noSelection);
+      return;
+    }
+    setCalcScoring(true);
+    setMsg(null);
+    const res = await calcScoreAction(Array.from(selectedIds));
+    setCalcScoring(false);
+    if (!res.ok) {
+      setMsg(res.error);
+      return;
+    }
+    setMsg(
+      d.products.calcScoreDone.replace("{n}", String(res.data.updated))
+    );
+    setSelectedIds(new Set());
+    await reloadProducts(page);
+  }
+
+  async function onBatchOffline() {
+    if (selectedIds.size === 0 || offlining) {
+      setMsg(d.products.noSelection);
+      return;
+    }
+    if (
+      !window.confirm(
+        d.products.offlineConfirm.replace("{n}", String(selectedIds.size))
+      )
+    ) {
+      return;
+    }
+    setOfflining(true);
+    setMsg(null);
+    const res = await offlineProductsAction(Array.from(selectedIds));
+    setOfflining(false);
+    if (!res.ok) {
+      setMsg(res.error);
+      return;
+    }
+    setMsg(d.products.offlineDone.replace("{n}", String(res.data.updated)));
+    setSelectedIds(new Set());
+    await reloadProducts(page);
+  }
+
+  async function onToggleScorePause() {
+    if (togglingPause) return;
+    setTogglingPause(true);
+    setMsg(null);
+    const res = await setScoreCalcPausedAction(!scorePaused);
+    setTogglingPause(false);
+    if (!res.ok) {
+      setMsg(res.error);
+      return;
+    }
+    setScorePaused(res.data.paused);
+  }
+
   return (
     <div className="space-y-6">
       <EntityPageHeader title={d.page.title} description={d.page.description} />
@@ -1974,6 +2061,9 @@ export function CatalogClient({
                 <th className="py-2 pr-2">{d.products.colCommission}</th>
                 <th className="py-2 pr-2">{d.products.colReviews}</th>
                 <th className="py-2 pr-2">{d.products.colScore}</th>
+                <th className="py-2 pr-2">{d.products.colLandingType}</th>
+                <th className="py-2 pr-2">{d.products.colCountry}</th>
+                <th className="py-2 pr-2">{d.products.colStatus}</th>
                 <th className="py-2 pr-2">{d.products.colSynced}</th>
               </tr>
             </thead>
@@ -2051,6 +2141,23 @@ export function CatalogClient({
                   <td className="py-2 pr-2 text-ink/70">
                     {fmtNum(p.recommendationScore)}
                   </td>
+                  <td className="py-2 pr-2 text-ink/70">
+                    {landingPageTypeLabel(p.landingPageType)}
+                  </td>
+                  <td className="py-2 pr-2 text-ink/70">
+                    {p.countryCode ?? "—"}
+                  </td>
+                  <td className="py-2 pr-2">
+                    {p.status === "inactive" ? (
+                      <span className="rounded-full bg-ink/10 px-2 py-0.5 text-xs font-medium text-ink/60">
+                        {d.products.statusInactive}
+                      </span>
+                    ) : (
+                      <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
+                        {d.products.statusActive}
+                      </span>
+                    )}
+                  </td>
                   <td className="py-2 pr-2 text-xs text-ink/60">
                     {formatDateTime(p.syncedAt)}
                   </td>
@@ -2077,9 +2184,43 @@ export function CatalogClient({
           >
             {batching ? d.products.creating : d.products.batchCreate}
           </button>
+          <button
+            className={btnGhost}
+            onClick={onCalcScore}
+            disabled={calcScoring || selectedIds.size === 0}
+          >
+            {calcScoring
+              ? d.products.calculating
+              : d.products.calcScore.replace("{n}", String(selectedIds.size))}
+          </button>
+          <button
+            className={btnGhost}
+            onClick={onBatchOffline}
+            disabled={offlining || selectedIds.size === 0}
+          >
+            {offlining
+              ? d.products.offlining
+              : d.products.batchOffline.replace("{n}", String(selectedIds.size))}
+          </button>
+          <button
+            className={btnGhost}
+            onClick={onToggleScorePause}
+            disabled={togglingPause}
+          >
+            {togglingPause
+              ? "…"
+              : scorePaused
+                ? d.products.resumeScoreCalc
+                : d.products.pauseScoreCalc}
+          </button>
           <span className="text-sm text-ink/60">
             ({selectedIds.size})
           </span>
+          {scorePaused && (
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
+              {d.products.scoreCalcPausedBadge}
+            </span>
+          )}
         </div>
 
         {batchResult && (

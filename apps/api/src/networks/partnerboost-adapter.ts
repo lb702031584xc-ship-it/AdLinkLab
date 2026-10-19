@@ -187,6 +187,27 @@ function parseCommission(raw: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * 从落地页 URL 推导落地页类型。
+ * - 含 /stores/ 或 amazon.com/s? → amazon_storefront（Amazon 店铺页）
+ * - 含 /dp/ 或 /gp/product/ → amazon_product（Amazon 商品页）
+ * - 有 URL 但非 Amazon 格式 → dtc（品牌独立站）
+ * - 无 URL → unknown
+ */
+export function deriveLandingPageType(
+  url: string | null | undefined
+): string {
+  if (!url || !url.trim()) return "unknown";
+  const u = url.toLowerCase();
+  if (u.includes("/stores/") || u.includes("amazon.com/s?")) {
+    return "amazon_storefront";
+  }
+  if (u.includes("/dp/") || u.includes("/gp/product/")) {
+    return "amazon_product";
+  }
+  return "dtc";
+}
+
 export class PartnerBoostAdapter implements NetworkAdapter {
   readonly kind = "partnerboost";
   readonly displayName = "PartnerBoost";
@@ -251,6 +272,7 @@ export class PartnerBoostAdapter implements NetworkAdapter {
         const bonusDesc = p.performance_bonus?.enabled
           ? p.performance_bonus.description
           : null;
+        const landingUrl = p.partnerboost_link || p.link || p.url || null;
         offers.push({
           externalId: p.product_id ?? p.asin ?? "",
           name: p.product_name ?? p.asin ?? "Unknown product",
@@ -266,8 +288,9 @@ export class PartnerBoostAdapter implements NetworkAdapter {
           ]
             .filter(Boolean)
             .join(" | "),
-          url:
-            p.partnerboost_link || p.link || p.url || null,
+          url: landingUrl,
+          countryCode: p.country_code?.trim() || null,
+          landingPageType: deriveLandingPageType(landingUrl),
           rawData: p as unknown as Record<string, unknown>,
         });
       }
