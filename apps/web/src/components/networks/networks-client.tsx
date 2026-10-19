@@ -87,6 +87,7 @@ export function NetworksClient({
   const [fName, setFName] = useState("");
   const [fKind, setFKind] = useState(supportedKinds[0] ?? "impact");
   const [fBaseUrl, setFBaseUrl] = useState("");
+  const [fSessionListPath, setFSessionListPath] = useState("");
   const [fApiKey, setFApiKey] = useState("");
   const [fClearCreds, setFClearCreds] = useState(false);
 
@@ -102,6 +103,7 @@ export function NetworksClient({
     setFName("");
     setFKind(supportedKinds[0] ?? "impact");
     setFBaseUrl("");
+    setFSessionListPath("");
     setFApiKey("");
     setFClearCreds(false);
     setDialogOpen(true);
@@ -112,6 +114,7 @@ export function NetworksClient({
     setFName(n.name);
     setFKind(n.kind);
     setFBaseUrl(n.apiBaseUrl ?? "");
+    setFSessionListPath(n.sessionListPath ?? "");
     setFApiKey("");
     setFClearCreds(false);
     setDialogOpen(true);
@@ -122,6 +125,7 @@ export function NetworksClient({
     setMsg(null);
     try {
       const baseUrl = fBaseUrl.trim() ? fBaseUrl.trim() : undefined;
+      const listPath = fSessionListPath.trim() ? fSessionListPath.trim() : undefined;
       const trimmedKey = fApiKey.trim();
       const res = editing
         ? await updateNetworkAction(editing.id, {
@@ -131,6 +135,9 @@ export function NetworksClient({
             ...(fBaseUrl.trim() === (editing.apiBaseUrl ?? "")
               ? {}
               : { apiBaseUrl: baseUrl ?? null }),
+            ...(fSessionListPath.trim() === (editing.sessionListPath ?? "")
+              ? {}
+              : { sessionListPath: listPath ?? null }),
             ...(fClearCreds
               ? { apiKey: null as string | null }
               : trimmedKey
@@ -141,6 +148,7 @@ export function NetworksClient({
             name: fName.trim(),
             kind: fKind,
             ...(baseUrl ? { apiBaseUrl: baseUrl } : {}),
+            ...(listPath ? { sessionListPath: listPath } : {}),
             ...(trimmedKey ? { apiKey: trimmedKey } : {}),
           });
       if (res.ok) {
@@ -438,6 +446,17 @@ export function NetworksClient({
                   value={fBaseUrl}
                   onChange={(e) => setFBaseUrl(e.target.value)}
                   placeholder={d.dialog.apiBaseUrlPlaceholder}
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-sm text-ink/70">
+                  {d.dialog.sessionListPath}
+                </span>
+                <input
+                  className={inputCls}
+                  value={fSessionListPath}
+                  onChange={(e) => setFSessionListPath(e.target.value)}
+                  placeholder={d.dialog.sessionListPathPlaceholder}
                 />
               </label>
               <label className="block">
