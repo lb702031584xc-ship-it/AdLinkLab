@@ -153,11 +153,19 @@ export async function registerCatalogRoutes(
 
   /* ── 同步 ── */
 
-  app.post<{ Body: { networkId?: unknown } }>(
+  app.post<{ Body: { networkId?: unknown; brandId?: unknown } }>(
     "/api/v1/catalog/sync",
     async (request) => {
       const info = await requireSession(deps, request);
       const networkId = assertId(request.body?.networkId, "networkId");
+      // 按商家同步：可选的 PB brand_id（字符串，trim 后非空才生效）。
+      const rawBrandId = request.body?.brandId;
+      const brandId =
+        typeof rawBrandId === "string" && rawBrandId.trim() !== ""
+          ? rawBrandId.trim()
+          : typeof rawBrandId === "number" && Number.isFinite(rawBrandId)
+            ? String(rawBrandId)
+            : undefined;
       const summary = await syncCatalog(
         {
           prisma,
@@ -168,6 +176,7 @@ export async function registerCatalogRoutes(
           userId: info.id,
           userRole: info.role,
           networkId,
+          ...(brandId ? { brandId } : {}),
         }
       );
       return { sync: summary };

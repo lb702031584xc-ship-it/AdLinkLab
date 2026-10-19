@@ -1234,15 +1234,22 @@ export function CatalogClient({
   const [syncing, setSyncing] = useState(false);
   const [syncForbidden, setSyncForbidden] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
+  /** 按商家同步：品牌 ID 输入框。 */
+  const [brandIdInput, setBrandIdInput] = useState("");
+  /** 正在按商家同步时的 brandId（用于显示状态）。 */
+  const [syncingBrandId, setSyncingBrandId] = useState<string | null>(null);
 
-  async function onSync() {
+  async function onSync(brandId?: string) {
     if (!selectedId || syncing) return;
+    const trimmedBrandId = brandId?.trim() || undefined;
     setSyncing(true);
+    setSyncingBrandId(trimmedBrandId ?? null);
     setMsg(null);
     setSyncForbidden(false);
     setSyncResult(null);
-    const res = await syncCatalogAction(selectedId);
+    const res = await syncCatalogAction(selectedId, trimmedBrandId);
     setSyncing(false);
+    setSyncingBrandId(null);
     if (!res.ok) {
       if (res.forbidden) {
         setSyncForbidden(true);
@@ -1252,6 +1259,14 @@ export function CatalogClient({
       return;
     }
     setSyncResult(res.data);
+  }
+
+  function onSyncByBrand() {
+    if (!brandIdInput.trim()) {
+      setMsg(d.top.brandIdRequired);
+      return;
+    }
+    onSync(brandIdInput.trim());
   }
 
   // ---- session status per network ----
@@ -1666,11 +1681,32 @@ export function CatalogClient({
             </div>
             <button
               className={btnPrimary}
-              onClick={onSync}
+              onClick={() => onSync()}
               disabled={!selectedId || syncing}
             >
-              {syncing ? d.top.syncing : d.top.sync}
+              {syncing && !syncingBrandId ? d.top.syncing : d.top.sync}
             </button>
+            {/* 按商家同步（PB brand_id） */}
+            <div className="flex items-center gap-2">
+              <input
+                className={inputCls}
+                value={brandIdInput}
+                onChange={(e) => setBrandIdInput(e.target.value)}
+                placeholder={d.top.brandIdPlaceholder}
+                disabled={syncing}
+                style={{ width: "180px" }}
+              />
+              <button
+                className={btnGhost}
+                onClick={onSyncByBrand}
+                disabled={!selectedId || syncing || !brandIdInput.trim()}
+                title={d.top.syncByBrand}
+              >
+                {syncing && syncingBrandId
+                  ? `${d.top.syncingBrand} ${syncingBrandId}`
+                  : d.top.syncByBrand}
+              </button>
+            </div>
             {supported.length === 0 && (
               <p className="text-sm text-ink/60">{d.top.noNetwork}</p>
             )}
@@ -1699,6 +1735,11 @@ export function CatalogClient({
           {syncResult && (
             <>
               <div className="mt-3 rounded-lg bg-emerald-50 px-4 py-2 text-sm text-emerald-900">
+                <span className="mr-2 inline-block rounded-full bg-emerald-200 px-2 py-0.5 text-xs font-medium">
+                  {syncResult.scope === "brand"
+                    ? `${d.top.scopeBrand} (${syncResult.brandId})`
+                    : d.top.scopeFull}
+                </span>
                 synced {syncResult.synced} · created {syncResult.created} ·
                 updated {syncResult.updated} · recommended {syncResult.recommended} ·
                 autoCreatedOffers {syncResult.autoCreatedOffers}

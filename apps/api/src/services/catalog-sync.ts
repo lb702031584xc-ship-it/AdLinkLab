@@ -54,6 +54,7 @@ import {
   type SessionProduct,
 } from "../networks/session-adapter.js";
 import { NetworkAdapterError } from "../networks/partnerboost-adapter.js";
+import { PartnerBoostAdapter } from "../networks/partnerboost-adapter.js";
 import type {
   AdapterContext,
   NetworkAdapter,
@@ -105,6 +106,8 @@ export interface CatalogSyncInput {
   /** 调用方角色：owner 豁免 B6 授权。 */
   userRole: string;
   networkId: string;
+  /** 按商家同步：PB brand_id（仅 API 模式有效；session 模式忽略）。 */
+  brandId?: string;
   fetchImpl?: typeof fetch;
 }
 
@@ -121,6 +124,10 @@ export interface CatalogSyncSummary {
   skippedLowCommission: number;
   skipped?: boolean;
   skipReason?: string;
+  /** 同步范围：full（全量）/ brand（按商家）。跳过时无值。 */
+  scope?: "full" | "brand";
+  /** 按商家同步时的 brand_id（scope=brand 时有值）。 */
+  brandId?: string;
 }
 
 const SESSION_EXPIRE_STRIKE_LIMIT = 3;
@@ -491,7 +498,17 @@ export async function syncCatalog(
         fetchImpl: input.fetchImpl,
       };
       try {
-        const offers = await adapter.pullOffers(ctx);
+        // PB 按商家同步：brandId 只传给 PartnerBoostAdapter，其他网络忽略。
+        // session 模式不支持按商家过滤（网页端抓取无 brand_id 参数），忽略。
+        const offers =
+          adapter instanceof PartnerBoostAdapter
+            ? await adapter.pullOffers(
+                ctx,
+                input.brandId?.trim()
+                  ? { brandId: input.brandId.trim() }
+                  : {}
+              )
+            : await adapter.pullOffers(ctx);
         return offers.map(offerToSessionProduct);
       } catch (error) {
         // API 明确 403 = 账号受限/权限回收 → 自动黑名单。
@@ -978,5 +995,7 @@ export async function syncCatalog(
     recommended,
     autoCreatedOffers,
     skippedLowCommission,
+    scope: input.brandId?.trim() ? ("brand" as const) : ("full" as const),
+    ...(input.brandId?.trim() ? { brandId: input.brandId.trim() } : {}),
   };
 }

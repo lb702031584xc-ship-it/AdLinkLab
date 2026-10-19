@@ -110,6 +110,10 @@ export interface SyncResult {
     networkName?: string | null;
     reason?: string | null;
   }>;
+  /** 同步范围：full（全量）/ brand（按商家）。 */
+  scope?: "full" | "brand";
+  /** 按商家同步时的 brand_id。 */
+  brandId?: string;
 }
 
 /**
@@ -445,13 +449,16 @@ export async function listCatalogNetworksAction() {
   );
 }
 
-export async function syncCatalogAction(networkId: string) {
+export async function syncCatalogAction(networkId: string, brandId?: string) {
   return attempt(
     () =>
       apiFetch<SyncResult>("/api/v1/catalog/sync", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ networkId }),
+        body: JSON.stringify({
+          networkId,
+          ...(brandId?.trim() ? { brandId: brandId.trim() } : {}),
+        }),
       }),
     ["/catalog"]
   );

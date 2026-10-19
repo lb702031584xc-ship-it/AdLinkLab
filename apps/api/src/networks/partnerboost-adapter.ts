@@ -177,6 +177,8 @@ export interface PartnerBoostPullOpts {
   returnLink?: boolean;
   returnPerformanceBonus?: boolean;
   maxPages?: number;
+  /** 按品牌 ID 过滤（单品牌，不支持多品牌批量）。只在指定时发送，默认不发送。 */
+  brandId?: number | string;
 }
 
 function parseCommission(raw: unknown): number | null {
@@ -245,10 +247,14 @@ export class PartnerBoostAdapter implements NetworkAdapter {
       // 注意：PartnerBoost datafeed API 对请求体做严格字段白名单校验，
       // 多加任何一个可选字段（如 country_code/sort/relationship）都会返回
       // code 1000 "user not exist"。只发最小必需字段。
+      // brand_id 例外：文档标为有效参数，仅在用户明确指定按商家同步时发送。
       const body: Record<string, unknown> = {
         token,
         page_size: PARTNERBOOST_PAGE_SIZE,
         page,
+        ...(opts.brandId != null && String(opts.brandId).trim() !== ""
+          ? { brand_id: opts.brandId }
+          : {}),
       };
 
       const { json } = await postWithFallback(
