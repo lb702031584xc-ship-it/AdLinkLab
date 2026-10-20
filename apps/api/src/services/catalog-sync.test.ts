@@ -355,16 +355,17 @@ describe("syncCatalog 商品处理", () => {
     // 先同步一次建出商品
     await syncCatalog(deps, input);
     const bad = ctx.networkProduct.find((r) => r.externalId === "ext-2")!;
+    // 手动拉黑（非 sync_disappeared 自动记录）：不会被第 5.5 步"重现自动解除"恢复。
     ctx.catalogBlacklist.push({
       id: randomUUID(),
       tenantId: TEST_TENANT,
       channel: "affiliate",
       entityType: "product",
       entityId: bad.id,
-      reason: "sync_disappeared",
+      reason: "policy_blocked",
       firstSeenAt: new Date(),
       lastConfirmedAt: new Date(),
-      source: "auto",
+      source: "manual",
       status: "active",
     });
     // 第二次同步：ext-2 在黑名单 → 不建 Offer
@@ -580,5 +581,149 @@ describe("syncCatalog $8 佣金门槛（入库第一道）", () => {
     const summary = await syncCatalog(deps, input);
     expect(summary.skipped).toBeFalsy();
     expect(adapter.calls).toBe(1);
+  });
+});
+
+describe("syncCatalog 消失判定守卫（P0-1）", () => {
+  function oldProductRow(externalId: string, overrides: Partial<Row> = {}): Row {
+    return {
+      id: randomUUID(),
+      tenantId: TEST_TENANT,
+      networkId: TEST_NETWORK,
+      externalId,
+      name: `Product ${externalId}`,
+      brand: "OldBrand",
+      price: 100,
+      commissionAmount: 20,
+      commissionRate: null,
+      currency: "USD",
+      reviewCount: 10,
+      recommended: true,
+      recommendationScore: 80,
+      promoUrl: null,
+      rawData: {},
+      syncedAt: new Date(Date.now() - 3600 * 1000),
+      syncStreak: 5,
+      merchantId: null,
+      createdAt: new Date(Date.now() - 3600 * 1000),
+      ...overrides,
+    };
+  }
+
+  it("① 按商家同步（brandId）→ 整步跳过消失判定，不拉黑其他商品", async () => {
+    const { deps, ctx, adapter } = setup();
+    ctx.networkProduct.push(oldProductRow("other-1"));
+    adapter.products = [sessionProduct({ externalId: "ext-1" })];
+    const summary = await syncCatalog(deps, { ...input, brandId: "66303" });
+    expect(summary.scope).toBe("brand");
+    expect(summary.disappearedSkipped).toBe("brand_scope");
+    const bl = ctx.catalogBlacklist.find(
+      (r) => r.entityType === "product" && r.reason === "sync_disappeared"
+    );
+    expect(bl).toBeUndefined();
+  });
+
+  it("② 全量同步消失占比 >50% → 熔断不拉黑 + summary/审计记警告", async () => {
+    const { deps, ctx, adapter } = setup();
+    for (const ext of ["gone-1", "gone-2", "gone-3"]) {
+      ctx.networkProduct.push(oldProductRow(ext));
+    }
+    adapter.products = [sessionProduct({ externalId: "ext-1" })];
+    const summary = await syncCatalog(deps, input);
+    expect(summary.disappearedSkipped).toBe("circuit_breaker");
+    expect(
+      ctx.catalogBlacklist.filter((r) => r.entityType === "product")
+    ).toHaveLength(0);
+    const audit = ctx.adminGrantAudit.find(
+      (a) => a.action === "CATALOG_SYNC_SUCCESS"
+    );
+    expect(audit).toBeDefined();
+    expect((audit!.detail as any).disappearedSkipped).toBe("circuit_breaker");
+    expect((audit!.detail as any).disappearedBlacklisted).toBe(0);
+  });
+
+  it("②b 全量同步 upsert=0（上游返回空）→ 熔断不拉黑", async () => {
+    const { deps, ctx, adapter } = setup();
+    ctx.networkProduct.push(oldProductRow("gone-1"));
+    adapter.products = [];
+    const summary = await syncCatalog(deps, input);
+    expect(summary.synced).toBe(0);
+    expect(summary.disappearedSkipped).toBe("circuit_breaker");
+    expect(
+      ctx.catalogBlacklist.filter((r) => r.entityType === "product")
+    ).toHaveLength(0);
+  });
+
+  it("③ $8 门槛跳过的商品不被判消失拉黑", async () => {
+    const { deps, ctx, adapter } = setup();
+    ctx.networkProduct.push(
+      oldProductRow("ext-low", { commissionAmount: 5 })
+    );
+    adapter.products = [
+      // 本轮仍出现，但佣金 $5 < $8 → 第 5 步跳过入库（syncedAt 不刷新）
+      sessionProduct({
+        externalId: "ext-low",
+        commissionAmount: 5,
+        commissionRate: null,
+      }),
+      sessionProduct({ externalId: "ext-ok" }),
+    ];
+    const summary = await syncCatalog(deps, input);
+    expect(summary.skippedLowCommission).toBe(1);
+    expect(summary.disappearedSkipped).toBeUndefined();
+    const bl = ctx.catalogBlacklist.find((r) => r.entityType === "product");
+    expect(bl).toBeUndefined();
+  });
+
+  it("④ 消失商品重现 → 自动解除 sync_disappeared 黑名单（手动记录不解除）", async () => {
+    const { deps, ctx, adapter } = setup();
+    const pidAuto = randomUUID();
+    const pidManual = randomUUID();
+    ctx.networkProduct.push(
+      oldProductRow("ext-1", { id: pidAuto, syncStreak: 1 }),
+      oldProductRow("ext-2", { id: pidManual, syncStreak: 1 })
+    );
+    const baseEntry = {
+      tenantId: TEST_TENANT,
+      channel: "affiliate",
+      entityType: "product",
+      networkKind: "yeahpromos",
+      reason: "sync_disappeared",
+      firstSeenAt: new Date(Date.now() - 3600 * 1000),
+      lastConfirmedAt: new Date(Date.now() - 3600 * 1000),
+      createdBy: null,
+      status: "active",
+      removedAt: null,
+      removedBy: null,
+      removeReason: null,
+      observationUntil: null,
+    };
+    ctx.catalogBlacklist.push(
+      { ...baseEntry, id: randomUUID(), entityId: pidAuto, source: "auto" },
+      { ...baseEntry, id: randomUUID(), entityId: pidManual, source: "manual" }
+    );
+    adapter.products = [
+      sessionProduct({ externalId: "ext-1" }),
+      sessionProduct({ externalId: "ext-2" }),
+    ];
+    const summary = await syncCatalog(deps, input);
+    expect(summary.synced).toBe(2);
+    const autoEntry = ctx.catalogBlacklist.find((r) => r.entityId === pidAuto)!;
+    expect(autoEntry.status).toBe("removed");
+    expect(autoEntry.removeReason).toBe("sync_reappeared");
+    const manualEntry = ctx.catalogBlacklist.find(
+      (r) => r.entityId === pidManual
+    )!;
+    expect(manualEntry.status).toBe("active");
+    expect(
+      ctx.adminGrantAudit.some((a) => a.action === "CATALOG_BLACKLIST_REMOVED")
+    ).toBe(true);
+    const successAudit = ctx.adminGrantAudit.find(
+      (a) => a.action === "CATALOG_SYNC_SUCCESS"
+    );
+    expect((successAudit!.detail as any).restoredDisappeared).toBe(1);
+    // 解除后不再被黑名单排除 → 正常评分推荐；手动拉黑的仍不推荐
+    const pAuto = ctx.networkProduct.find((r) => r.id === pidAuto)!;
+    expect(pAuto.recommended).toBe(true);
   });
 });

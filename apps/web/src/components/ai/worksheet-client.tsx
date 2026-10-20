@@ -1675,7 +1675,20 @@ export function WorksheetClient({
           setRow("blacklist", "unknown", w.prescreen.blacklistManual);
         }
         // ② $8 佣金门槛：payout 已知且 < $8 → kill；未知不杀。
-        const cm = evaluateCommissionPrescreen(initialPayout, prescreenLang);
+        // 百分比佣金 offer 额外传佣金率 × 均价，与后端入库门槛同口径估算。
+        const cm = evaluateCommissionPrescreen(
+          initialPayout,
+          prescreenLang,
+          undefined,
+          {
+            ratePct:
+              offer?.commissionType === "percentage"
+                ? Number(offer.commissionValue)
+                : undefined,
+            price:
+              offer?.avgPrice != null ? Number(offer.avgPrice) : undefined,
+          },
+        );
         if (!alive()) return;
         setRow("commission", cm.status, cm.reason);
         if (cm.status === "kill") {

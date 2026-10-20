@@ -6,7 +6,7 @@
  * minCommissionAmount 默认引用 MIN_COMMISSION_USD（与入库第一道门槛、
  * 推演/工作表判定共用同一常量）：入库时已拦掉 <$8 的，库内筛选默认不再更严。
  */
-import { MIN_COMMISSION_USD } from "@adlinklab/shared";
+import { MIN_COMMISSION_USD, estimateCommissionFigure } from "@adlinklab/shared";
 
 export interface ScreeningPreset {
   minReviews?: number | null;
@@ -43,11 +43,14 @@ export interface ScreeningResult {
 /**
  * 评分公式（确定性，各分项归一化到 0–100，加权求和，总分 0–100）：
  * - 佣金金额分（40）：minCommissionAmount→0 分，3 倍阈值→满分，线性；
+ *   佣金口径与入库 $8 门槛完全一致（estimateCommissionFigure：固定佣金优先，
+ *   否则 price×佣金率估算）——只有佣金率的商品（如 PB 百分比佣金）同样参与判定/计分。
  * - 佣金率分（25）：minCommissionRate→0 分，3 倍阈值→满分，线性；
  * - 评论分（20）：对数归一化，10000 评论→满分；
  * - 价格带分（15）：价格在 [minPrice, maxPrice] 内→满分，偏离越远越低。
  * 全部阈值通过 → recommended=true；任一阈值不通过 → recommended=false（分数照算）。
- * 缺失字段：该分项按 0 分计（不虚构数据）。
+ * 缺失字段：该分项按 0 分计（不虚构数据）；佣金完全算不出（无金额、无率或无价）
+ * → passAmount 不通过。
  */
 export function scoreProduct(
   p: ScoreableProduct,
@@ -71,12 +74,21 @@ export function scoreProduct(
   const commissionRate = num(p.commissionRate);
   const reviewCount = num(p.reviewCount);
 
+  // 有效佣金口径与入库第一道门槛（catalog-sync 第 5 步）完全一致：
+  // 固定佣金优先，否则 price×佣金率估算；算不出 → null（passAmount 不通过）。
+  const { figure: effectiveCommission } = estimateCommissionFigure({
+    amount: commissionAmount,
+    ratePct: commissionRate,
+    price,
+  });
+
   // 阈值判定（阈值为 0/null → 该项不卡）。
   const passReviews =
     !(eff.minReviews > 0) || (reviewCount !== null && reviewCount >= eff.minReviews);
   const passAmount =
     !(eff.minCommissionAmount > 0) ||
-    (commissionAmount !== null && commissionAmount >= eff.minCommissionAmount);
+    (effectiveCommission !== null &&
+      effectiveCommission >= eff.minCommissionAmount);
   const passRate =
     !(eff.minCommissionRate > 0) ||
     (commissionRate !== null && commissionRate >= eff.minCommissionRate);
@@ -93,7 +105,7 @@ export function scoreProduct(
     if (v <= threshold) return 0;
     return clamp(((v - threshold) / (2 * threshold)) * 100);
   };
-  const amountScore = linearTo3x(commissionAmount, eff.minCommissionAmount); // 0–100
+  const amountScore = linearTo3x(effectiveCommission, eff.minCommissionAmount); // 0–100
   const rateScore = linearTo3x(commissionRate, eff.minCommissionRate); // 0–100
   const reviewScore =
     reviewCount === null ? 0 : clamp((Math.log10(reviewCount + 1) / 4) * 100); // 10^4→100

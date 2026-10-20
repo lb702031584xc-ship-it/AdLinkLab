@@ -70,4 +70,52 @@ describe("scoreProduct", () => {
     const b = scoreProduct({ ...base, commissionAmount: 60 }, DEFAULT_PRESET);
     expect(b.score).toBeGreaterThan(a.score);
   });
+
+  it("⑤ 只有佣金率（PB 百分比佣金）：price×rate ≥ $8 → 可 recommended", () => {
+    const r = scoreProduct(
+      { price: 100, commissionAmount: null, commissionRate: 12, reviewCount: 5000 },
+      DEFAULT_PRESET
+    );
+    // 有效佣金 = 100 × 12% = $12 ≥ $8；率 12 ≥ 10；价在 [80,150] → 全部通过
+    expect(r.recommended).toBe(true);
+  });
+
+  it("⑤b 只有佣金率且 price×rate < $8 → passAmount 不通过（自定义 preset 隔离该项）", () => {
+    const preset = {
+      minReviews: 0,
+      minCommissionAmount: 8,
+      minCommissionRate: 0,
+      minPrice: 0,
+      maxPrice: 0,
+      minScore: 0,
+    };
+    const low = scoreProduct(
+      { price: 100, commissionAmount: null, commissionRate: 5, reviewCount: 5000 },
+      preset
+    );
+    // 有效佣金 = 100 × 5% = $5 < $8 → 不通过
+    expect(low.recommended).toBe(false);
+    const ok = scoreProduct(
+      { price: 100, commissionAmount: null, commissionRate: 12, reviewCount: 5000 },
+      preset
+    );
+    expect(ok.recommended).toBe(true);
+  });
+
+  it("⑤c 固定佣金优先于估算：amount 明确 < $8 时不被 rate 估算翻案", () => {
+    const preset = {
+      minReviews: 0,
+      minCommissionAmount: 8,
+      minCommissionRate: 0,
+      minPrice: 0,
+      maxPrice: 0,
+      minScore: 0,
+    };
+    const r = scoreProduct(
+      { price: 100, commissionAmount: 5, commissionRate: 50, reviewCount: 5000 },
+      preset
+    );
+    // estimateCommissionFigure 口径：amount 优先 → figure=5 < $8
+    expect(r.recommended).toBe(false);
+  });
 });

@@ -10,6 +10,9 @@
  *  5. upsert NetworkProduct（@@unique tenantId+networkId+externalId），syncStreak 累计；
  *     brand+networkId 匹配 Merchant → merchantId。
  *  6. 消失商品（syncedAt < 本次开始）→ 自动黑名单（product, reason=sync_disappeared）+ 审计。
+ *     守卫：按商家（brandId）同步整步跳过；全量同步熔断（upsert=0 或消失占比 >50%）跳过
+ *     并在 summary.disappearedSkipped 记警告；第 5 步被 $8 门槛跳过的商品不算消失。
+ *     商品重新出现（被 upsert）时，其 sync_disappeared 自动黑名单自动解除（第 5.5 步）。
  *  7. 评分：排除黑名单商品/黑名单商家的商品后跑 scoreProduct，写回 recommended/score。
  *  8. 白名单建议：syncStreak 达到 3 → suggested（只建议，不自动加入）。
  *  9. 自动建 Offer（preset.autoCreateOffer）：白名单优先（观察期商家不置顶），
@@ -72,6 +75,7 @@ import {
   isBlacklisted,
   isMerchantObserved,
   networkKindToChannel,
+  removeFromBlacklist,
   suggestWhitelistEntry,
   writeCatalogAudit,
   type CatalogChannel,
@@ -128,6 +132,12 @@ export interface CatalogSyncSummary {
   scope?: "full" | "brand";
   /** 按商家同步时的 brand_id（scope=brand 时有值）。 */
   brandId?: string;
+  /**
+   * 第 6 步消失判定被守卫跳过的原因（不静默，明确记警告）：
+   * "brand_scope" = 按商家同步不做全网消失判定；
+   * "circuit_breaker" = 全量同步熔断（upsert=0 或消失占比 >50%，疑似上游异常）。
+   */
+  disappearedSkipped?: string;
 }
 
 const SESSION_EXPIRE_STRIKE_LIMIT = 3;
@@ -722,6 +732,9 @@ export async function syncCatalog(
   let updated = 0;
   let skippedLowCommission = 0;
   const skippedLowCommissionBySource = { reported: 0, estimated: 0 };
+  // 本轮"见过但被 $8 门槛跳过"的 externalId：第 6 步消失判定必须排除它们
+  // （它们没消失，只是没过门槛；其 syncedAt 不会刷新，不能误判消失拉黑）。
+  const gateSkippedExternalIds = new Set<string>();
   const upserted: ProductRow[] = [];
   for (const p of products) {
     const externalId = (p.externalId ?? "").trim();
@@ -733,6 +746,7 @@ export async function syncCatalog(
     });
     if (figure != null && belowMinCommission(figure, minCommission)) {
       skippedLowCommission += 1;
+      gateSkippedExternalIds.add(externalId);
       if (source === "reported") skippedLowCommissionBySource.reported += 1;
       else skippedLowCommissionBySource.estimated += 1;
       continue;
@@ -783,11 +797,74 @@ export async function syncCatalog(
     upserted.push(row);
   }
 
-  /* ── 6. 消失商品 → 自动黑名单 ── */
-  const disappeared = (await prisma.networkProduct.findMany({
-    where: { tenantId, networkId: net.id, syncedAt: { lt: syncStartedAt } },
-    select: { id: true, externalId: true, name: true, syncedAt: true },
-  })) as Array<{ id: string; externalId: string; name: string; syncedAt: Date }>;
+  /* ── 5.5 消失商品重现 → 自动解除 sync_disappeared 黑名单 ── */
+  // 本轮被 upsert 的商品若有一条 source=auto + reason=sync_disappeared 的 active
+  // 黑名单记录，说明它只是之前某轮没出现，现已回来 → 自动解除（走现有的
+  // removeFromBlacklist 软删除 + 审计）。手动拉黑（source=manual）或其他原因的
+  // 记录绝不自动解除。
+  let restoredDisappeared = 0;
+  if (upserted.length > 0) {
+    const reappearedEntries = (await prisma.catalogBlacklist.findMany({
+      where: {
+        tenantId,
+        channel,
+        entityType: "product",
+        entityId: { in: upserted.map((r) => r.id) },
+        reason: "sync_disappeared",
+        source: "auto",
+        status: "active",
+      },
+      select: { id: true },
+    })) as Array<{ id: string }>;
+    for (const entry of reappearedEntries) {
+      await removeFromBlacklist(prisma, {
+        tenantId,
+        id: entry.id,
+        actorId: userId,
+        reason: "sync_reappeared",
+        observationDays: 0,
+      });
+      restoredDisappeared += 1;
+    }
+  }
+
+  /* ── 6. 消失商品 → 自动黑名单（带守卫） ── */
+  // 守卫 1（范围）：按商家同步只拉了部分商品，其他商品 syncedAt 必然过期，
+  //   整步跳过消失判定，否则会把其他品牌/商家的商品全误判消失拉黑。
+  // 守卫 2（熔断）：全量同步若 upsert=0（上游返回空/全被拦）或消失占比 >50%
+  //   （疑似上游 feed 异常/截断），跳过拉黑并记 disappearedSkipped 警告，不静默。
+  // 守卫 3（门槛）：第 5 步被 $8 门槛跳过的商品本轮"见过"，排除出消失集合。
+  let disappeared: Array<{
+    id: string;
+    externalId: string;
+    name: string;
+    syncedAt: Date;
+  }> = [];
+  let disappearedSkipped: string | undefined;
+  if (input.brandId?.trim()) {
+    disappearedSkipped = "brand_scope";
+  } else {
+    const rawDisappeared = (await prisma.networkProduct.findMany({
+      where: { tenantId, networkId: net.id, syncedAt: { lt: syncStartedAt } },
+      select: { id: true, externalId: true, name: true, syncedAt: true },
+    })) as Array<{
+      id: string;
+      externalId: string;
+      name: string;
+      syncedAt: Date;
+    }>;
+    disappeared = rawDisappeared.filter(
+      (d) => !gateSkippedExternalIds.has(d.externalId)
+    );
+    const totalInNetwork = upserted.length + rawDisappeared.length;
+    if (
+      upserted.length === 0 ||
+      (totalInNetwork > 0 && disappeared.length / totalInNetwork > 0.5)
+    ) {
+      disappearedSkipped = "circuit_breaker";
+      disappeared = [];
+    }
+  }
   for (const d of disappeared) {
     await addToBlacklist(prisma, {
       tenantId,
@@ -985,6 +1062,8 @@ export async function syncCatalog(
       recommended,
       autoCreatedOffers,
       disappearedBlacklisted: disappeared.length,
+      disappearedSkipped: disappearedSkipped ?? null,
+      restoredDisappeared,
     },
   });
   if (grant) await incrementGrantUsage(prisma, grant);
@@ -998,5 +1077,6 @@ export async function syncCatalog(
     skippedLowCommission,
     scope: input.brandId?.trim() ? ("brand" as const) : ("full" as const),
     ...(input.brandId?.trim() ? { brandId: input.brandId.trim() } : {}),
+    ...(disappearedSkipped ? { disappearedSkipped } : {}),
   };
 }

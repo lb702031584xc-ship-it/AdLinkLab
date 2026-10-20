@@ -62,13 +62,20 @@ function normNonNegInt(v: unknown): number | null {
 /**
  * 第 2 条：$8 佣金门槛。payout 已知且 < 阈值 → kill；
  * 未知（未填/算不出）→ unknown，不拦截。
+ * 佣金口径与后端入库门槛一致（estimateCommissionFigure）：固定佣金（amount）优先，
+ * 缺金额时可用 extra.ratePct × extra.price 估算（如百分比佣金 offer 的佣金率 × 均价）。
  */
 export function evaluateCommissionPrescreen(
   payoutRaw: unknown,
   lang: "zh" | "en",
   thresholdUsd: number = MIN_COMMISSION_USD,
+  extra?: { ratePct?: unknown; price?: unknown },
 ): { status: PrescreenRowStatus; reason: string } {
-  const fig = estimateCommissionFigure({ amount: payoutRaw });
+  const fig = estimateCommissionFigure({
+    amount: payoutRaw,
+    ratePct: extra?.ratePct,
+    price: extra?.price,
+  });
   if (fig.figure == null) {
     return {
       status: "unknown",
