@@ -19,6 +19,7 @@ export interface DailyAlertsInput {
     spend: number | null;
     conversions: number | null;
     revenue: number | null;
+    payout: number | null;
     launchedAt: string | null;
     createdAt: string;
     endedAt: string | null;
@@ -80,6 +81,7 @@ export function classifyDailyAlerts(input: DailyAlertsInput): DailyAlertsClassif
       conversions: a.conversions,
       spend: a.spend,
       revenue: a.revenue,
+      payout: a.payout,
       daysActive: daysActiveSince(a.launchedAt ?? a.createdAt),
     });
     for (const s of suggestions) {

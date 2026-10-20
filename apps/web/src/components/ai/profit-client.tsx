@@ -75,7 +75,7 @@ export function ProfitClient({ offers }: { offers: ProfitOfferOption[] }) {
   const [bidPriceMax, setBidPriceMax] = useState("");
   const [bidPctMin, setBidPctMin] = useState("");
   const [bidPctMax, setBidPctMax] = useState("");
-  const [bidCvr, setBidCvr] = useState("2");
+  const [bidCvr, setBidCvr] = useState("");
   const [bidResult, setBidResult] = useState<ProfitAnalysisResult | null>(null);
   const [bidLoading, setBidLoading] = useState(false);
   const [bidError, setBidError] = useState<string | null>(null);
@@ -84,6 +84,11 @@ export function ProfitClient({ offers }: { offers: ProfitOfferOption[] }) {
   const [dualTargetReturnRatio, setDualTargetReturnRatio] = useState("2");
 
   async function runBidAnalysis() {
+    const cvr = parseFloat(bidCvr);
+    if (!Number.isFinite(cvr) || cvr <= 0) {
+      setBidError(d.bidCvrRequiredHint);
+      return;
+    }
     setBidLoading(true);
     setBidError(null);
     try {
@@ -94,7 +99,7 @@ export function ProfitClient({ offers }: { offers: ProfitOfferOption[] }) {
         commissionPctMin: bidMode === "range" ? parseFloat(bidPctMin) || null : null,
         commissionPctMax: bidMode === "range" ? parseFloat(bidPctMax) || null : null,
         currency,
-        assumedCvrPct: parseFloat(bidCvr) || 2,
+        assumedCvrPct: cvr,
       });
       if (!res.ok) {
         setBidError(res.error);
@@ -562,9 +567,12 @@ export function ProfitClient({ offers }: { offers: ProfitOfferOption[] }) {
               inputMode="decimal"
               value={bidCvr}
               onChange={(e) => setBidCvr(e.target.value)}
-              placeholder="2"
+              placeholder="如 1.5"
               className={inputClass}
             />
+            {!bidCvr.trim() && (
+              <p className="mt-1 text-xs text-ink/50">{d.bidCvrRequiredHint}</p>
+            )}
           </div>
         </div>
         <button

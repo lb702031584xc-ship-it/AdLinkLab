@@ -218,12 +218,12 @@ export function TrafficPlannerClient({
   /** 独立页 offer 下拉列表（嵌入时不传，不显示下拉）。 */
   offers?: PlannerOffer[];
   /**
-   * 上游（工作表 ③ 盈利测算）同步来的值：payout/CVR/退款率/均价/佣金率。
+   * 上游（工作表 ③ 盈利测算）同步来的值：payout/CVR/退款率/均价/佣金率/目标产出比。
    * 恢复完成后应用到对应字段（只覆盖这些字段，关键词/情报等仍用本页快照）。
    */
-  initialInputs?: { payout?: string; cvr?: string; refundRate?: string; avgPrice?: string; commissionRate?: string };
+  initialInputs?: { payout?: string; cvr?: string; refundRate?: string; avgPrice?: string; commissionRate?: string; targetReturnRatio?: string };
   /**
-   * 下游同步（工作表嵌入时）：本页盈利测算输入（payout/CVR/退款率/扣量/均价/佣金率/模式）
+   * 下游同步（工作表嵌入时）：本页盈利测算输入（payout/CVR/退款率/扣量/均价/佣金率/模式/目标产出比）
    * 变化后同步回工作表 ④（一个地方输入，相同参数别处也有）。防回环：同一组值只发一次，工作表侧等值跳过。
    */
   onProfitInputsChange?: (inputs: {
@@ -234,6 +234,7 @@ export function TrafficPlannerClient({
     avgPrice: string;
     commissionRate: string;
     profitMode: ProfitMode;
+    targetReturnRatio: string;
   }) => void;
 }) {
   const { lang } = useI18n();
@@ -293,7 +294,7 @@ export function TrafficPlannerClient({
   const appliedInputsKeyRef = useRef<string | null>(null);
   useEffect(() => {
     if (!initialInputs) return;
-    const key = `${initialInputs.payout ?? ""}::${initialInputs.cvr ?? ""}::${initialInputs.refundRate ?? ""}::${initialInputs.avgPrice ?? ""}::${initialInputs.commissionRate ?? ""}`;
+    const key = `${initialInputs.payout ?? ""}::${initialInputs.cvr ?? ""}::${initialInputs.refundRate ?? ""}::${initialInputs.avgPrice ?? ""}::${initialInputs.commissionRate ?? ""}::${initialInputs.targetReturnRatio ?? ""}`;
     if (appliedInputsKeyRef.current === key) return;
     appliedInputsKeyRef.current = key;
     if (initialInputs.payout != null) setPayout(initialInputs.payout);
@@ -301,6 +302,7 @@ export function TrafficPlannerClient({
     if (initialInputs.refundRate != null) setRefundRate(initialInputs.refundRate);
     if (initialInputs.avgPrice != null) setAvgPrice(initialInputs.avgPrice);
     if (initialInputs.commissionRate != null) setCommissionRate(initialInputs.commissionRate);
+    if (initialInputs.targetReturnRatio != null) setTargetReturnRatio(initialInputs.targetReturnRatio);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialInputs]);
 
@@ -309,7 +311,7 @@ export function TrafficPlannerClient({
      所以恢复不会把 ④ 的值冲掉、也不会把恢复值误当成用户编辑发回去。 */
   const lastProfitSyncKeyRef = useRef<string | null>(null);
   const profitSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const profitSyncKey = `${payout}::${networkCvr}::${refundRate}::${shavePct}::${avgPrice}::${commissionRate}::${profitMode}`;
+  const profitSyncKey = `${payout}::${networkCvr}::${refundRate}::${shavePct}::${avgPrice}::${commissionRate}::${profitMode}::${targetReturnRatio}`;
   useEffect(() => {
     if (!onProfitInputsChange) return;
     if (profitSyncKey === lastProfitSyncKeyRef.current) return;
@@ -324,6 +326,7 @@ export function TrafficPlannerClient({
         avgPrice,
         commissionRate,
         profitMode,
+        targetReturnRatio,
       });
     }, 500);
     return () => {
@@ -659,6 +662,8 @@ export function TrafficPlannerClient({
     Boolean(
       (s.offerName as string)?.trim() ||
         (s.payout as string)?.toString().trim() ||
+        (s.epc as string)?.toString().trim() ||
+        (s.networkCvr as string)?.toString().trim() ||
         (s.avgPrice as string)?.toString().trim() ||
         (s.commissionRate as string)?.toString().trim() ||
         ((s.keywords as Array<{ keyword?: string }>) ?? []).some((k) =>
@@ -769,7 +774,7 @@ export function TrafficPlannerClient({
   });
   const appliedInputsRef = useRef<string | null>(null);
 
-  /* 上游 ④ 的值：恢复完成后应用（只覆盖 payout/CVR/退款率三个字段） */
+  /* 上游 ④ 的值：恢复完成后应用（只覆盖 payout/CVR/退款率/目标产出比四个字段） */
   useEffect(() => {
     if (!restored || !initialInputs) return;
     const key = JSON.stringify(initialInputs);
@@ -778,6 +783,7 @@ export function TrafficPlannerClient({
     if (initialInputs.payout != null) setPayout(initialInputs.payout);
     if (initialInputs.cvr != null) setNetworkCvr(initialInputs.cvr);
     if (initialInputs.refundRate != null) setRefundRate(initialInputs.refundRate);
+    if (initialInputs.targetReturnRatio != null) setTargetReturnRatio(initialInputs.targetReturnRatio);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [restored, initialInputs]);
 

@@ -349,6 +349,13 @@ function toAdGroupCriterion(row: {
   };
 }
 
+/** Offer + 申请状态三字段（domain Offer 未包含，database 层本地扩展类型）。 */
+export type OfferWithApplication = Offer & {
+  applicationStatus?: string;
+  appliedAt?: Date | null;
+  applicationNote?: string | null;
+};
+
 function toOffer(row: {
   id: string;
   tenantId: string;
@@ -369,13 +376,16 @@ function toOffer(row: {
   brandNameSource?: string | null;
   brandNameConfidence?: number | null;
   festivalTheme?: string | null;
+  applicationStatus?: string | null;
+  appliedAt?: Date | null;
+  applicationNote?: string | null;
   idempotencyScope: string | null;
   idempotencyKey: string | null;
   createdAt: Date;
   updatedAt: Date;
   archivedAt: Date | null;
   deletedAt: Date | null;
-}): Offer {
+}): OfferWithApplication {
   return {
     id: row.id,
     tenantId: row.tenantId,
@@ -396,6 +406,9 @@ function toOffer(row: {
     brandNameSource: row.brandNameSource ?? undefined,
     brandNameConfidence: row.brandNameConfidence ?? undefined,
     festivalTheme: row.festivalTheme ?? undefined,
+    applicationStatus: row.applicationStatus ?? "not_applied",
+    appliedAt: row.appliedAt ?? undefined,
+    applicationNote: row.applicationNote ?? undefined,
     idempotencyScope: row.idempotencyScope ?? undefined,
     idempotencyKey: row.idempotencyKey ?? undefined,
     createdAt: row.createdAt,
@@ -1218,7 +1231,7 @@ export class PrismaOfferRepository implements OfferRepository {
     ]);
     return createPaginatedResult(items.map(toOffer), total, page, pageSize);
   }
-  async create(data: Omit<Offer, "createdAt" | "updatedAt">) {
+  async create(data: Omit<OfferWithApplication, "createdAt" | "updatedAt">) {
     try {
       return toOffer(
         await this.db.offer.create({
@@ -1242,6 +1255,9 @@ export class PrismaOfferRepository implements OfferRepository {
             brandNameSource: data.brandNameSource ?? null,
             brandNameConfidence: data.brandNameConfidence ?? null,
             festivalTheme: data.festivalTheme ?? null,
+            applicationStatus: data.applicationStatus ?? "not_applied",
+            appliedAt: data.appliedAt ?? null,
+            applicationNote: data.applicationNote ?? null,
             idempotencyScope: data.idempotencyScope ?? null,
             idempotencyKey: data.idempotencyKey ?? null,
             archivedAt: data.archivedAt ?? null,
@@ -1253,7 +1269,7 @@ export class PrismaOfferRepository implements OfferRepository {
       rethrowUniqueAsConflict(error, "Offer idempotency key already exists");
     }
   }
-  async update(id: string, data: Partial<Omit<Offer, "id" | "createdAt">>) {
+  async update(id: string, data: Partial<Omit<OfferWithApplication, "id" | "createdAt">>) {
     try {
       return toOffer(await this.db.offer.update({ where: { id }, data }));
     } catch (error) {

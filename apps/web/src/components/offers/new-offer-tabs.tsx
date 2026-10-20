@@ -12,6 +12,10 @@ export function NewOfferTabs() {
   const searchParams = useSearchParams();
   const initialTab = searchParams.get("tab") === "import" ? "import" : "manual";
   const initialSource = searchParams.get("source") ?? undefined;
+  /* 亚马逊流水线「建 Offer」带入：name→名称、price→均价、asin→名称下方来源提示。 */
+  const initialName = searchParams.get("name") ?? undefined;
+  const initialPrice = searchParams.get("price") ?? undefined;
+  const initialAsin = searchParams.get("asin") ?? undefined;
   const [tab, setTab] = useState<"manual" | "import">(initialTab);
 
   const tabClass = (active: boolean) =>
@@ -43,7 +47,12 @@ export function NewOfferTabs() {
       </div>
       <div className="mt-6">
         {tab === "manual" ? (
-          <OfferForm initialSource={initialSource} />
+          <OfferForm
+            initialSource={initialSource}
+            initialName={initialName}
+            initialPrice={initialPrice}
+            initialAsin={initialAsin}
+          />
         ) : (
           <OfferImportClient />
         )}

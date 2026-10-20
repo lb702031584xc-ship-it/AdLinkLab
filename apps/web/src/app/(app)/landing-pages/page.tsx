@@ -143,6 +143,7 @@ export default async function LandingPagesPage({
 }) {
   const sp = await searchParams;
   const step = parseStep(sp.step);
+  const offerIdParam = Array.isArray(sp.offerId) ? sp.offerId[0] : sp.offerId;
   const lang = await getLang();
   const t = getDictionary(lang);
   const pt = landerPipelineDict[lang];
@@ -152,7 +153,6 @@ export default async function LandingPagesPage({
   if (step === "pages") {
     const page = parsePositiveInt(sp.page, 1);
     const pageSize = parsePositiveInt(sp.pageSize, 20);
-    const offerIdParam = Array.isArray(sp.offerId) ? sp.offerId[0] : sp.offerId;
     const columns = columnsFor(t);
     const pagerLabels: PaginationLabels = {
       items: t.entities.ui.pagination.items,
@@ -233,6 +233,7 @@ export default async function LandingPagesPage({
       <LanderPipelineClient
         lang={lang}
         step={step}
+        offerId={offerIdParam ?? null}
         pagesContent={pagesContent}
       />
     </div>

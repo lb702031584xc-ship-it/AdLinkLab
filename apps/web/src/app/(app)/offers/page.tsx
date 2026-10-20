@@ -27,6 +27,7 @@ import {
   OfferBatchDeleteBar,
 } from "@/components/offers/offer-selection";
 import { TestSpendCell } from "@/components/offers/test-spend-cell";
+import { OfferApplicationCell } from "@/components/offers/offer-application-cell";
 import {
   QuickCalcButton,
   type QuickCalcDict,
@@ -362,6 +363,19 @@ export default async function OffersPage({
     {
       header: t.common.misc.status,
       render: (o) => <StatusBadge value={o.status} />,
+    },
+    {
+      header: t.entities.offers.columns.applicationStatus,
+      render: (o) => (
+        <OfferApplicationCell
+          offerId={o.id}
+          status={o.applicationStatus}
+          appliedAt={o.appliedAt}
+          note={o.applicationNote}
+          labels={t.entities.offers.applicationStatus}
+          notePlaceholder={t.entities.forms.offer.applicationNotePlaceholder}
+        />
+      ),
     },
     { header: t.entities.offers.columns.priority, render: (o) => String(o.priority) },
     {

@@ -548,6 +548,9 @@ export async function registerRoutes(
       brandNameSource?: string;
       brandNameConfidence?: number;
       festivalTheme?: string;
+      applicationStatus?: string;
+      appliedAt?: string | null;
+      applicationNote?: string | null;
     };
   }>("/api/v1/offers", async (request) => {
     const tenantId = tenantOf(request, request.body?.tenantId);
@@ -574,6 +577,14 @@ export async function registerRoutes(
       brandNameSource: request.body.brandNameSource,
       brandNameConfidence: request.body.brandNameConfidence,
       festivalTheme: request.body.festivalTheme,
+      applicationStatus: request.body.applicationStatus,
+      appliedAt:
+        request.body.appliedAt === null
+          ? null
+          : request.body.appliedAt
+            ? new Date(request.body.appliedAt)
+            : undefined,
+      applicationNote: request.body.applicationNote,
     });
   });
 
@@ -594,6 +605,9 @@ export async function registerRoutes(
       brandNameSource?: string;
       brandNameConfidence?: number;
       festivalTheme?: string;
+      applicationStatus?: string;
+      appliedAt?: string | null;
+      applicationNote?: string | null;
     };
   }>("/api/v1/offers/:id", async (request) => {
     const tenantId = tenantOf(request, request.body?.tenantId);
@@ -610,6 +624,14 @@ export async function registerRoutes(
         brandNameSource: request.body.brandNameSource,
         brandNameConfidence: request.body.brandNameConfidence,
         festivalTheme: request.body.festivalTheme,
+        applicationStatus: request.body.applicationStatus,
+        appliedAt:
+          request.body.appliedAt === null
+            ? null
+            : request.body.appliedAt
+              ? new Date(request.body.appliedAt)
+              : undefined,
+        applicationNote: request.body.applicationNote,
         startsAt:
           request.body.startsAt === null
             ? null

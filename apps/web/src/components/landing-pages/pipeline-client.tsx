@@ -10,6 +10,7 @@ import { zh as experimentZh, en as experimentEn } from "@/i18n/dict/experiment";
 import { LanderClient } from "@/components/ai/lander-client";
 import { RewriteClient } from "@/components/ai/rewrite-client";
 import { ExperimentsClient } from "@/components/experiments/experiments-client";
+import { OfferPipelineNav } from "@/components/ai/offer-pipeline-nav";
 import { RecommendStep } from "./recommend-step";
 
 export type PipelineStep =
@@ -32,8 +33,9 @@ function loadDone(): Record<string, boolean> {
   }
 }
 
-function stepHref(step: PipelineStep): string {
-  return `/landing-pages?step=${step}`;
+function stepHref(step: PipelineStep, offerId?: string | null): string {
+  const base = `/landing-pages?step=${step}`;
+  return offerId ? `${base}&offerId=${encodeURIComponent(offerId)}` : base;
 }
 
 /**
@@ -49,10 +51,12 @@ function stepHref(step: PipelineStep): string {
 export function LanderPipelineClient({
   lang,
   step,
+  offerId,
   pagesContent,
 }: {
   lang: LanderPipelineLang;
   step: PipelineStep;
+  offerId?: string | null;
   pagesContent: ReactNode;
 }) {
   const t = landerPipelineDict[lang];
@@ -86,6 +90,7 @@ export function LanderPipelineClient({
 
   return (
     <div>
+      <OfferPipelineNav current="lander" offerId={offerId ?? null} />
       {/* Step bar */}
       <nav
         aria-label="pipeline steps"
@@ -102,7 +107,7 @@ export function LanderPipelineClient({
                 </span>
               ) : null}
               <Link
-                href={stepHref(s)}
+                href={stepHref(s, offerId)}
                 aria-current={active ? "step" : undefined}
                 className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition ${
                   active
@@ -130,7 +135,7 @@ export function LanderPipelineClient({
           |
         </span>
         <Link
-          href={stepHref("pages")}
+          href={stepHref("pages", offerId)}
           aria-current={step === "pages" ? "step" : undefined}
           className={`rounded-lg border px-3 py-2 text-sm font-medium transition ${
             step === "pages"
@@ -227,7 +232,7 @@ export function LanderPipelineClient({
           <div className="flex gap-2">
             {prevStep ? (
               <Link
-                href={stepHref(prevStep)}
+                href={stepHref(prevStep, offerId)}
                 className="rounded-lg border border-ink/15 bg-white/70 px-4 py-2 text-sm font-medium text-ink/75 hover:bg-white"
               >
                 {t.nav.prev}
@@ -235,7 +240,7 @@ export function LanderPipelineClient({
             ) : null}
             {nextStep ? (
               <Link
-                href={stepHref(nextStep)}
+                href={stepHref(nextStep, offerId)}
                 className="rounded-lg bg-signal px-4 py-2 text-sm font-semibold text-white hover:opacity-90"
               >
                 {t.nav.next}

@@ -64,6 +64,10 @@ export const zh = {
       rotationScript: "直链轮换 Script",
       clickMonitor: "点击监测",
       launchArchive: "投放报表",
+      payoutWatch: "佣金监控",
+      budgetRules: "预算规则",
+      orderLedger: "订单台账",
+      searchTerms: "搜索词报告",
     },
   },
   brand: {
@@ -184,6 +188,10 @@ export const en: typeof zh = {
       rotationScript: "Direct-Link Rotation Script",
       clickMonitor: "Click Monitor",
       launchArchive: "Launch Report",
+      payoutWatch: "Payout Watch",
+      budgetRules: "Budget Rules",
+      orderLedger: "Order Ledger",
+      searchTerms: "Search Terms Report",
     },
   },
   brand: {

@@ -72,6 +72,52 @@ function validateBrandFields(input: {
   }
 }
 
+/** Offer 申请状态（offer 入库 ≠ 能推；与 status 生命周期独立的维度）。 */
+export const APPLICATION_STATUSES = [
+  "not_applied",
+  "applied",
+  "approved",
+  "rejected",
+] as const;
+
+/** Offer + 申请状态三字段（domain Offer 未包含，API 层本地扩展类型）。 */
+export type OfferWithApplication = Offer & {
+  applicationStatus?: string;
+  appliedAt?: Date | null;
+  applicationNote?: string | null;
+};
+
+function validateApplicationFields(input: {
+  applicationStatus?: string;
+  appliedAt?: Date | null;
+  applicationNote?: string | null;
+}): void {
+  if (
+    input.applicationStatus !== undefined &&
+    !(APPLICATION_STATUSES as readonly string[]).includes(input.applicationStatus)
+  ) {
+    throw new ValidationError(
+      "applicationStatus must be not_applied, applied, approved or rejected"
+    );
+  }
+  if (
+    input.appliedAt !== undefined &&
+    input.appliedAt !== null &&
+    (!(input.appliedAt instanceof Date) ||
+      Number.isNaN(input.appliedAt.getTime()))
+  ) {
+    throw new ValidationError("appliedAt must be a valid date");
+  }
+  if (
+    input.applicationNote !== undefined &&
+    input.applicationNote !== null &&
+    (typeof input.applicationNote !== "string" ||
+      input.applicationNote.length > 500)
+  ) {
+    throw new ValidationError("applicationNote must be at most 500 characters");
+  }
+}
+
 /**
  * Phase 5 — Offer CRUD + status lifecycle (tenant scoped).
  * Does not mutate Google Ads URLs.
@@ -87,7 +133,7 @@ export class OfferService {
     return this.offers.list({ tenantId, page, pageSize, source });
   }
 
-  async getById(tenantId: string, id: string): Promise<Offer> {
+  async getById(tenantId: string, id: string): Promise<OfferWithApplication> {
     const offer = await this.offers.findByIdForTenant(tenantId, id);
     if (!offer) throw new NotFoundError("Offer", id);
     return offer;
@@ -118,11 +164,18 @@ export class OfferService {
     brandNameConfidence?: number;
     /** P1-15：节日主题（只影响 RSA 文案） */
     festivalTheme?: string;
-  }): Promise<{ offer: Offer; created: boolean; replayed: boolean }> {
+    /** 申请状态（独立维度）：not_applied | applied | approved | rejected；缺省 not_applied */
+    applicationStatus?: string;
+    /** 申请日期 */
+    appliedAt?: Date | null;
+    /** 申请备注（≤500 字；空串按 null 处理） */
+    applicationNote?: string | null;
+  }): Promise<{ offer: OfferWithApplication; created: boolean; replayed: boolean }> {
     if (!input.tenantId) throw new ValidationError("tenantId is required");
     if (!input.name?.trim()) throw new ValidationError("name is required");
     if (!input.network?.trim()) throw new ValidationError("network is required");
     validateBrandFields(input);
+    validateApplicationFields(input);
     if (
       input.source !== undefined &&
       !["affiliate", "amazon", "cashback"].includes(input.source)
@@ -161,7 +214,11 @@ export class OfferService {
           }
         }
 
-        const created = await ctx.offers.create({
+        // 扩展类型变量承载申请状态三字段（domain Offer 未包含），再传 repository 避 excess property 检查。
+        const createData: Omit<
+          OfferWithApplication,
+          "createdAt" | "updatedAt"
+        > = {
           id: randomUUID(),
           tenantId: input.tenantId,
           name: input.name.trim(),
@@ -181,11 +238,15 @@ export class OfferService {
           brandNameSource: input.brandNameSource,
           brandNameConfidence: input.brandNameConfidence,
           festivalTheme: normalizeFestivalTheme(input.festivalTheme),
+          applicationStatus: input.applicationStatus ?? "not_applied",
+          appliedAt: input.appliedAt ?? null,
+          applicationNote: input.applicationNote?.trim() || null,
           idempotencyScope: input.idempotencyKey
             ? OFFER_CREATE_SCOPE
             : undefined,
           idempotencyKey: input.idempotencyKey,
-        });
+        };
+        const created = await ctx.offers.create(createData);
 
         await ctx.auditLogs.create({
           id: randomUUID(),
@@ -240,9 +301,15 @@ export class OfferService {
       brandNameSource?: string;
       brandNameConfidence?: number;
       festivalTheme?: string;
+      /** 申请状态（独立维度）：not_applied | applied | approved | rejected */
+      applicationStatus?: string;
+      /** 申请日期；为 null 时不动（仿 startsAt 语义） */
+      appliedAt?: Date | null;
+      /** 申请备注（≤500 字）；空串/null = 清空 */
+      applicationNote?: string | null;
     },
     requestId?: string
-  ): Promise<Offer> {
+  ): Promise<OfferWithApplication> {
     const existing = await this.getById(tenantId, id);
     if (data.destinationUrl) {
       assertSafeRedirectUrl(data.destinationUrl);
@@ -255,9 +322,11 @@ export class OfferService {
       assertSafeRedirectUrl(affiliateUrl);
     }
     validateBrandFields(data);
+    validateApplicationFields(data);
 
     return this.unitOfWork.transaction(async (ctx) => {
-      const updated = await ctx.offers.update(id, {
+      // 扩展类型变量承载申请状态三字段（domain Offer 未包含），再传 repository 避 excess property 检查。
+      const updateData: Partial<Omit<OfferWithApplication, "id" | "createdAt">> = {
         name: data.name ?? existing.name,
         network: data.network ?? existing.network,
         destinationUrl: data.destinationUrl ?? existing.destinationUrl,
@@ -271,13 +340,24 @@ export class OfferService {
           data.festivalTheme === undefined
             ? existing.festivalTheme
             : normalizeFestivalTheme(data.festivalTheme),
+        applicationStatus:
+          data.applicationStatus ?? existing.applicationStatus ?? "not_applied",
+        appliedAt:
+          data.appliedAt === null
+            ? undefined
+            : (data.appliedAt ?? existing.appliedAt),
+        applicationNote:
+          data.applicationNote === undefined
+            ? existing.applicationNote
+            : data.applicationNote?.trim() || null,
         startsAt:
           data.startsAt === null
             ? undefined
             : (data.startsAt ?? existing.startsAt),
         endsAt:
           data.endsAt === null ? undefined : (data.endsAt ?? existing.endsAt),
-      });
+      };
+      const updated = await ctx.offers.update(id, updateData);
 
       await ctx.auditLogs.create({
         id: randomUUID(),

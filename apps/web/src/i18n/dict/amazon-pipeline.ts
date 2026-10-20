@@ -37,6 +37,7 @@ export interface AmazonPipelineDict {
   watch: string;
   watching: string;
   watched: string;
+  createOffer: string;
   surgeBadge: string;
   clickProfit: {
     recommendedBid: string;
@@ -167,6 +168,7 @@ export const zh: AmazonPipelineDict = {
   watch: "跟踪",
   watching: "跟踪中…",
   watched: "已跟踪",
+  createOffer: "建 Offer",
   surgeBadge: "需求异动",
   clickProfit: {
     recommendedBid: "推荐出价",
@@ -301,6 +303,7 @@ export const en: AmazonPipelineDict = {
   watch: "Track",
   watching: "Tracking…",
   watched: "Tracked",
+  createOffer: "Create Offer",
   surgeBadge: "Demand surges",
   clickProfit: {
     recommendedBid: "Recommended bid",

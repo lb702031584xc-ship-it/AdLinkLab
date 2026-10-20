@@ -594,6 +594,7 @@ export function MonitoringClient() {
               conversions: a.conversions,
               spend: a.spend,
               revenue: a.revenue,
+              payout: a.payout,
               daysActive: daysActiveSince(a.launchedAt ?? a.createdAt),
             }),
           }))
@@ -624,6 +625,7 @@ export function MonitoringClient() {
               conversions: a.conversions,
               spend: a.spend,
               revenue: a.revenue,
+              payout: a.payout,
               daysActive: daysActiveSince(a.launchedAt ?? a.createdAt),
             }).length === 0
         ) ? (

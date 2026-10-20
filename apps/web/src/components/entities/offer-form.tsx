@@ -54,10 +54,23 @@ function toIsoInput(value: string): string | undefined {
   return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
 }
 
-export function OfferForm({ initialSource }: { initialSource?: string }) {
+export function OfferForm({
+  initialSource,
+  initialName,
+  initialPrice,
+  initialAsin,
+}: {
+  initialSource?: string;
+  /** URL 预填：商品名（亚马逊流水线「建 Offer」带入）。 */
+  initialName?: string;
+  /** URL 预填：均价（亚马逊流水线「建 Offer」带入）。 */
+  initialPrice?: string;
+  /** URL 预填：来源 ASIN（仅在名称下方提示展示，不入库）。 */
+  initialAsin?: string;
+}) {
   const router = useRouter();
   const [pending, start] = useTransition();
-  const [name, setName] = useState("");
+  const [name, setName] = useState(initialName ?? "");
   const [network, setNetwork] = useState("");
   const [source, setSource] = useState<string>(
     OFFER_SOURCES.includes(initialSource as (typeof OFFER_SOURCES)[number])
@@ -71,7 +84,7 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
   const [priority, setPriority] = useState("100");
   const [commissionValue, setCommissionValue] = useState("");
   const [commissionType, setCommissionType] = useState("percentage");
-  const [avgPrice, setAvgPrice] = useState("");
+  const [avgPrice, setAvgPrice] = useState(initialPrice ?? "");
   const [pickedAt, setPickedAt] = useState(() => new Date().toISOString().slice(0, 10));
   const [startsAt, setStartsAt] = useState("");
   const [endsAt, setEndsAt] = useState("");
@@ -83,6 +96,10 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
   const [brandExtractNote, setBrandExtractNote] = useState<string | null>(null);
   /* P1-15：节日主题（只影响 RSA 文案，不改变盈利/条款判定）。 */
   const [festivalTheme, setFestivalTheme] = useState("none");
+  /* 申请状态（与 status 生命周期独立的维度）：offer 入库 ≠ 能推，记录向网络申请 program 的状态。 */
+  const [applicationStatus, setApplicationStatus] = useState("not_applied");
+  const [appliedAt, setAppliedAt] = useState("");
+  const [applicationNote, setApplicationNote] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [coachFindings, setCoachFindings] = useState<CoachFinding[]>([]);
   /** 抓取提取 offer 佣金/payout：加载态 + 结果文案 + 原文证据（用户核对）。 */
@@ -225,6 +242,9 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
             ? brandConfidence
             : undefined,
         festivalTheme: festivalTheme !== "none" ? festivalTheme : undefined,
+        applicationStatus,
+        appliedAt: toIsoInput(appliedAt),
+        applicationNote: applicationNote.trim() || undefined,
       });
       if (!result.ok) {
         setError(result.error);
@@ -302,6 +322,9 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
           onChange={(e) => setName(e.target.value)}
           placeholder={f.namePlaceholder}
         />
+        {initialAsin && source === "amazon" ? (
+          <p className="mt-1 text-xs text-ink/50">来源 ASIN：{initialAsin}</p>
+        ) : null}
       </div>
       {/* P1-2：品牌名 + 自动提取（低置信度提示确认，不覆盖人工填写）。 */}
       <div>
@@ -632,6 +655,53 @@ export function OfferForm({ initialSource }: { initialSource?: string }) {
             onChange={(e) => setPriority(e.target.value)}
           />
         </div>
+      </div>
+      {/* 申请状态（独立维度）：向网络申请 program 的状态/日期/备注，与上面的 Offer 生命周期状态分开记。 */}
+      <div className="grid gap-5 sm:grid-cols-2">
+        <div>
+          <label htmlFor="offer-application-status" className={labelClassName}>
+            {f.applicationStatus}
+          </label>
+          <select
+            id="offer-application-status"
+            className={inputClassName}
+            value={applicationStatus}
+            onChange={(e) => setApplicationStatus(e.target.value)}
+          >
+            {(["not_applied", "applied", "approved", "rejected"] as const).map(
+              (s) => (
+                <option key={s} value={s}>
+                  {t.entities.offers.applicationStatus[s]}
+                </option>
+              )
+            )}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="offer-applied-at" className={labelClassName}>
+            {f.appliedAt}
+          </label>
+          <input
+            id="offer-applied-at"
+            type="date"
+            className={inputClassName}
+            value={appliedAt}
+            onChange={(e) => setAppliedAt(e.target.value)}
+          />
+        </div>
+      </div>
+      <div>
+        <label htmlFor="offer-application-note" className={labelClassName}>
+          {f.applicationNote}
+        </label>
+        <input
+          id="offer-application-note"
+          className={inputClassName}
+          value={applicationNote}
+          onChange={(e) => setApplicationNote(e.target.value)}
+          maxLength={500}
+          placeholder={f.applicationNotePlaceholder}
+        />
       </div>
       <div className="grid gap-5 sm:grid-cols-2">
         <div>

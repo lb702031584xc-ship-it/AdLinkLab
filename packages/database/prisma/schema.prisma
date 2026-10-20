@@ -475,6 +475,12 @@ model Offer {
   brandNameConfidence Float?   @map("brand_name_confidence")
   /// P1-15：节日主题（只影响 RSA 文案，不改变盈利/条款判定）
   festivalTheme    String?     @map("festival_theme")
+  /// Offer 申请状态（与 status 生命周期独立的维度）：not_applied（未申请）| applied（已申请待审核）| approved（已批准）| rejected（被拒）
+  applicationStatus String   @default("not_applied") @map("application_status")
+  /// 申请日期（向网络提交 program 申请的日期）
+  appliedAt        DateTime?   @map("applied_at")
+  /// 申请备注（拒绝原因、审核进展等，≤500 字）
+  applicationNote  String?     @map("application_note")
   createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt        DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
   archivedAt       DateTime?   @map("archived_at") @db.Timestamptz(3)

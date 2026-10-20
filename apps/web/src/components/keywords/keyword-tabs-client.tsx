@@ -10,6 +10,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { KeywordStarterClient } from "./keyword-starter-client";
 import { DemandCheckClient, type SeedImportSignal } from "./demand-check-client";
 import { LaunchEditorClient } from "./launch-editor-client";
+import { OfferPipelineNav } from "@/components/ai/offer-pipeline-nav";
 import { flattenStarterKeywords } from "@/lib/keywords/starter";
 import type { KeywordStarterDict } from "@/i18n/dict/keyword-starter";
 
@@ -49,7 +50,8 @@ export function KeywordStarterTabsClient({
   const aiProduct = selectedOffer?.name || manualOffer.trim();
 
   const switchTab = (t: Tab) => {
-    router.replace(`/keywords/starter?tab=${t}`, { scroll: false });
+    const qs = offerId ? `&offerId=${encodeURIComponent(offerId)}` : "";
+    router.replace(`/keywords/starter?tab=${t}${qs}`, { scroll: false });
   };
 
   const importValidatedToLaunch = (words: string[]) => {
@@ -59,6 +61,17 @@ export function KeywordStarterTabsClient({
 
   return (
     <div className="space-y-6">
+      <OfferPipelineNav
+        current="keywords"
+        offerId={offerId || null}
+        offerName={selectedOffer?.name ?? null}
+        offerNetwork={selectedOffer?.network ?? null}
+        offers={offers}
+        onSelectOffer={(id) => {
+          setOfferId(id);
+          setManualOffer("");
+        }}
+      />
       <div>
         <h1 className="text-2xl font-bold text-ink">{d.pageTitle}</h1>
         <p className="mt-1 text-sm text-ink/60">

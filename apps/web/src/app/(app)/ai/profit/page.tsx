@@ -1,20 +1,18 @@
-import { entityApi } from "@/lib/api/entities";
-import { ProfitClient } from "@/components/ai/profit-client";
+import { redirect } from "next/navigation";
 
-export const dynamic = "force-dynamic";
-
-/** Profitability calculator with real-data backtest. */
-export default async function AiProfitPage() {
-  let offers: { id: string; name: string; network: string }[] = [];
-  try {
-    const data = await entityApi.offers.list(1, 200);
-    offers = (data.items ?? []).map((o) => ({
-      id: o.id,
-      name: o.name,
-      network: o.network,
-    }));
-  } catch {
-    /* page still renders; selector will be empty */
-  }
-  return <ProfitClient offers={offers} />;
+/**
+ * /ai/profit 已下线：盈利测算统一由 AI 分析工作表（/ai/analyze）承接。
+ * 保留路由做服务端跳转，外部书签/旧链接不会 404（?offerId= 原样透传）。
+ */
+export default async function AiProfitRedirectPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ offerId?: string }>;
+}) {
+  const sp = await searchParams;
+  const target =
+    typeof sp.offerId === "string" && sp.offerId
+      ? `/ai/analyze?offerId=${encodeURIComponent(sp.offerId)}`
+      : "/ai/analyze";
+  redirect(target);
 }

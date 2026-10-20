@@ -2,6 +2,7 @@ import { dashboardApi } from "@/lib/api/dashboard";
 import { mapDashboardErrorMessage } from "@/lib/api/dashboard-config";
 import { getLang } from "@/i18n/lang";
 import { ScriptDashboardClient } from "@/components/dashboard/script-dashboard-client";
+import { BusinessOverview } from "@/components/dashboard/business-overview";
 
 export const dynamic = "force-dynamic";
 
@@ -33,12 +34,18 @@ export default async function DashboardPage() {
   }
 
   return (
-    <ScriptDashboardClient
-      initialSummary={summary}
-      initialDetail={detail}
-      initialTargets={targets}
-      initialLogs={logs}
-      initialError={initialError}
-    />
+    <>
+      {/* 经营看板（在测 Offer / 累计花费 / 累计佣金 / 净额 + 每日预警）在上，脚本看板原样保留在下。 */}
+      <div className="mb-6">
+        <BusinessOverview />
+      </div>
+      <ScriptDashboardClient
+        initialSummary={summary}
+        initialDetail={detail}
+        initialTargets={targets}
+        initialLogs={logs}
+        initialError={initialError}
+      />
+    </>
   );
 }

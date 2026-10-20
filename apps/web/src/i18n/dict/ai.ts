@@ -598,6 +598,7 @@ export const zh = {
     budgetClicks: "所需点击",
     budgetCost: "预估花费",
     needCvr: "先在上方填入预估 CPC 与转化率（或用实测 CVR）。",
+    bidCvrRequiredHint: "填入转化率后显示出价建议",
   },
   monitoring: {
     title: "流量监控",
@@ -1802,6 +1803,7 @@ export const en: typeof zh = {
     budgetClicks: "Clicks needed",
     budgetCost: "Estimated spend",
     needCvr: "Enter estimated CPC and CVR above first (or load real CVR).",
+    bidCvrRequiredHint: "Enter a conversion rate to see bid suggestions",
   },
   monitoring: {
     title: "Traffic Monitoring",

@@ -977,6 +977,7 @@ export function LaunchArchiveClient({
                 conversions: selected.conversions,
                 spend: selected.spend,
                 revenue: selected.revenue,
+                payout: selected.payout,
                 daysActive: daysActiveSince(selected.launchedAt ?? selected.createdAt),
               });
               if (suggestions.length === 0) {

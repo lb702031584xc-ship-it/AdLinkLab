@@ -5,7 +5,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { OfferPipelineNav } from "@/components/ai/offer-pipeline-nav";
-import { loadWorkStateAction } from "@/lib/api/work-state-actions";
+import { loadWorkStateAction, saveWorkStateAction } from "@/lib/api/work-state-actions";
 import { useWorkState } from "@/lib/use-work-state";
 import { getLastOfferId, setLastOfferId } from "@/lib/current-offer";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -526,6 +526,10 @@ export function BlueprintClient({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BlueprintResult | null>(null);
+  /* 送去投放选词：idle 未送 / sending 送词中 / sent 已送（count = 新增词数）/ error 失败。 */
+  const [sendLaunch, setSendLaunch] = useState<
+    { status: "idle" } | { status: "sending" } | { status: "sent"; count: number } | { status: "error" }
+  >({ status: "idle" });
   const [fetching, setFetching] = useState(false);
   const [fetchMsg, setFetchMsg] = useState<string | null>(null);
   const [fetchOk, setFetchOk] = useState(false);
@@ -601,6 +605,7 @@ export function BlueprintClient({
     setBusy(true);
     setError(null);
     setResult(null);
+    setSendLaunch({ status: "idle" });
     const input: BlueprintInput = {
       offerName: offerName.trim(),
       productDescription: productDescription.trim(),
@@ -637,6 +642,93 @@ export function BlueprintClient({
     a.download = `blueprint-${result.offer.name.replace(/[^\w\-]+/g, "_")}.md`;
     a.click();
     URL.revokeObjectURL(a.href);
+  }
+
+  /* 送去投放选词：把推演广告计划的关键词/否词合并进该 offer 的 keyword-launch 快照
+     （与选词页同 page key、同 offer 上下文）。先读已有快照再合并：已有行优先，
+     新词按词面（小写）去重追加，绝不覆盖用户已选的词和已填的出价。 */
+  async function onSendToLaunch() {
+    if (!result?.adPlan.plan || !selectedOfferId) return;
+    setSendLaunch({ status: "sending" });
+    try {
+      const ts = Date.now();
+      let seq = 0;
+      const newRows: Array<{
+        id: string;
+        keyword: string;
+        adGroup: string;
+        matchType: "exact" | "phrase" | "broad";
+        bid: string;
+        refCpc: string;
+      }> = [];
+      const newNegatives: string[] = [];
+      for (const ag of result.adPlan.plan.adGroups) {
+        const groupName = (ag.group.name ?? "").trim();
+        for (const k of ag.group.keywords ?? []) {
+          const text = (k.text ?? "").trim();
+          if (!text) continue;
+          const mt = String(k.matchType ?? "").toLowerCase();
+          newRows.push({
+            id: `bp-${ts}-${++seq}`,
+            keyword: text,
+            adGroup: groupName,
+            matchType: mt === "phrase" || mt === "broad" ? mt : "exact",
+            bid: "",
+            refCpc: "",
+          });
+        }
+        for (const n of ag.group.negativeKeywords ?? []) {
+          const text = (n.text ?? "").trim();
+          if (text) newNegatives.push(text);
+        }
+      }
+      let existingRows: Array<Record<string, unknown>> = [];
+      let existingNegatives: string[] = [];
+      const loadRes = await loadWorkStateAction("keyword-launch", selectedOfferId);
+      if (loadRes.ok && loadRes.data.state) {
+        const s = loadRes.data.state;
+        if (Array.isArray(s.rows)) {
+          existingRows = (s.rows as Array<Record<string, unknown>>).filter(
+            (r) => r && typeof r.keyword === "string" && (r.keyword as string).trim()
+          );
+        }
+        if (Array.isArray(s.negatives)) {
+          existingNegatives = s.negatives.filter(
+            (x): x is string => typeof x === "string" && x.trim().length > 0
+          );
+        }
+      }
+      const have = new Set(
+        existingRows.map((r) => (r.keyword as string).trim().toLowerCase())
+      );
+      const appended: typeof newRows = [];
+      for (const r of newRows) {
+        const key = r.keyword.trim().toLowerCase();
+        if (have.has(key)) continue;
+        have.add(key);
+        appended.push(r);
+      }
+      const negHave = new Set(existingNegatives.map((x) => x.trim().toLowerCase()));
+      const mergedNegatives = [...existingNegatives];
+      for (const n of newNegatives) {
+        const key = n.trim().toLowerCase();
+        if (negHave.has(key)) continue;
+        negHave.add(key);
+        mergedNegatives.push(n);
+      }
+      const saveRes = await saveWorkStateAction(
+        "keyword-launch",
+        { version: 1, rows: [...existingRows, ...appended], negatives: mergedNegatives },
+        { offerId: selectedOfferId, label: selectedOfferName }
+      );
+      if (!saveRes.ok) {
+        setSendLaunch({ status: "error" });
+        return;
+      }
+      setSendLaunch({ status: "sent", count: appended.length });
+    } catch {
+      setSendLaunch({ status: "error" });
+    }
   }
 
   const verdictColor =
@@ -848,13 +940,36 @@ export function BlueprintClient({
       {/* 报告 */}
       {result ? (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-lg font-bold text-ink">{result.offer.name}</h2>
-            <button type="button" onClick={onExport}
-              className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink hover:bg-ink/5">
-              📥 {d.exportMd}
-            </button>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={onSendToLaunch}
+                disabled={!selectedOfferId || !result.adPlan.plan || sendLaunch.status === "sending"}
+                title={!selectedOfferId ? d.sendToLaunchNeedOffer : undefined}
+                className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink hover:bg-ink/5 disabled:cursor-not-allowed disabled:opacity-50">
+                🚀 {sendLaunch.status === "sending" ? d.sendingToLaunch : d.sendToLaunch}
+              </button>
+              <button type="button" onClick={onExport}
+                className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink hover:bg-ink/5">
+                📥 {d.exportMd}
+              </button>
+            </div>
           </div>
+          {!selectedOfferId ? (
+            <p className="text-xs text-ink/50">{d.sendToLaunchNeedOffer}</p>
+          ) : null}
+          {sendLaunch.status === "sent" ? (
+            <p className="text-sm text-green-700">
+              ✅ {d.sentToLaunch.replace("{count}", String(sendLaunch.count))}{" "}
+              <a className="underline"
+                href={`/keywords/starter?tab=launch&offerId=${encodeURIComponent(selectedOfferId ?? "")}`}>
+                {d.goToLaunch}
+              </a>
+            </p>
+          ) : null}
+          {sendLaunch.status === "error" ? (
+            <p className="text-sm text-red-700">{d.sendToLaunchFailed}</p>
+          ) : null}
 
           {/* 7. 综合决策置顶 */}
           <div className={`rounded-xl border p-4 ${verdictColor}`}>

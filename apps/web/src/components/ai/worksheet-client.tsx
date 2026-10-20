@@ -209,7 +209,7 @@ function ProfitStep({
   }, [initialValues]);
 
   /* ⑤→④ 同步：投流页改了盈利输入，覆盖本步对应字段（最后一次编辑优先）。
-     CPC / 目标产出比投流页没有，不覆盖；来源标 planner（投流决策 ⑤）。 */
+     CPC 投流页没有，不覆盖；目标产出比与 ⑤ 共用，现也随同步覆盖；来源标 planner（投流决策 ⑤）。 */
   useEffect(() => {
     if (!syncInputs) return;
     const inp = syncInputs.inputs;
@@ -220,6 +220,7 @@ function ProfitStep({
     setCvrPct(inp.cvrPct);
     setRefundPct(inp.refundPct);
     setShavePct(inp.shavePct);
+    setTargetReturnRatio(normalizeReturnRatio({ targetReturnRatio: inp.targetReturnRatio }));
     setFieldProv("avgPrice", "planner");
     setFieldProv("commissionRate", "planner");
     setFieldProv("payout", "planner");
@@ -1151,6 +1152,7 @@ export function WorksheetClient({
       avgPrice: string;
       commissionRate: string;
       profitMode: "ecommerce" | "affiliate";
+      targetReturnRatio: string;
     }) => {
       const merged: NonNullable<ProfitStepState["inputs"]> = {
         payout: inputs.payout,
@@ -1161,7 +1163,8 @@ export function WorksheetClient({
         mode: inputs.profitMode === "ecommerce" ? "ecommerce" : "other",
         avgPrice: inputs.avgPrice,
         commissionRate: inputs.commissionRate,
-        targetReturnRatio: profitState?.inputs?.targetReturnRatio ?? "2",
+        /* 目标产出比与 ⑤ 共用一个输入：采用 ⑤ 同步来的值，不再保留 ④ 旧值。 */
+        targetReturnRatio: inputs.targetReturnRatio,
       };
       const cur = profitState?.inputs;
       if (
@@ -1172,15 +1175,18 @@ export function WorksheetClient({
         cur.shavePct === merged.shavePct &&
         cur.avgPrice === merged.avgPrice &&
         cur.commissionRate === merged.commissionRate &&
+        cur.targetReturnRatio === merged.targetReturnRatio &&
         cur.mode === merged.mode
       )
         return; // 等值跳过，防回环
       if (!profitState) {
-        /* ④ 还没算过：只有填了真实值才记（mode 恒有值、扣量默认 0 都不算）。 */
+        /* ④ 还没算过：只有填了真实值才记（mode 恒有值、扣量默认 0 都不算）。
+           仅改了目标产出比（且非默认 "2"）也算真实编辑，别把编辑丢掉。 */
         if (
           [merged.payout, merged.cvrPct, merged.refundPct, merged.avgPrice, merged.commissionRate].some(
             (v) => String(v).trim(),
-          )
+          ) ||
+          (merged.targetReturnRatio.trim() !== "" && merged.targetReturnRatio.trim() !== "2")
         )
           setProfitSyncPending(merged);
         return;
@@ -2293,6 +2299,7 @@ export function WorksheetClient({
                   refundRate: profitState.inputs.refundPct,
                   avgPrice: profitState.inputs.avgPrice,
                   commissionRate: profitState.inputs.commissionRate,
+                  targetReturnRatio: profitState.inputs.targetReturnRatio,
                 }
               : undefined
           }

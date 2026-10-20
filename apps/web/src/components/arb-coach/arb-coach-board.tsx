@@ -17,6 +17,8 @@ export interface Combo extends ArbComboInput {
   name: string;
   /** 可选备注：如模板应用时写入的关键参数。 */
   note?: string;
+  /** 可选：关联的 Offer ID（旧数据无此字段，兼容读取）。 */
+  offerId?: string;
 }
 
 function isBrowser(): boolean {
@@ -81,7 +83,7 @@ function verdictStyle(verdict: "kill" | "scale" | "watch"): string {
   return "bg-amber-100 text-amber-800";
 }
 
-const emptyDraft = { name: "", spend: "", clicks: "", conversions: "", payout: "" };
+const emptyDraft = { name: "", spend: "", clicks: "", conversions: "", payout: "", offerId: "" };
 
 /**
  * 速测看板（独立可复用）：速测页 /coach/board 与总览页 Phase 4 共用同一组件、
@@ -119,6 +121,7 @@ export function ArbCoachBoard({ dict }: { dict: ArbCoachDict }) {
       clicks: String(c.clicks),
       conversions: String(c.conversions),
       payout: String(c.payout),
+      offerId: c.offerId ?? "",
     });
   }
 
@@ -133,6 +136,7 @@ export function ArbCoachBoard({ dict }: { dict: ArbCoachDict }) {
       clicks: toNum(draft.clicks),
       conversions: toNum(draft.conversions),
       payout: toNum(draft.payout),
+      offerId: draft.offerId.trim() || undefined,
     };
     if (editingId === "new") {
       persist([
@@ -184,18 +188,31 @@ export function ArbCoachBoard({ dict }: { dict: ArbCoachDict }) {
                 <tr key={c.id} className="border-b border-ink/5">
                   <td className="py-2 pr-2 font-medium text-ink">
                     {isEditing ? (
-                      <input
-                        className="w-full rounded-md border border-ink/20 px-2 py-1 text-sm"
-                        value={draft.name}
-                        placeholder={b.namePlaceholder}
-                        onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-                      />
+                      <div className="space-y-1">
+                        <input
+                          className="w-full rounded-md border border-ink/20 px-2 py-1 text-sm"
+                          value={draft.name}
+                          placeholder={b.namePlaceholder}
+                          onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                        />
+                        <input
+                          className="w-full rounded-md border border-ink/20 px-2 py-1 text-xs font-normal"
+                          value={draft.offerId}
+                          placeholder={b.offerId}
+                          onChange={(e) => setDraft({ ...draft, offerId: e.target.value })}
+                        />
+                      </div>
                     ) : (
                       <>
                         {c.name}
                         {c.note && (
                           <span className="block text-xs font-normal text-ink/50">
                             {c.note}
+                          </span>
+                        )}
+                        {c.offerId && (
+                          <span className="block text-xs font-normal text-ink/50">
+                            Offer: {c.offerId}
                           </span>
                         )}
                       </>
@@ -299,6 +316,14 @@ export function ArbCoachBoard({ dict }: { dict: ArbCoachDict }) {
               placeholder={b.namePlaceholder}
               value={draft.name}
               onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className="text-xs text-ink/60">{b.offerId}</label>
+            <input
+              className="mt-1 w-full rounded-md border border-ink/20 px-2 py-1 text-sm"
+              value={draft.offerId}
+              onChange={(e) => setDraft({ ...draft, offerId: e.target.value })}
             />
           </div>
           {(

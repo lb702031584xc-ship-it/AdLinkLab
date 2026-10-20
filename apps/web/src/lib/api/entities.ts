@@ -142,6 +142,12 @@ export interface Offer {
   brandNameConfidence?: number | null;
   /** P1-15：节日主题（只影响 RSA 文案）。 */
   festivalTheme?: string | null;
+  /** 申请状态（与 status 生命周期独立）：not_applied | applied | approved | rejected；缺失按未申请。 */
+  applicationStatus?: string | null;
+  /** 申请日期（ISO 字符串）。 */
+  appliedAt?: string | null;
+  /** 申请备注（拒绝原因、审核进展等，≤500 字）。 */
+  applicationNote?: string | null;
   /** 推荐指数摘要（第三批；无数据时为 null/缺失）。 */
   metricsSummary?: MetricsSummary | null;
 }
@@ -506,6 +512,9 @@ export const entityApi = {
       startsAt?: string;
       endsAt?: string;
       idempotencyKey?: string;
+      applicationStatus?: string;
+      appliedAt?: string | null;
+      applicationNote?: string | null;
     }) => post<{ offer: Offer; created: boolean; replayed: boolean }>("/api/v1/offers", input),
     update: (
       id: string,
@@ -517,6 +526,9 @@ export const entityApi = {
         priority?: number;
         startsAt?: string | null;
         endsAt?: string | null;
+        applicationStatus?: string;
+        appliedAt?: string | null;
+        applicationNote?: string | null;
       }
     ) => patch<Offer>(`/api/v1/offers/${encodeURIComponent(id)}`, input),
     changeStatus: (id: string, status: string) =>

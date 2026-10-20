@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { NoviceMode } from "./novice-mode";
 import { DenylistManager } from "./denylist-manager";
 import { CreateComboModal } from "./create-combo-modal";
@@ -103,6 +104,12 @@ function ItemCard({
           title={item.input.title}
           dict={{ watch: d.watch, watching: d.watching, watched: d.watched }}
         />
+        <Link
+          href={`/offers/new?source=amazon&name=${encodeURIComponent(item.input.title)}${item.input.price != null ? `&price=${item.input.price}` : ""}${item.input.asin ? `&asin=${encodeURIComponent(item.input.asin)}` : ""}`}
+          className="rounded-lg border border-signal/40 px-2.5 py-1 text-xs font-medium text-signal hover:bg-signal/5"
+        >
+          ➕ {d.createOffer}
+        </Link>
         <button
           type="button"
           className="ml-auto text-xs text-signal hover:underline"

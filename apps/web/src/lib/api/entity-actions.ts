@@ -113,6 +113,9 @@ export async function createOfferAction(input: {
   brandNameSource?: string;
   brandNameConfidence?: number;
   festivalTheme?: string;
+  applicationStatus?: string;
+  appliedAt?: string | null;
+  applicationNote?: string | null;
 }) {
   return attempt(() => entityApi.offers.create(input), ["/offers"]);
 }
@@ -127,6 +130,9 @@ export async function updateOfferAction(
     priority?: number;
     startsAt?: string | null;
     endsAt?: string | null;
+    applicationStatus?: string;
+    appliedAt?: string | null;
+    applicationNote?: string | null;
   }
 ) {
   return attempt(() => entityApi.offers.update(id, input), [

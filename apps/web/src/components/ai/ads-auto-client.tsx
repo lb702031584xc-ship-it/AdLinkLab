@@ -785,6 +785,45 @@ export function AdsAutoClient({
         fxRateCurrencyRef.current = bc;
       }
     }
+    /* 计划 + 编辑值 + 确认/Script 恢复：仅当快照里的 plan 是合法对象（planId 为字符串）时才恢复，
+       旧快照没有这些键自动跳过。scriptFingerprint 原样存取：恢复后用同批编辑值重算的
+       currentScriptFingerprint 应与之相等，不误报 Script 过期。 */
+    const snapPlan = snap.plan;
+    if (
+      snapPlan != null &&
+      typeof snapPlan === "object" &&
+      typeof (snapPlan as { planId?: unknown }).planId === "string"
+    ) {
+      setPlan(snapPlan as AdPlan);
+      setCreativeCheck(
+        snap.creativeCheck != null && typeof snap.creativeCheck === "object"
+          ? (snap.creativeCheck as CreativeSelfCheckResult)
+          : null
+      );
+      setEditedBudget(str(snap.editedBudget));
+      setEditedGeo(
+        Array.isArray(snap.editedGeo)
+          ? snap.editedGeo.filter((g): g is string => typeof g === "string")
+          : []
+      );
+      setEditedNegativesText(str(snap.editedNegativesText));
+      setEditedSchedules(
+        Array.isArray(snap.editedSchedules)
+          ? (snap.editedSchedules as AdPlanAdSchedule[])
+          : []
+      );
+      setConfirm(
+        snap.confirm != null && typeof snap.confirm === "object"
+          ? (snap.confirm as ConfirmResult)
+          : null
+      );
+      setScriptSource(
+        typeof snap.scriptSource === "string" ? snap.scriptSource : null
+      );
+      setScriptFingerprint(
+        typeof snap.scriptFingerprint === "string" ? snap.scriptFingerprint : null
+      );
+    }
   };
 
   /* 自动保存：URL/关键词/口吻/语言按 offer 隔离，刷新不丢（URL 参数优先于快照） */
@@ -802,13 +841,23 @@ export function AdsAutoClient({
       bidCurrency,
       fxRate,
       promotion,
+      /* 计划与编辑值一并保存：刷新后计划/改过的预算地域否词排期/确认与 Script 不丢。 */
+      plan,
+      creativeCheck,
+      editedBudget,
+      editedGeo,
+      editedNegativesText,
+      editedSchedules,
+      confirm,
+      scriptSource,
+      scriptFingerprint,
     }),
     isMeaningful: (snap) =>
       Boolean(
         (snap.urlsText as string)?.trim() || (snap.kwText as string)?.trim()
       ),
     applySnapshot: applyAdsAutoSnapshot,
-    watch: [offerId, urlsText, kwText, language, copyStyle, googleAccountId, bidCurrency, fxRate, promotion],
+    watch: [offerId, urlsText, kwText, language, copyStyle, googleAccountId, bidCurrency, fxRate, promotion, plan, creativeCheck, editedBudget, editedGeo, editedNegativesText, editedSchedules, confirm, scriptSource, scriptFingerprint],
   });
 
   /* 全局当前 offer：?offerId= 显式传入时以 URL 为准并更新记忆；

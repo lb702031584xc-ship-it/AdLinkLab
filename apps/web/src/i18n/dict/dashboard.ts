@@ -108,6 +108,18 @@ export const zh = {
     noRecentActivity: "暂无最近动态。",
     noSyncLogs: "暂无同步日志。",
   },
+  businessOverview: {
+    title: "经营概览",
+    runningOffers: "在测 Offer 数",
+    totalSpend: "累计花费",
+    totalRevenue: "累计佣金收入",
+    net: "净额（收入 − 花费）",
+    loading: "经营概览加载中…",
+    emptyText: "还没有投放归档，去完成第一次投放",
+    goLaunch: "去创建投放归档",
+    alertsTitle: "每日预警",
+    alertsEmpty: "暂无预警数据（还没有投放归档或告警）。",
+  },
   errors: {
     notConfigured:
       "仪表盘未配置。请在服务器上设置 API 基础 URL 和集成令牌。",
@@ -223,6 +235,18 @@ export const en: typeof zh = {
     loadingLogs: "Loading sync logs",
     noRecentActivity: "No recent activity.",
     noSyncLogs: "No sync logs yet.",
+  },
+  businessOverview: {
+    title: "Business overview",
+    runningOffers: "Offers in test",
+    totalSpend: "Total spend",
+    totalRevenue: "Total commission revenue",
+    net: "Net (revenue − spend)",
+    loading: "Loading business overview…",
+    emptyText: "No launch archives yet — go complete your first launch",
+    goLaunch: "Create a launch archive",
+    alertsTitle: "Daily alerts",
+    alertsEmpty: "No alert data yet (no launch archives or alerts).",
   },
   errors: {
     notConfigured:

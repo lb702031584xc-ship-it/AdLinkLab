@@ -55,6 +55,7 @@ export interface ArbCoachDict {
     addCombo: string;
     name: string;
     namePlaceholder: string;
+    offerId: string;
     spend: string;
     clicks: string;
     conversions: string;
@@ -247,6 +248,7 @@ export const zh: ArbCoachDict = {
     addCombo: "＋ 添加测试组合",
     name: "组合",
     namePlaceholder: "如：抽奖-US-lander1-角度A",
+    offerId: "关联 Offer ID（可选）",
     spend: "花费 $",
     clicks: "点击",
     conversions: "转化",
@@ -605,6 +607,7 @@ export const en: ArbCoachDict = {
     addCombo: "＋ Add test combo",
     name: "Combo",
     namePlaceholder: "e.g. sweep-US-lander1-angleA",
+    offerId: "Linked Offer ID (optional)",
     spend: "Spend $",
     clicks: "Clicks",
     conversions: "Conversions",

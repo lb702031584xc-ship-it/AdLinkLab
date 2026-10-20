@@ -226,10 +226,18 @@ export const zh = {
       dataNote:
         "Trends 为相对热度（0–100），不是销量；DataForSEO 为付费绝对搜索量，未配置凭证时不显示。",
     },
+    /* 申请状态（与 Offer 生命周期 status 独立的维度） */
+    applicationStatus: {
+      not_applied: "未申请",
+      applied: "已申请待审核",
+      approved: "已批准",
+      rejected: "被拒",
+    },
     columns: {
       network: "渠道",
       source: "来源",
       priority: "优先级",
+      applicationStatus: "申请状态",
       destinationUrl: "目标 URL",
       mid: "MID",
       commission: "佣金比例",
@@ -581,6 +589,10 @@ export const zh = {
       affiliateUrlPlaceholder: "https://network.com/click?aff_id=xxx",
       status: "状态",
       priority: "优先级",
+      applicationStatus: "申请状态",
+      appliedAt: "申请日期",
+      applicationNote: "申请备注",
+      applicationNotePlaceholder: "如拒绝原因、审核进展（选填，≤500 字）",
       startsAt: "开始时间（可选）",
       endsAt: "结束时间（可选）",
       creating: "创建中…",
@@ -864,10 +876,18 @@ export const en: typeof zh = {
       dataNote:
         "Trends is relative interest (0–100), not sales; DataForSEO is paid absolute search volume, hidden when no credentials are configured.",
     },
+    /* Application status (a dimension independent of the offer lifecycle status) */
+    applicationStatus: {
+      not_applied: "Not applied",
+      applied: "Applied (pending)",
+      approved: "Approved",
+      rejected: "Rejected",
+    },
     columns: {
       network: "Network",
       source: "Source",
       priority: "Priority",
+      applicationStatus: "Application status",
       destinationUrl: "Destination URL",
       mid: "MID",
       commission: "Commission",
@@ -1220,6 +1240,10 @@ export const en: typeof zh = {
       affiliateUrlPlaceholder: "https://network.com/click?aff_id=xxx",
       status: "Status",
       priority: "Priority",
+      applicationStatus: "Application status",
+      appliedAt: "Applied date",
+      applicationNote: "Application note",
+      applicationNotePlaceholder: "e.g. rejection reason, review progress (optional, ≤500 chars)",
       startsAt: "Starts At (optional)",
       endsAt: "Ends At (optional)",
       creating: "Creating…",
