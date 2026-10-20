@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { KeywordStarterClient } from "./keyword-starter-client";
 import { DemandCheckClient, type SeedImportSignal } from "./demand-check-client";
+import { LongtailPipelineClient } from "./longtail-pipeline-client";
 import { LaunchEditorClient } from "./launch-editor-client";
 import { OfferPipelineNav } from "@/components/ai/offer-pipeline-nav";
 import { flattenStarterKeywords } from "@/lib/keywords/starter";
@@ -151,6 +152,12 @@ export function KeywordStarterTabsClient({
             }
           />
           <DemandCheckClient dict={d} importSignal={importSignal} aiProduct={aiProduct} onValidatedReady={importValidatedToLaunch} offerId={offerId || null} offerName={selectedOffer?.name || manualOffer.trim() || null} />
+          <LongtailPipelineClient
+            dict={d}
+            lang={lang}
+            seedFromOffer={aiProduct}
+            onImportToLaunch={importValidatedToLaunch}
+          />
         </div>
       ) : (
         <LaunchEditorClient dict={d} lang={lang} validatedSignal={validatedSignal} offerId={offerId || null} offerName={selectedOffer?.name || manualOffer.trim() || null} />

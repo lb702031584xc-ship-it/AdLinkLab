@@ -260,6 +260,11 @@ export async function registerRoutes(
     // P1-10：规则生成关键词 ideas（无 LLM，无假搜索量）
     const { registerKeywordIdeasRoutes } = await import("./keywords-ideas.js");
     await registerKeywordIdeasRoutes(app, { prisma: services.prisma });
+    // DataForSEO 关键词流水线（实测扩词 → 意图过滤 → 广告测算，/keywords/starter）
+    const { registerKeywordDataForSeoRoutes } = await import(
+      "./keywords-dataforseo.js"
+    );
+    await registerKeywordDataForSeoRoutes(app, { prisma: services.prisma });
     // P1-11：归因透明化 + 冲突处理
     const { registerAttributionRoutes } = await import("./attribution.js");
     await registerAttributionRoutes(app, { prisma: services.prisma });

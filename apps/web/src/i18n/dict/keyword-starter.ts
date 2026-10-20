@@ -74,6 +74,53 @@ export interface KeywordStarterDict {
   ruleNoVolume: string;
   ruleKindLabels: Record<"brand-suffix" | "seed-combo" | "token-suffix", string>;
   ruleSourceLabel: string;
+  /* DataForSEO 实测流水线（扩词 → 筛选 → 勾选 → 测算 → 导入投放） */
+  dfs: {
+    title: string;
+    subtitle: string;
+    steps: Record<"expand" | "filter" | "pick" | "measure" | "import", string>;
+    seedLabel: string;
+    seedPlaceholder: string;
+    countryLabel: string;
+    languageLabel: string;
+    langAuto: string;
+    expandLimitLabel: string;
+    expandLimitHint: string;
+    expandBtn: string;
+    expanding: string;
+    expandedLine: string;
+    cachedNote: string;
+    filterTitle: string;
+    minVolumeLabel: string;
+    minVolumeHint: string;
+    competitionLabel: string;
+    competitionModes: Record<"lowPlusMedium" | "lowOnly" | "all", string>;
+    intentToggle: string;
+    filterBtn: string;
+    filtering: string;
+    filterLine: string;
+    filterStageLine: string;
+    intentUnverified: string;
+    pickLine: string;
+    selectAll: string;
+    selectNone: string;
+    thCpc: string;
+    thBidRange: string;
+    thCompIndex: string;
+    competitionLevels: Record<"LOW" | "MEDIUM" | "HIGH", string>;
+    intentLabels: Record<"informational" | "navigational" | "commercial" | "transactional", string>;
+    emptyCandidates: string;
+    needFilterFirst: string;
+    measureLimitLabel: string;
+    measureLimitHint: string;
+    measureBtn: string;
+    measuring: string;
+    measureNeedPick: string;
+    estimateNote: string;
+    measuredLine: string;
+    importBtn: string;
+    failed: string;
+  };
   captureKwFrom: string;
   captureKwPage: string;
   captureKwVolume: string;
@@ -207,6 +254,58 @@ export const zh: KeywordStarterDict = {
   ruleNoVolume: "未连接 Keyword Planner，搜索量/竞争度为 —",
   ruleKindLabels: { "brand-suffix": "品牌+后缀", "seed-combo": "种子组合", "token-suffix": "词+后缀" },
   ruleSourceLabel: "规则生成",
+  dfs: {
+    title: "实测长尾流水线（DataForSEO）",
+    subtitle: "真实搜索数据扩词 → 多轮筛选 → 人工勾选 → 广告测算。付费数据只花在扩词、幸存词的意图过滤和你勾选的词上，不为不会投的词花钱。",
+    steps: {
+      expand: "① 输入种子词，点「扩词」",
+      filter: "② 设筛选参数，点「筛选」（看条数变化）",
+      pick: "③ 勾选要投的词",
+      measure: "④ 点「广告测算」看估算 CPC 与页首出价",
+      import: "⑤ 点「导入投放」，把勾选词送进投放选词",
+    },
+    seedLabel: "种子词",
+    seedPlaceholder: "如 robot vacuum（可从上方 Offer 带入）",
+    countryLabel: "国家",
+    languageLabel: "语言",
+    langAuto: "跟随国家",
+    expandLimitLabel: "每种子返回上限",
+    expandLimitHint: "推荐 100（范围 10–200；Labs 按返回条数计费，这里就是省钱阀门）",
+    expandBtn: "扩词",
+    expanding: "扩词中…",
+    expandedLine: "已扩 {n} 条候选",
+    cachedNote: "来自 14 天内缓存，未重复收费",
+    filterTitle: "多轮筛选（本地过滤不花钱；意图过滤只对幸存词调用）",
+    minVolumeLabel: "搜索量下限",
+    minVolumeHint: "推荐：核心词 1000 / 长尾 100（一刀切 1000 会误杀长尾）；搜索量未知的词不拦",
+    competitionLabel: "竞争度上限",
+    competitionModes: { lowPlusMedium: "低 + 中", lowOnly: "只留低", all: "不限" },
+    intentToggle: "购买意图过滤（只留商业 / 交易意图）",
+    filterBtn: "筛选",
+    filtering: "筛选中…",
+    filterLine: "筛选：{x} 条 → {y} 条",
+    filterStageLine: "本地过滤（搜索量+竞争度）后 {a} 条 → 意图过滤后 {b} 条",
+    intentUnverified: "意图未验证：DataForSEO 未能确认意图，已保留全部词（不丢词）",
+    pickLine: "已勾 {n} 条",
+    selectAll: "全选",
+    selectNone: "全不选",
+    thCpc: "估算 CPC",
+    thBidRange: "页首出价区间",
+    thCompIndex: "竞争指数",
+    competitionLevels: { LOW: "低", MEDIUM: "中", HIGH: "高" },
+    intentLabels: { informational: "信息", navigational: "导航", commercial: "商业", transactional: "交易" },
+    emptyCandidates: "还没有候选词。先在第 ① 步输入种子词点「扩词」。",
+    needFilterFirst: "先点「筛选」，再勾选要投的词。",
+    measureLimitLabel: "测算返回条数",
+    measureLimitHint: "推荐 10–30（一个 Offer 首轮 1–3 个广告组 × 5–15 词就够）",
+    measureBtn: "广告测算",
+    measuring: "测算中…",
+    measureNeedPick: "先勾选要测算的词才能点（测算只为勾选词付费）",
+    estimateNote: "以下为 DataForSEO 估算数据 · 仅供参考，不参与出价计算（出价仍按投流页盈利测算）",
+    measuredLine: "测算完成：勾选 {x} 条，返回前 {y} 条（按搜索量降序）",
+    importBtn: "把已勾 {n} 个词导入投放 →",
+    failed: "操作失败，请稍后重试",
+  },
   captureKwFrom: "抓取自",
   captureKwPage: "抓取页",
   captureKwVolume: "月搜索量",
@@ -346,6 +445,58 @@ export const en: KeywordStarterDict = {
   ruleNoVolume: "Keyword Planner not connected — volume/competition shown as —",
   ruleKindLabels: { "brand-suffix": "Brand+suffix", "seed-combo": "Seed combo", "token-suffix": "Token+suffix" },
   ruleSourceLabel: "Rule-generated",
+  dfs: {
+    title: "Measured long-tail pipeline (DataForSEO)",
+    subtitle: "Expand from real search data → filter in rounds → hand-pick → ad measurement. Paid data is spent only on expansion, intent checks for survivors, and the keywords you pick — never on words you won't run.",
+    steps: {
+      expand: "1. Enter a seed keyword and hit “Expand”",
+      filter: "2. Set filter params and hit “Filter” (watch the counts)",
+      pick: "3. Pick the keywords you want to run",
+      measure: "4. Hit “Ad measurement” for estimated CPC and top-of-page bids",
+      import: "5. Hit “Import to launch” to send picked keywords to launch planning",
+    },
+    seedLabel: "Seed keyword",
+    seedPlaceholder: "e.g. robot vacuum (or pick an offer above)",
+    countryLabel: "Country",
+    languageLabel: "Language",
+    langAuto: "Follow country",
+    expandLimitLabel: "Max results per seed",
+    expandLimitHint: "Recommended 100 (range 10–200; Labs bills per returned item — this is the cost valve)",
+    expandBtn: "Expand",
+    expanding: "Expanding…",
+    expandedLine: "{n} candidates expanded",
+    cachedNote: "Served from the 14-day cache — no repeat charge",
+    filterTitle: "Filter rounds (local filters are free; intent check only calls the API for survivors)",
+    minVolumeLabel: "Min. search volume",
+    minVolumeHint: "Recommended: 1000 for core terms / 100 for long-tail (a flat 1000 kills long-tail); unknown volume is never blocked",
+    competitionLabel: "Max. competition",
+    competitionModes: { lowPlusMedium: "Low + Medium", lowOnly: "Low only", all: "Any" },
+    intentToggle: "Buying-intent filter (keep commercial / transactional only)",
+    filterBtn: "Filter",
+    filtering: "Filtering…",
+    filterLine: "Filter: {x} → {y}",
+    filterStageLine: "After local filters (volume + competition): {a} → after intent filter: {b}",
+    intentUnverified: "Intent unverified: DataForSEO could not confirm intent — all keywords kept (nothing dropped)",
+    pickLine: "{n} picked",
+    selectAll: "Select all",
+    selectNone: "Clear",
+    thCpc: "Est. CPC",
+    thBidRange: "Top-of-page bid range",
+    thCompIndex: "Competition index",
+    competitionLevels: { LOW: "Low", MEDIUM: "Medium", HIGH: "High" },
+    intentLabels: { informational: "Informational", navigational: "Navigational", commercial: "Commercial", transactional: "Transactional" },
+    emptyCandidates: "No candidates yet. Enter a seed keyword in step 1 and hit “Expand”.",
+    needFilterFirst: "Hit “Filter” first, then pick keywords.",
+    measureLimitLabel: "Measurement result count",
+    measureLimitHint: "Recommended 10–30 (one offer's first round = 1–3 ad groups × 5–15 keywords)",
+    measureBtn: "Ad measurement",
+    measuring: "Measuring…",
+    estimateNote: "DataForSEO estimates · for reference only — never used in bid calculation (bids still come from the launch-page profit model)",
+    measuredLine: "Measured: {x} picked, top {y} returned (by search volume)",
+    measureNeedPick: "Pick keywords first (measurement only pays for picked ones)",
+    importBtn: "Import {n} picked keywords to launch →",
+    failed: "Something failed, please try again",
+  },
   captureKwFrom: "Captured from",
   captureKwPage: "captured page",
   captureKwVolume: "Volume",
