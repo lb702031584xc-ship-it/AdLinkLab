@@ -79,6 +79,14 @@ export const YP_API_MIN_REQUEST_INTERVAL_MS = 6_500;
 export const YP_API_CODE_SUCCESS = 100000;
 /** YP 结果码：失败。 */
 export const YP_API_CODE_ERROR = 100001;
+/**
+ * api 模式请求附带的浏览器风格 User-Agent：服务端/WAF 可能按 UA 把无 UA 的
+ * 程序客户端拦成 HTML 挑战页（2026-10-20 真实拉取遇到 200+HTML 非 JSON）。
+ * 固定为常见 Chrome 桌面 UA，排除这一变量。
+ */
+export const YP_API_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+  "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
 export interface YeahPromosPullOpts {
   maxPages?: number;
@@ -423,6 +431,8 @@ export class YeahPromosAdapter
           token: deps.token,
           Accept: "application/json",
           "Content-Type": "application/x-www-form-urlencoded",
+          // 浏览器风格 UA：排除服务端/WAF 按 UA 给程序客户端返回 HTML 页。
+          "User-Agent": YP_API_USER_AGENT,
         },
         signal: AbortSignal.timeout(deps.timeoutMs),
       });
@@ -463,10 +473,23 @@ export class YeahPromosAdapter
       json = null;
     }
     if (json === null || typeof json !== "object") {
+      // 诊断信息（不含任何凭证：token 只在请求头里，从不写入错误；
+      // 请求 URL 只有 site_id/page 等公开参数，最终 URL 与 body 片段可安全带回）：
+      // - 最终 URL：fetch 跟随重定向后的 res.url，能看出是否被跳到登录页；
+      // - HTTP 状态与 body 前 200 字符（空白折叠后的净化片段）便于区分
+      //   登录页 / WAF 挑战页 / 路径 404 页。
+      const finalUrl =
+        typeof res.url === "string" && res.url.length > 0 ? res.url : url;
+      const redirected = finalUrl !== url || /\/login/i.test(finalUrl);
+      const bodySnippet = text.replace(/\s+/g, " ").trim().slice(0, 200);
       throw new NetworkAdapterError(
         "YP_API_STRUCTURE_UNVERIFIED",
-        `YeahPromos API（${label}）响应不是 JSON（可能被重定向到登录页或接口路径不对）：` +
-          `请核对接口路径（${path}）后重试`
+        `YeahPromos API（${label}）响应不是 JSON：HTTP ${res.status}，` +
+          `最终 URL：${finalUrl}` +
+          (redirected ? `（请求被重定向到：${finalUrl}）` : "") +
+          `；响应内容片段："${bodySnippet}"。` +
+          "常见原因：被重定向到登录页（token/site_id 不匹配或失效）、" +
+          `接口路径不对（当前路径 ${path}）或服务端返回了验证/挑战页；请核对后重试`
       );
     }
     const root = json as Record<string, unknown>;

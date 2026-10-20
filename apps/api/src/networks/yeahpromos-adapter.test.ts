@@ -14,6 +14,7 @@ import { NetworkAdapterError } from "./partnerboost-adapter.js";
 import {
   parseYpApiCredentials,
   YP_API_MIN_REQUEST_INTERVAL_MS,
+  YP_API_USER_AGENT,
   YeahPromosAdapter,
 } from "./yeahpromos-adapter.js";
 import type { AdapterContext } from "./types.js";
@@ -41,6 +42,19 @@ function jsonResponse(body: unknown, status = 200): Response {
     text: async () => JSON.stringify(body),
     json: async () => body,
   } as Response;
+}
+
+/** 非 JSON 响应（登录页/WAF 挑战页）：带最终 URL（fetch 跟随重定向后的 res.url）。 */
+function htmlResponse(html: string, finalUrl: string, status = 200): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    url: finalUrl,
+    text: async () => html,
+    json: async () => {
+      throw new Error("not json");
+    },
+  } as unknown as Response;
 }
 
 function product(overrides: Record<string, unknown> = {}) {
@@ -234,6 +248,64 @@ describe("YeahPromosAdapter.pullOffers (api 模式)", () => {
     expect((err as NetworkAdapterError).code).toBe(
       "YP_API_STRUCTURE_UNVERIFIED"
     );
+  });
+
+  it("200+HTML（被重定向到登录页）→ 明错带最终 URL/状态/body 净化片段，且请求带浏览器 UA、错误不含 token", async () => {
+    const loginUrl = "https://yeahpromos.com/index/login";
+    const html =
+      "<html>\n  <head><title>Login</title></head>\n" +
+      "  <body> Please   sign in </body></html>";
+    const seenHeaders: Array<Record<string, string>> = [];
+    const fetchImpl = vi.fn(
+      async (
+        _url: string,
+        init?: { headers?: Record<string, string> }
+      ) => {
+        seenHeaders.push(init?.headers ?? {});
+        return htmlResponse(html, loginUrl);
+      }
+    ) as unknown as typeof fetch;
+    const err = await new YeahPromosAdapter()
+      .pullOffers(ctxWith(fetchImpl), { pageDelayMs: 0 })
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(NetworkAdapterError);
+    expect((err as NetworkAdapterError).code).toBe(
+      "YP_API_STRUCTURE_UNVERIFIED"
+    );
+    const msg = (err as Error).message;
+    // 最终 URL + 重定向明示 + 状态。
+    expect(msg).toContain(loginUrl);
+    expect(msg).toContain(`请求被重定向到：${loginUrl}`);
+    expect(msg).toContain("HTTP 200");
+    // body 片段：多余空白已折叠为单空格。
+    expect(msg).toContain("<title>Login</title>");
+    expect(msg).toContain("Please sign in");
+    // 凭证绝不进错误信息。
+    expect(msg).not.toContain("test-website-token");
+    // 请求头带真实浏览器风格 UA（排除 WAF 按 UA 拦截）。
+    expect(seenHeaders[0]?.["User-Agent"]).toBe(YP_API_USER_AGENT);
+    expect(seenHeaders[0]?.["User-Agent"]).toContain("Chrome/");
+  });
+
+  it("200+HTML（无重定向，挑战页）→ 明错带最终 URL，body 片段截断在 200 字符内", async () => {
+    const finalUrl =
+      "https://yeahpromos.com/index/apioffer/brands?site_id=12345&page=1" +
+      "&page_size=200&relationship=0";
+    const longBody = `<html><body>${"x".repeat(300)}TAILMARKER</body></html>`;
+    const fetchImpl = vi.fn(async () =>
+      htmlResponse(longBody, finalUrl)
+    ) as unknown as typeof fetch;
+    const err = await new YeahPromosAdapter()
+      .pullOffers(ctxWith(fetchImpl), { pageDelayMs: 0 })
+      .catch((e) => e);
+    expect((err as NetworkAdapterError).code).toBe(
+      "YP_API_STRUCTURE_UNVERIFIED"
+    );
+    const msg = (err as Error).message;
+    expect(msg).toContain(finalUrl);
+    expect(msg).not.toContain("请求被重定向到：");
+    // 200 字符之后的尾部标记已被截断，不出现。
+    expect(msg).not.toContain("TAILMARKER");
   });
 
   it("纯 token 凭证（缺 site_id）→ BAD_CREDENTIALS 且不发请求", async () => {
