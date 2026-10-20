@@ -14,7 +14,12 @@
  *   同步流程：先拉 brands 建 advert_id → 广告主名称映射，再拉 products；
  *   商品带 advert_id 时用映射回填 brand（比商品自带品牌名更准）。
  *   限流：每分钟 10 次，两条拉取共享同一预算 → 串行节流，任意相邻请求间隔
- *   ≥6.5s；429 直接降级，不重试、不死循环。
+ *   ≥8s（滑动窗口算账：6.5s 间隔时 t=0,6.5,…,58.5 在任意 60s 窗口内能塞
+ *   下 10 个请求、正好顶穿上限——2026-10-20 真实同步 brands 拉到第 8–10 页
+ *   被服务端以 "Request too fast, please request later!" 切断；8s 间隔时
+ *   任意 60s 窗口内最多 8 个请求，留 2 个余量）。若仍被限流（HTTP 429 或
+ *   body 解包后是含 too fast/rate/limit 的字符串），分页层等 60s 后重试
+ *   同一页，每页最多重试 3 次，仍失败才整体抛 RATE_LIMITED 明错。
  *   凭证：token + site_id 合并为一段 JSON 存入网络设置的 apiKeyRef
  *   （AES-256-GCM 加密、只写不读，跟随 PB 现有凭证模式；绝不明文、绝不经聊天）。
  *   信封结构已于 2026-10-20 经真实响应验证：body 为**双重编码** JSON
@@ -78,14 +83,31 @@ export const YP_DEFAULT_API_PRODUCTS_PATH = "/index/apioffer/products";
 export const YP_DEFAULT_API_BRANDS_PATH = "/index/apioffer/brands";
 /** page_size 上限 200（文档明示），用满以减少请求数（限流 10 次/分钟）。 */
 export const YP_API_PAGE_SIZE = 200;
-export const YP_API_MAX_PAGES = 20;
+/**
+ * 分页上限：20 → 50（2026-10-20）。真实同步 brands 至少 10 页（≥2000 个
+ * 广告主），20 页上限离实测值太近；50 页 × 200 条 = 10000 条，配合
+ * last_page 终止判定，正常情况靠信封终止、不会多打请求。同步服务侧的
+ * opts.maxPages 钳制上限也是 50，与之对齐。
+ */
+export const YP_API_MAX_PAGES = 50;
 /**
  * 单请求超时：15s → 45s（2026-10-20）。YP 是慢 ThinkPHP 接口，真实拉取实测
  * 一页 200 条的响应（尤其响应体传输）超过 15s 被 AbortSignal 掐断，故放宽到 45s。
  */
 export const YP_API_DEFAULT_TIMEOUT_MS = 45_000;
-/** 官方限流 10 次/分钟 → 任意相邻请求最小间隔 6.5s（留 0.5s 余量）。 */
-export const YP_API_MIN_REQUEST_INTERVAL_MS = 6_500;
+/**
+ * 官方限流 10 次/分钟 → 任意相邻请求最小间隔 8s。
+ * 为什么不是 6.5s（旧值）：固定间隔是滑动窗口计数——6.5s 间隔下
+ * t=0, 6.5, …, 58.5 共 10 个请求全部落在同一个 60s 窗口内，正好顶穿
+ * 10 次/分钟上限（2026-10-20 真实同步实测 brands 第 8–10 页被切断，
+ * 服务端回 "Request too fast, please request later!"）。8s 间隔下任意
+ * 60s 窗口内最多 8 个请求（t=0,8,…,56），留 2 个余量给时钟误差/重试。
+ */
+export const YP_API_MIN_REQUEST_INTERVAL_MS = 8_000;
+/** 被限流后重试同一页前的等待：等满一个限流窗口（60s）。 */
+export const YP_API_RATE_LIMIT_WAIT_MS = 60_000;
+/** 每页限流重试上限：等 60s 重试同一页，最多 3 次，仍失败才整体失败。 */
+export const YP_API_RATE_LIMIT_MAX_RETRIES = 3;
 /** YP 结果码：成功。 */
 export const YP_API_CODE_SUCCESS = 100000;
 /** YP 结果码：失败。 */
@@ -103,6 +125,11 @@ export interface YeahPromosPullOpts {
   maxPages?: number;
   /** 任意相邻请求的最小间隔 ms（默认 YP_API_MIN_REQUEST_INTERVAL_MS；测试可调小）。 */
   pageDelayMs?: number;
+  /**
+   * 被限流后重试同一页前的等待 ms（默认 YP_API_RATE_LIMIT_WAIT_MS=60s；
+   * 测试可注入小数值，免去真等一分钟）。
+   */
+  rateLimitWaitMs?: number;
   pageSize?: number;
   /** brands 拉取的 market_place 过滤（如 amazon.com）；缺省不发送。 */
   marketPlace?: string;
@@ -285,6 +312,8 @@ interface YpApiRequestDeps {
   maxPages: number;
   /** 共享节流：任意相邻请求之间等待（products 与 brands 共用同一限流预算）。 */
   throttle: () => Promise<void>;
+  /** 被限流后重试同一页前的等待 ms（等满一个限流窗口）。 */
+  rateLimitWaitMs: number;
 }
 
 /** 安全取错误 message：DOMException（超时 abort 的实际类型）不是 Error 子类，优先读 .message。 */
@@ -308,6 +337,16 @@ function isYpTimeoutError(error: unknown): boolean {
   return /aborted due to timeout|operation was aborted|timed?\s*out/i.test(
     ypErrorMessage(error)
   );
+}
+
+/**
+ * 限流文案识别：YP 被限流时不回信封 JSON，而是回一个（可能再包一层编码的）
+ * 裸字符串，如 "Request too fast, please request later!"（2026-10-20 真实
+ * 同步实测）。解包后结果是 string 且含 too fast / rate / limit（不分大小
+ * 写）即归类限流，由分页层等 60s 重试，不误判成"响应不是 JSON"。
+ */
+function isYpRateLimitText(text: string): boolean {
+  return /too\s*fast|rate|limit/i.test(text);
 }
 
 export class YeahPromosAdapter
@@ -445,7 +484,9 @@ export class YeahPromosAdapter
 
   /**
    * 单页 GET（products/brands 共用）：拼参数 → 节流 → 请求 → 状态/结果码判定 →
-   * 防御式找列表。错误一律明错（NetworkAdapterError），不重试、不伪造。
+   * 防御式找列表。错误一律明错（NetworkAdapterError），不伪造；其中限流
+   * （HTTP 429 或限流文案字符串）抛 RATE_LIMITED，由分页层
+   * （pullAllYpPages）等满一个窗口后重试同一页，本函数本身不重试。
    * label 用于错误信息定位是哪个接口出的问题。
    */
   private async fetchYpApiPage(
@@ -510,10 +551,10 @@ export class YeahPromosAdapter
       );
     }
     if (res.status === 429) {
-      // 官方限流 10 次/分钟 → 直接降级，不重试、不退避重试。
+      // 官方限流 10 次/分钟 → 抛 RATE_LIMITED 信号，分页层等 60s 重试同一页。
       throw new NetworkAdapterError(
         "RATE_LIMITED",
-        "YeahPromos API 触发限流（HTTP 429，官方上限 10 次/分钟）：已降级停止，未做任何重试",
+        "YeahPromos API 触发限流（HTTP 429，官方上限 10 次/分钟）",
         429
       );
     }
@@ -535,15 +576,27 @@ export class YeahPromosAdapter
     // 双重编码解包（2026-10-20 真实响应证实）：YP 把整个 JSON 负载又包了
     // 一层 JSON 字符串返回（引号带反斜杠转义），一次 parse 只得到 string，
     // 不是 object——此前正是这里误判"响应不是 JSON"。结果是 string 就再
-    // parse，循环逐层解包，最多 3 层防无限套娃；解包后仍非 object 才走
-    // 下面的结构未验证明错（诊断片段逻辑不变）。
+    // parse，循环逐层解包，最多 3 层防无限套娃。再 parse 失败时保留上一层
+    // 的 string（不置 null）：限流响应正是这种裸字符串（如整段 body 就是
+    // "Request too fast, please request later!" 再包一层编码），需要拿它
+    // 做下面的限流识别；非限流的 string 最终仍走结构未验证明错（诊断片段
+    // 逻辑不变）。
     for (let depth = 0; depth < 3 && typeof json === "string"; depth += 1) {
       try {
         json = JSON.parse(json);
       } catch {
-        json = null;
         break;
       }
+    }
+    // 限流识别：解包后仍是 string 且是限流文案 → RATE_LIMITED（带原文），
+    // 分页层会等 60s 重试同一页，不当成结构错误整体失败。
+    if (typeof json === "string" && isYpRateLimitText(json)) {
+      throw new NetworkAdapterError(
+        "RATE_LIMITED",
+        `YeahPromos API（${label}）触发限流：服务端返回 "${json.trim()}"` +
+          "（官方上限 10 次/分钟）",
+        429
+      );
     }
     if (json === null || typeof json !== "object") {
       // 诊断信息（不含任何凭证：token 只在请求头里，从不写入错误；
@@ -610,6 +663,49 @@ export class YeahPromosAdapter
     return { list, root };
   }
 
+  /**
+   * 单页拉取 + 限流等待重试：fetchYpApiPage 抛 RATE_LIMITED（HTTP 429 或
+   * 限流文案字符串）时，等满一个限流窗口（deps.rateLimitWaitMs，默认
+   * 60s）后重试同一页，每页最多重试 YP_API_RATE_LIMIT_MAX_RETRIES 次；
+   * 仍被限流才整体抛 RATE_LIMITED（写明卡的页码与已等待次数）。非限流
+   * 错误原样透传，不重试。每次尝试内部仍走 fetchYpApiPage 的共享节流，
+   * brands/products 共用同一限流预算的现状不变。
+   */
+  private async fetchYpApiPageWithRateLimitRetry(
+    deps: YpApiRequestDeps,
+    path: string,
+    label: string,
+    page: number,
+    extraParams: Record<string, string> = {}
+  ): Promise<{ list: unknown[]; root: Record<string, unknown> }> {
+    let waits = 0;
+    for (;;) {
+      try {
+        return await this.fetchYpApiPage(deps, path, label, page, extraParams);
+      } catch (error) {
+        const rateLimited =
+          error instanceof NetworkAdapterError && error.code === "RATE_LIMITED";
+        if (!rateLimited) throw error;
+        if (waits >= YP_API_RATE_LIMIT_MAX_RETRIES) {
+          const waitSecs = deps.rateLimitWaitMs / 1000;
+          const waitLabel = Number.isInteger(waitSecs)
+            ? String(waitSecs)
+            : waitSecs.toFixed(1);
+          throw new NetworkAdapterError(
+            "RATE_LIMITED",
+            `YeahPromos API（${label}）第 ${page} 页持续触发限流：已等待重试 ` +
+              `${waits} 次（每次 ${waitLabel}s）仍失败。最后一次响应：${error.message}`,
+            429
+          );
+        }
+        waits += 1;
+        if (deps.rateLimitWaitMs > 0) {
+          await new Promise((r) => setTimeout(r, deps.rateLimitWaitMs));
+        }
+      }
+    }
+  }
+
   /** 分页拉全量（products/brands 共用同一节流预算，串行执行）。 */
   private async pullAllYpPages(
     deps: YpApiRequestDeps,
@@ -621,7 +717,7 @@ export class YeahPromosAdapter
     let page = 1;
     let hasMore = true;
     while (hasMore && page <= deps.maxPages) {
-      const { list, root } = await this.fetchYpApiPage(
+      const { list, root } = await this.fetchYpApiPageWithRateLimitRetry(
         deps,
         path,
         label,
@@ -718,6 +814,10 @@ export class YeahPromosAdapter
       ),
       maxPages: Math.max(1, Math.min(50, opts.maxPages ?? YP_API_MAX_PAGES)),
       throttle,
+      rateLimitWaitMs: Math.max(
+        0,
+        opts.rateLimitWaitMs ?? YP_API_RATE_LIMIT_WAIT_MS
+      ),
     };
 
     // 1. 广告主映射：advert_id → 原始记录（名称在 mapApiItem 时防御式提取）。

@@ -17,6 +17,7 @@ import {
   parseYpApiCredentials,
   YP_API_DEFAULT_TIMEOUT_MS,
   YP_API_MIN_REQUEST_INTERVAL_MS,
+  YP_API_RATE_LIMIT_WAIT_MS,
   YP_API_USER_AGENT,
   YeahPromosAdapter,
 } from "./yeahpromos-adapter.js";
@@ -236,17 +237,85 @@ describe("YeahPromosAdapter.pullOffers (api 模式)", () => {
     expect((err as NetworkAdapterError).status).toBe(401);
   });
 
-  it("429 → RATE_LIMITED 降级且不重试（只请求一次）", async () => {
+  it("429 → RATE_LIMITED：等候重试同一页 3 次仍失败才整体抛错（写明页码/已等待次数）", async () => {
     const fetchImpl = vi.fn(async () =>
       jsonResponse({}, 429)
     ) as unknown as typeof fetch;
     const err = await new YeahPromosAdapter()
-      .pullOffers(ctxWith(fetchImpl), { pageDelayMs: 0 })
+      .pullOffers(ctxWith(fetchImpl), { pageDelayMs: 0, rateLimitWaitMs: 0 })
       .catch((e) => e);
     expect(err).toBeInstanceOf(NetworkAdapterError);
     expect((err as NetworkAdapterError).code).toBe("RATE_LIMITED");
     expect((err as NetworkAdapterError).status).toBe(429);
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    // 首拉 + 3 次等待重试 = 4 次请求，全卡在 brands 第 1 页（不往下走）。
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    const msg = (err as Error).message;
+    expect(msg).toContain("Get Adverts");
+    expect(msg).toContain("第 1 页");
+    expect(msg).toContain("已等待重试 3 次");
+  });
+
+  it("限流文案字符串（\"Request too fast\"）→ RATE_LIMITED 带原文，重试耗尽后整体抛错", async () => {
+    // 真实形状：整段 body 就是限流文案再包一层 JSON 编码（双重编码的裸字符串）。
+    const fetchImpl = vi.fn(async () =>
+      encodedResponse("Request too fast, please request later!")
+    ) as unknown as typeof fetch;
+    const err = await new YeahPromosAdapter()
+      .pullOffers(ctxWith(fetchImpl), { pageDelayMs: 0, rateLimitWaitMs: 0 })
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(NetworkAdapterError);
+    expect((err as NetworkAdapterError).code).toBe("RATE_LIMITED");
+    // 不再误判成"响应不是 JSON"/结构未验证。
+    expect((err as NetworkAdapterError).code).not.toBe(
+      "YP_API_STRUCTURE_UNVERIFIED"
+    );
+    const msg = (err as Error).message;
+    expect(msg).toContain("Request too fast, please request later!");
+    expect(msg).toContain("已等待重试 3 次");
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it("products 第 2 页先被限流（too fast 字符串）、等候重试后恢复 → 拉全且该页请求两次", async () => {
+    let productsPage2Attempts = 0;
+    const fetchImpl = vi.fn(async (url: string) => {
+      const u = new URL(String(url));
+      const page = Number(u.searchParams.get("page"));
+      if (u.pathname.endsWith("/brands")) {
+        return encodedResponse(laravelBody([brand()], 1, 1));
+      }
+      if (page === 1) {
+        return encodedResponse(laravelBody([product()], 1, 2));
+      }
+      productsPage2Attempts += 1;
+      if (productsPage2Attempts === 1) {
+        return encodedResponse("Request too fast, please request later!");
+      }
+      return encodedResponse(
+        laravelBody(
+          [product({ product_id: "yp-1002", product_name: "Recovered Gadget" })],
+          2,
+          2
+        )
+      );
+    }) as unknown as typeof fetch;
+
+    const started = Date.now();
+    const offers = await new YeahPromosAdapter().pullOffers(
+      ctxWith(fetchImpl),
+      { pageDelayMs: 0, rateLimitWaitMs: 40 }
+    );
+    const elapsed = Date.now() - started;
+
+    expect(productsPage2Attempts).toBe(2);
+    // 确实等过（注入的 40ms），不是立即重试。
+    expect(elapsed).toBeGreaterThanOrEqual(35);
+    expect(offers).toHaveLength(2);
+    expect(offers.map((o) => o.externalId)).toEqual(["yp-1001", "yp-1002"]);
+    expect(offers[1].name).toBe("Recovered Gadget");
+  });
+
+  it("限流等待默认值 60s（等满一个限流窗口）", () => {
+    expect(YP_API_RATE_LIMIT_WAIT_MS).toBe(60_000);
   });
 
   it("code=100001 → API_ERROR 并带出原始 msg", async () => {
@@ -444,8 +513,9 @@ describe("YeahPromosAdapter.pullOffers (api 模式)", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("共享节流：brands 与 products 串行、任意相邻请求间隔 ≥ 配置值（默认 ≥6.5s）", async () => {
-    expect(YP_API_MIN_REQUEST_INTERVAL_MS).toBeGreaterThanOrEqual(6500);
+  it("共享节流：brands 与 products 串行、任意相邻请求间隔 ≥ 配置值（默认间隔常量 = 8000ms，滑动窗口内最多 8 个请求）", async () => {
+    // 6.5s 旧值会让 60s 滑动窗口塞下 10 个请求顶穿上限，故收紧为 8000 精确值。
+    expect(YP_API_MIN_REQUEST_INTERVAL_MS).toBe(8000);
     const { fetchImpl, calls } = routedFetch([brand()], (u) => {
       const page = u.searchParams.get("page");
       return jsonResponse(
