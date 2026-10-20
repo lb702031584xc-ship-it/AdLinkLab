@@ -340,10 +340,12 @@ function isYpTimeoutError(error: unknown): boolean {
 }
 
 /**
- * 限流文案识别：YP 被限流时不回信封 JSON，而是回一个（可能再包一层编码的）
- * 裸字符串，如 "Request too fast, please request later!"（2026-10-20 真实
- * 同步实测）。解包后结果是 string 且含 too fast / rate / limit（不分大小
- * 写）即归类限流，由分页层等 60s 重试，不误判成"响应不是 JSON"。
+ * 限流文案识别：YP 被限流时不回信封 JSON，而是回限流文案——两种形态都见过：
+ * 再包一层 JSON 编码的字符串，以及**未经编码的纯文本**（整段 body 就是
+ * "Request too fast, please request later!"）。前者在解包后是 string 时
+ * 识别；后者 JSON.parse 直接失败，由非对象分支对响应原文识别。含
+ * too fast / rate / limit（不分大小写）即归类限流，由分页层等 60s 重试，
+ * 不误判成"响应不是 JSON"。
  */
 function isYpRateLimitText(text: string): boolean {
   return /too\s*fast|rate|limit/i.test(text);
@@ -599,6 +601,23 @@ export class YeahPromosAdapter
       );
     }
     if (json === null || typeof json !== "object") {
+      // 限流原文兜底（2026-10-20 二次实测）：YP 限流响应有时是**未经 JSON
+      // 编码的纯文本**（整段 body 就是 Request too fast, please request
+      // later!，不带引号）——JSON.parse 直接抛错、json=null，上面的字符串
+      // 限流识别够不着，曾被误判成"响应不是 JSON"整单失败（实测死在
+      // brands 第 8 页 / 第 17 页）。这里对响应原文再查一次限流文案，命中
+      // 就抛 RATE_LIMITED，让分页层等 60s 重试同一页。此分支只处理非对象
+      // 响应（正常商品 JSON 解析成 object 永远到不了这里），原文宽松正则
+      // 不会误伤真实数据。
+      if (isYpRateLimitText(text)) {
+        const snippet = text.replace(/\s+/g, " ").trim().slice(0, 200);
+        throw new NetworkAdapterError(
+          "RATE_LIMITED",
+          `YeahPromos API（${label}）触发限流：服务端返回 "${snippet}"` +
+            "（官方上限 10 次/分钟）",
+          429
+        );
+      }
       // 诊断信息（不含任何凭证：token 只在请求头里，从不写入错误；
       // 请求 URL 只有 site_id/page 等公开参数，最终 URL 与 body 片段可安全带回）：
       // - 最终 URL：fetch 跟随重定向后的 res.url，能看出是否被跳到登录页；

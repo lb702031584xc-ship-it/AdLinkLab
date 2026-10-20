@@ -61,6 +61,19 @@ function htmlResponse(html: string, finalUrl: string, status = 200): Response {
   } as unknown as Response;
 }
 
+/** 未经 JSON 编码的纯文本响应（YP 限流的另一种真实形态：整段 body 就是原文）。 */
+function rawTextResponse(text: string, status = 200): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    url: "",
+    text: async () => text,
+    json: async () => {
+      throw new Error("not json");
+    },
+  } as unknown as Response;
+}
+
 function product(overrides: Record<string, unknown> = {}) {
   return {
     product_id: "yp-1001",
@@ -273,6 +286,50 @@ describe("YeahPromosAdapter.pullOffers (api 模式)", () => {
     expect(msg).toContain("Request too fast, please request later!");
     expect(msg).toContain("已等待重试 3 次");
     expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it("限流纯文本（未经 JSON 编码的 \"Request too fast\"）→ RATE_LIMITED 带原文，重试耗尽后整体抛错", async () => {
+    // 2026-10-20 二次实测形状：整段 body 就是纯文本限流文案（不带引号、
+    // 不是 JSON），JSON.parse 直接失败——曾被误判成"响应不是 JSON"
+    // （YP_API_STRUCTURE_UNVERIFIED）整单失败，真实同步死在 brands 深页。
+    const fetchImpl = vi.fn(async () =>
+      rawTextResponse("Request too fast, please request later!")
+    ) as unknown as typeof fetch;
+    const err = await new YeahPromosAdapter()
+      .pullOffers(ctxWith(fetchImpl), { pageDelayMs: 0, rateLimitWaitMs: 0 })
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(NetworkAdapterError);
+    expect((err as NetworkAdapterError).code).toBe("RATE_LIMITED");
+    expect((err as NetworkAdapterError).code).not.toBe(
+      "YP_API_STRUCTURE_UNVERIFIED"
+    );
+    const msg = (err as Error).message;
+    expect(msg).toContain("Request too fast, please request later!");
+    expect(msg).toContain("已等待重试 3 次");
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it("brands 第 1 页先回纯文本限流、等候重试后恢复 → 拉全", async () => {
+    let brandsAttempts = 0;
+    const fetchImpl = vi.fn(async (url: string) => {
+      const u = new URL(String(url));
+      if (u.pathname.endsWith("/brands")) {
+        brandsAttempts += 1;
+        if (brandsAttempts === 1) {
+          return rawTextResponse("Request too fast, please request later!");
+        }
+        return encodedResponse(laravelBody([brand()], 1, 1));
+      }
+      return encodedResponse(laravelBody([product()], 1, 1));
+    }) as unknown as typeof fetch;
+
+    const offers = await new YeahPromosAdapter().pullOffers(
+      ctxWith(fetchImpl),
+      { pageDelayMs: 0, rateLimitWaitMs: 0 }
+    );
+    expect(brandsAttempts).toBe(2);
+    expect(offers).toHaveLength(1);
+    expect(offers[0].externalId).toBe("yp-1001");
   });
 
   it("products 第 2 页先被限流（too fast 字符串）、等候重试后恢复 → 拉全且该页请求两次", async () => {
