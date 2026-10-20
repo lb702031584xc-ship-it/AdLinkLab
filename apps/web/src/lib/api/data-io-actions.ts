@@ -4,8 +4,9 @@
  * 数据管理导出/导入 — server actions。
  *
  * Backend contract:
- *   GET  /api/v1/data/export?type=offers|campaigns|settings&format=json|csv
- *   POST /api/v1/data/import  { type: "settings", data }
+ *   GET  /api/v1/user-data/export?type=offers|campaigns|settings&format=json|csv
+ *   POST /api/v1/user-data/import  { type: "settings", data }
+ *   （/api/v1/data/* 已被管理员 data-exchange 占用，用户自助走 /user-data/*）
  */
 import {
   EntityApiError,
@@ -52,7 +53,7 @@ export async function exportDataAction(
 ): Promise<DataIoResult<{ filename: string; mime: string; content: string }>> {
   try {
     const data = await apiFetch<{ filename: string; mime: string; content: string }>(
-      `/api/v1/data/export?type=${type}&format=${format}`
+      `/api/v1/user-data/export?type=${type}&format=${format}`
     );
     return { ok: true, data };
   } catch (error) {
@@ -65,7 +66,7 @@ export async function importSettingsAction(
 ): Promise<DataIoResult<{ applied: string[]; skipped: string[] }>> {
   try {
     const data = await apiFetch<{ applied: string[]; skipped: string[] }>(
-      "/api/v1/data/import",
+      "/api/v1/user-data/import",
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },

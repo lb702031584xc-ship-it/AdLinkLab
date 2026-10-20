@@ -1,8 +1,11 @@
 /**
  * 数据管理：用户自助导出 / 导入（对标 autoads 数据管理，但按我们的架构）。
  *
- * GET  /api/v1/data/export?type=offers|campaigns|settings&format=json|csv
- * POST /api/v1/data/import  { type: "settings", data: {...} }
+ * GET  /api/v1/user-data/export?type=offers|campaigns|settings&format=json|csv
+ * POST /api/v1/user-data/import  { type: "settings", data: {...} }
+ *
+ * 注意：/api/v1/data/export|import 已被管理员 data-exchange 占用（POST），
+ * 用户自助接口必须走 /user-data/* 前缀，否则 Fastify 启动即 FST_ERR_DUPLICATED_ROUTE。
  *
  * 安全原则：
  * - 导出 Settings 时密钥一律脱敏（API Key → "已配置"/"未配置"，代理 → 条数）；
@@ -71,7 +74,7 @@ export async function registerDataIoRoutes(
 ): Promise<void> {
   const { prisma } = deps;
 
-  app.get("/api/v1/data/export", async (request) => {
+  app.get("/api/v1/user-data/export", async (request) => {
     const info = await requireSession(deps, request);
     const q = request.query as Record<string, unknown>;
     const type = q.type as string;
@@ -203,7 +206,7 @@ export async function registerDataIoRoutes(
    * 导入用户配置（Settings JSON）。仅接受本系统导出的格式；
    * 脱敏项（"****"）自动跳过；代理必须明文 URL 才入库。
    */
-  app.post("/api/v1/data/import", async (request) => {
+  app.post("/api/v1/user-data/import", async (request) => {
     const info = await requireSession(deps, request);
     const body = (request.body ?? {}) as {
       type?: unknown;
