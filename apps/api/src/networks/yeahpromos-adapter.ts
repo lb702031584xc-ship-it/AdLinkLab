@@ -351,6 +351,39 @@ function isYpRateLimitText(text: string): boolean {
   return /too\s*fast|rate|limit/i.test(text);
 }
 
+/**
+ * ID 取值（2026-10-20 商品真实响应证实）：YP 的 product_id / advert_id 是
+ * **数字**（如 3208738），sessionAsString 只认字符串会把数字 ID 读成 null
+ * → externalId 变空、整批商品在入库前被静默丢弃（同步"成功"但 0 入库的
+ * 真凶）。这里字符串/数字都接受，统一转字符串。
+ */
+function ypIdToString(v: unknown): string | null {
+  if (typeof v === "string") {
+    const t = v.trim();
+    return t ? t : null;
+  }
+  if (typeof v === "number" && Number.isFinite(v)) return String(v);
+  return null;
+}
+
+/**
+ * 价格取值（同日真实响应证实）：YP 的 price 是带币种前缀的字符串
+ * （如 "CAD 15.99"），sessionAsNumber 只剥 $ 与逗号、parseFloat("CAD15.99")
+ * 为 NaN → 价格全空。先走 sessionAsNumber，失败再提取首个数字段解析。
+ */
+function ypPriceToNumber(v: unknown): number | null {
+  const n = sessionAsNumber(v);
+  if (n != null) return n;
+  if (typeof v === "string") {
+    const m = v.match(/\d[\d,]*(?:\.\d+)?/);
+    if (m) {
+      const parsed = parseFloat(m[0].replace(/,/g, ""));
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+  }
+  return null;
+}
+
 export class YeahPromosAdapter
   extends TemplateSessionAdapter
   implements NetworkAdapter
@@ -379,7 +412,7 @@ export class YeahPromosAdapter
 
   protected mapSessionItem(item: Record<string, unknown>): SessionProduct {
     const externalId =
-      sessionAsString(
+      ypIdToString(
         pickField(item, "product_id", "productId", "id", "asin", "sku")
       ) ?? "";
     const name =
@@ -404,21 +437,21 @@ export class YeahPromosAdapter
         null,
       url:
         sessionAsString(
-          pickField(item, "promo_url", "promoUrl", "promotion_url", "url", "link")
+          pickField(item, "promo_url", "promoUrl", "promotion_url", "track_link", "amazon_track_link", "url", "link")
         ) ?? null,
       brand: sessionAsString(pickField(item, "brand", "brand_name", "brandName")),
       asin: sessionAsString(pickField(item, "asin")),
-      price: sessionAsNumber(
+      price: ypPriceToNumber(
         pickField(item, "price", "sale_price", "salePrice", "original_price")
       ),
       commissionAmount,
       commissionRate,
       reviewCount: sessionAsNumber(
-        pickField(item, "review_count", "reviewCount", "reviews")
+        pickField(item, "review_count", "reviewCount", "reviews", "total_reviews", "totalReviews")
       ),
       promoUrl:
         sessionAsString(
-          pickField(item, "promo_url", "promoUrl", "promotion_url", "url", "link")
+          pickField(item, "promo_url", "promoUrl", "promotion_url", "track_link", "amazon_track_link", "url", "link")
         ) ?? null,
       rawData: item,
     };
@@ -451,7 +484,7 @@ export class YeahPromosAdapter
     let brand = sp.brand ?? null;
     let rawData: Record<string, unknown> = item;
     if (!brand && brandByAdvertId) {
-      const advertId = sessionAsString(pickField(item, ...YP_ADVERT_ID_KEYS));
+      const advertId = ypIdToString(pickField(item, ...YP_ADVERT_ID_KEYS));
       const brandRecord = advertId ? brandByAdvertId.get(advertId) : undefined;
       if (brandRecord) {
         brand =
@@ -848,7 +881,7 @@ export class YeahPromosAdapter
     );
     const brandByAdvertId = new Map<string, Record<string, unknown>>();
     for (const b of brandItems) {
-      const advertId = sessionAsString(pickField(b, "advert_id", "advertId", "id", "brand_id"));
+      const advertId = ypIdToString(pickField(b, "advert_id", "advertId", "id", "brand_id"));
       if (advertId) brandByAdvertId.set(advertId, b);
     }
 

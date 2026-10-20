@@ -223,6 +223,97 @@ describe("YeahPromosAdapter.pullOffers (api 模式)", () => {
     ).toMatchObject({ advert_id: "adv-9", advert_name: "MappedBrand" });
   });
 
+  it("真实商品形状（2026-10-20 实测）：数字 product_id / 带币种前缀价格 / commission_rate / total_reviews / has_more 分页 → 正常入库映射", async () => {
+    // 形状逐字来自真实 Get Products 响应（site_id=12760, page_size=2 采样）：
+    // 信封 data{per_page,current_page,data[],has_more}（无 last_page/total）；
+    // product_id/advert_id 为数字；price 为 "CAD 15.99"；只有 commission_rate
+    // 没有 commission_amount；评论数字段叫 total_reviews；track_link 为空串。
+    const realProduct = {
+      product_id: 3208738,
+      product_name:
+        "Cutluxe Magnetic Knife Holder for Wall and Fridge - 12\" Stainless Steel",
+      asin: "B0GLGYF579",
+      price: "CAD 15.99",
+      image: "https://m.media-amazon.com/images/I/815v6ghvA-L.jpg",
+      advert_id: 407222,
+      total_reviews: 28,
+      avg_rating: 4.4,
+      in_stock: "OUT_OF_STOCK",
+      link_id: "",
+      user_link_track: "",
+      relationship: "0",
+      track_link: "",
+      amazon_track_link: "",
+      link: { link_id: "", user_link_track: "", track_link: "", amazon_track_link: "" },
+      link_tags: [],
+      market_place: "amazon.ca",
+      currency: "CAD",
+      commission_rate: 15,
+    };
+    const envelope = (
+      items: unknown[],
+      page: number,
+      hasMore: boolean
+    ): Record<string, unknown> => ({
+      code: "100000",
+      status: "SUCCESS",
+      msg: "",
+      data: {
+        per_page: 2,
+        current_page: page,
+        data: items,
+        has_more: hasMore,
+      },
+    });
+    const fetchImpl = vi.fn(async (url: string) => {
+      const u = new URL(String(url));
+      const page = Number(u.searchParams.get("page"));
+      if (u.pathname.endsWith("/brands")) {
+        return jsonResponse(
+          envelope([{ advert_id: 407222, advert_name: "Cutluxe" }], 1, false)
+        );
+      }
+      if (page === 1) return jsonResponse(envelope([realProduct], 1, true));
+      return jsonResponse(
+        envelope(
+          [
+            {
+              ...realProduct,
+              product_id: 3208696,
+              product_name: "Cutluxe Serrated Bread Knife 10\" with Cover",
+              asin: "B0F22BCM35",
+              price: "CAD 17.99",
+              total_reviews: 131,
+              in_stock: "IN_STOCK",
+            },
+          ],
+          2,
+          false
+        )
+      );
+    }) as unknown as typeof fetch;
+
+    const offers = await new YeahPromosAdapter().pullOffers(
+      ctxWith(fetchImpl),
+      { pageDelayMs: 0 }
+    );
+    // has_more 分页走完两页，数字 ID 不再被丢弃。
+    expect(offers).toHaveLength(2);
+    expect(offers[0]).toMatchObject({
+      externalId: "3208738",
+      asin: "B0GLGYF579",
+      price: 15.99,
+      payout: 15,
+      currency: "%",
+      reviewCount: 28,
+      // 数字 advert_id 命中 brands 映射回填品牌名。
+      brand: "Cutluxe",
+    });
+    expect(offers[1].externalId).toBe("3208696");
+    expect(offers[1].price).toBe(17.99);
+    expect(offers[1].reviewCount).toBe(131);
+  });
+
   it("apiProductsPath 覆盖生效", async () => {
     const { fetchImpl, calls } = routedFetch([], () =>
       jsonResponse(listBody([product()], { PageTotal: 1 }))
