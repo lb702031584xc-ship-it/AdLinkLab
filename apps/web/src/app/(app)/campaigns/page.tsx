@@ -1,16 +1,10 @@
 import { entityApi, type Campaign } from "@/lib/api/entities";
+import { mapEntityErrorMessage } from "@/lib/api/entities-config";
 import {
-  formatDateTime,
-  mapEntityErrorMessage,
-} from "@/lib/api/entities-config";
-import {
-  DataTable,
   EntityPageHeader,
   ErrorState,
   Pagination,
-  StatusBadge,
   paginationLabels,
-  type Column,
 } from "@/components/entities/ui";
 import { getLang } from "@/i18n/lang";
 import { getDictionary } from "@/i18n/dictionaries";
@@ -18,15 +12,15 @@ import {
   zh as campaignToggleZh,
   en as campaignToggleEn,
 } from "@/i18n/dict/campaign-toggle";
-import {
-  CampaignToggleButton,
-  type CampaignToggleStrings,
-} from "./_components/campaign-toggle-button";
+import { zh as cardsZh, en as cardsEn } from "@/i18n/dict/campaign-cards";
+import { getCampaignStatsAction } from "@/lib/api/campaigns-actions";
+import { CampaignCards } from "./_components/campaign-cards";
+import type { CampaignToggleStrings } from "./_components/campaign-toggle-button";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Build serializable toggle strings for one campaign row.
+ * Build serializable toggle strings for one campaign.
  * `confirmBody` is a *function* in the i18n dict; RSC cannot serialize
  * functions into Client Component props, so it is resolved here on the
  * server (this was the "Application error: a server-side exception" on
@@ -62,6 +56,7 @@ export default async function CampaignsPage({
   const pageSize = parsePageParam(sp.pageSize, 20);
   const lang = await getLang();
   const t = getDictionary(lang);
+  const cards = lang === "en" ? cardsEn : cardsZh;
   const tt = lang === "en" ? campaignToggleEn : campaignToggleZh;
 
   let result;
@@ -85,45 +80,10 @@ export default async function CampaignsPage({
     );
   }
 
-  const columns: Array<Column<Campaign>> = [
-    {
-      header: t.common.misc.name,
-      render: (c) => <span className="font-medium text-ink">{c.name}</span>,
-    },
-    {
-      header: t.entities.campaigns.columns.googleCampaignId,
-      render: (c) => (
-        <span className="font-mono text-[13px]">{c.googleCampaignId}</span>
-      ),
-    },
-    {
-      header: t.common.misc.status,
-      render: (c) => <StatusBadge value={c.status} />,
-    },
-    {
-      header: t.entities.campaigns.columns.biddingStrategy,
-      render: (c) => c.biddingStrategy ?? "—",
-    },
-    {
-      header: t.common.misc.updated,
-      render: (c) => (
-        <span className="whitespace-nowrap text-ink/70">
-          {formatDateTime(c.updatedAt)}
-        </span>
-      ),
-    },
-    {
-      header: tt.toggle.actionsColumn,
-      render: (c) => (
-        <CampaignToggleButton
-          campaignId={c.id}
-          googleAccountId={c.googleAccountId}
-          currentStatus={c.status}
-          t={toggleStringsFor(c, tt)}
-        />
-      ),
-    },
-  ];
+  const campaigns = result.items as Campaign[];
+  const stats = await getCampaignStatsAction(campaigns.map((c) => c.id));
+  const toggles: Record<string, CampaignToggleStrings> = {};
+  for (const c of campaigns) toggles[c.id] = toggleStringsFor(c, tt);
 
   return (
     <div>
@@ -131,18 +91,29 @@ export default async function CampaignsPage({
         title={t.common.nav.campaigns}
         description={t.entities.campaigns.description}
       />
-      <DataTable
-        columns={columns}
-        rows={result.items}
-        emptyText={t.entities.campaigns.empty}
-      />
-      <Pagination
-        page={page}
-        pageSize={pageSize}
-        total={result.total}
-        basePath="/campaigns"
-        labels={paginationLabels(t)}
-      />
+      {campaigns.length === 0 ? (
+        <div className="rounded-xl border border-ink/10 bg-white p-8 text-center shadow-sm">
+          <p className="text-sm text-ink/60">{t.entities.campaigns.empty}</p>
+        </div>
+      ) : (
+        <>
+          <CampaignCards
+            campaigns={campaigns}
+            stats={stats}
+            t={cards}
+            toggleStrings={toggles}
+          />
+          <div className="mt-5">
+            <Pagination
+              page={page}
+              pageSize={pageSize}
+              total={result.total}
+              basePath="/campaigns"
+              labels={paginationLabels(t)}
+            />
+          </div>
+        </>
+      )}
       {/* 下一步：广告跑起来后做归因和监控 */}
       <div className="mt-4 rounded-xl border border-signal/30 bg-signal/[0.04] p-4">
         <p className="text-sm font-semibold text-ink">🚀 {t.entities.campaigns.nextTitle}</p>
