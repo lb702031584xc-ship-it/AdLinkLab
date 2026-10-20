@@ -281,6 +281,46 @@ export async function pullNetwork(
 }
 
 /**
+ * 后台拉取登记（按 network.id）：/networks「立即拉取」异步化的并发守卫。
+ * 只存本进程在途状态——进程重启后登记自动清空，DB 里残留的 RUNNING
+ * 不会把后续手动拉取永久挡住（下一次点击会重新置 RUNNING 并启动）。
+ */
+const backgroundPulls = new Set<string>();
+
+export function isNetworkPullInFlight(networkId: string): boolean {
+  return backgroundPulls.has(networkId);
+}
+
+/**
+ * 后台启动一次拉取（不 await，立即返回是否真正启动）。
+ * 同一 network 已有后台拉取在跑时返回 false、不双启——避免两次拉取
+ * 互抢联盟 API 的限流预算并重复写库。状态流转（RUNNING → SUCCESS /
+ * FAILED + pullError / lastPullAt）由 pullNetwork 内部落库负责；这里再
+ * 兜一层 catch，保证后台任务绝不产生未处理 rejection。
+ */
+export function startNetworkPullInBackground(
+  deps: NetworkPullServiceDeps,
+  tenantId: string,
+  networkId: string
+): boolean {
+  if (backgroundPulls.has(networkId)) return false;
+  backgroundPulls.add(networkId);
+  const log = deps.log ?? defaultLog;
+  void pullNetwork(deps, tenantId, networkId)
+    .catch((err) => {
+      log.error("background network pull crashed", {
+        networkId,
+        tenantId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    })
+    .finally(() => {
+      backgroundPulls.delete(networkId);
+    });
+  return true;
+}
+
+/**
  * Pull every configured network (optionally scoped to one tenant).
  * Per-network failures are recorded, never thrown.
  */

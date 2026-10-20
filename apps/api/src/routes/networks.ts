@@ -5,7 +5,8 @@
  *   GET    /api/v1/networks                 — list (credentials masked)
  *   POST   /api/v1/networks                 — create { name, kind, apiBaseUrl?, apiKey? }
  *   PATCH  /api/v1/networks/:id            — update (apiKey rotates when provided)
- *   POST   /api/v1/networks/:id/pull-now   — manual pull (400 when no credentials)
+ *   POST   /api/v1/networks/:id/pull-now   — manual pull, async: starts a
+ *          background pull and returns 202 immediately (400 when no credentials)
  *   GET    /api/v1/networks/:id/pulls      — pull history (paginated)
  *   GET    /api/v1/networks/:id/offers     — pulled offers (paginated)
  *
@@ -28,7 +29,8 @@ import {
   SUPPORTED_NETWORK_KINDS,
 } from "../networks/index.js";
 import {
-  pullNetwork,
+  isNetworkPullInFlight,
+  startNetworkPullInBackground,
   type NetworkPullServiceDeps,
 } from "../services/network-pull-service.js";
 import {
@@ -389,15 +391,33 @@ export async function registerNetworkRoutes(
           "该网络尚未配置 API 凭证：请先在编辑弹窗中填写 API Key 后再拉取"
         );
       }
-      const summary = await pullNetwork(
-        {
-          prisma: services.prisma,
-          ...(pullDeps ?? {}),
-        },
-        tenantId,
-        row.id
-      );
-      return reply.status(202).send({ pull: summary });
+      // 异步化（对齐 /catalog 同步任务模式）：状态先落库 RUNNING，后台执行
+      // 拉取，请求立即返回——大库全量拉取要几分钟，同步长连接会被中间层
+      // 掐断（浏览器 fetch failed、拉取作废）。完成/失败由 pullNetwork
+      // 内部把 SUCCESS/FAILED + pullError/lastPullAt 写回，前端轮询列表
+      // 即可看到结果。同一网络已有后台拉取在跑时不双启（防互抢限流预算）。
+      let started = false;
+      if (!isNetworkPullInFlight(row.id)) {
+        await services.prisma.affiliateNetwork.update({
+          where: { id: row.id },
+          data: { pullStatus: "RUNNING", pullError: null },
+        });
+        started = startNetworkPullInBackground(
+          {
+            prisma: services.prisma,
+            ...(pullDeps ?? {}),
+          },
+          tenantId,
+          row.id
+        );
+      }
+      const fresh = await findNetwork(tenantId, id);
+      return reply.status(202).send({
+        pull: { status: "RUNNING", started },
+        network: serializeNetwork(
+          fresh as Parameters<typeof serializeNetwork>[0]
+        ),
+      });
     }
   );
 

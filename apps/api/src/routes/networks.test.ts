@@ -29,7 +29,7 @@ function stubAdapter(offers: NetworkOffer[]): NetworkAdapter {
   };
 }
 
-function buildApp(ctx: Ctx) {
+function buildApp(ctx: Ctx, adapter?: NetworkAdapter) {
   const fake = {
     affiliateNetwork: {
       findFirst: async (args: any) =>
@@ -132,6 +132,7 @@ function buildApp(ctx: Ctx) {
   const auth = { mode: "disabled" as const, registry: [] };
   const pullDeps = {
     getAdapterImpl: () =>
+      adapter ??
       stubAdapter([
         {
           externalId: "ext-1",
@@ -154,6 +155,35 @@ function buildApp(ctx: Ctx) {
 
 function headers(tenant = TENANT) {
   return { "content-type": "application/json", "x-tenant-id": tenant };
+}
+
+/** pull-now 已异步化：轮询内存行，直到后台拉取落定（pullStatus 脱离 RUNNING）。 */
+async function waitForPullSettled(ctx: Ctx, timeoutMs = 3000): Promise<void> {
+  const start = Date.now();
+  while (ctx.networks[0]?.pullStatus === "RUNNING") {
+    if (Date.now() - start > timeoutMs) throw new Error("pull never settled");
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
+function networkRowWithCreds() {
+  return {
+    id: NETWORK,
+    tenantId: TENANT,
+    name: "Impact",
+    kind: "impact",
+    website: null,
+    apiConfigured: true,
+    apiKeyRef: encryptApiKey("SID:TOKEN", PEPPER),
+    apiBaseUrl: null,
+    lastPullAt: null,
+    pullStatus: "NEVER",
+    pullError: null,
+    status: "ACTIVE",
+    deletedAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
 }
 
 describe("networks routes", () => {
@@ -292,27 +322,9 @@ describe("networks routes", () => {
     expect(res.json().message ?? res.body).toBeTruthy();
   });
 
-  it("POST /:id/pull-now pulls offers with a stub adapter (202)", async () => {
+  it("POST /:id/pull-now returns 202 RUNNING immediately, then settles SUCCESS in background", async () => {
     const ctx: Ctx = {
-      networks: [
-        {
-          id: NETWORK,
-          tenantId: TENANT,
-          name: "Impact",
-          kind: "impact",
-          website: null,
-          apiConfigured: true,
-          apiKeyRef: encryptApiKey("SID:TOKEN", PEPPER),
-          apiBaseUrl: null,
-          lastPullAt: null,
-          pullStatus: "NEVER",
-          pullError: null,
-          status: "ACTIVE",
-          deletedAt: null,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        },
-      ],
+      networks: [networkRowWithCreds()],
       offers: [],
       pulls: [],
     };
@@ -324,10 +336,103 @@ describe("networks routes", () => {
     });
     expect(res.statusCode).toBe(202);
     const pull = res.json().pull;
-    expect(pull.status).toBe("SUCCESS");
-    expect(pull.newCount).toBe(1);
-    expect(ctx.offers).toHaveLength(1);
+    // 异步化：请求立即返回 RUNNING（不再等拉完），且状态已落库。
+    expect(pull.status).toBe("RUNNING");
+    expect(pull.started).toBe(true);
+    expect(res.json().network.pullStatus).toBe("RUNNING");
+    // 注：内存行此刻可能已被极快的 stub 后台拉取推进到 SUCCESS，
+    // “在途 RUNNING”的确定性断言见下方并发用例（带门闩的 adapter）。
+
+    await waitForPullSettled(ctx);
     expect(ctx.networks[0].pullStatus).toBe("SUCCESS");
+    expect(ctx.networks[0].lastPullAt).toBeInstanceOf(Date);
+    expect(ctx.offers).toHaveLength(1);
+    expect(ctx.pulls).toHaveLength(1);
+    expect(ctx.pulls[0].status).toBe("SUCCESS");
+    expect(ctx.pulls[0].newCount).toBe(1);
+  });
+
+  it("POST /:id/pull-now while a pull is in flight does not start a second pull", async () => {
+    let calls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const adapter: NetworkAdapter = {
+      kind: "impact",
+      displayName: "Impact",
+      pullOffers: async () => {
+        calls += 1;
+        await gate;
+        return [
+          {
+            externalId: "ext-1",
+            name: "Pulled Offer",
+            payout: 9.99,
+            currency: "USD",
+            termsText: "terms",
+            rawData: {},
+          },
+        ];
+      },
+    };
+    const ctx: Ctx = {
+      networks: [networkRowWithCreds()],
+      offers: [],
+      pulls: [],
+    };
+    const app = await buildApp(ctx, adapter);
+
+    const first = await app.inject({
+      method: "POST",
+      url: `/api/v1/networks/${NETWORK}/pull-now`,
+      headers: { "x-tenant-id": TENANT },
+    });
+    expect(first.statusCode).toBe(202);
+    expect(first.json().pull.started).toBe(true);
+
+    const second = await app.inject({
+      method: "POST",
+      url: `/api/v1/networks/${NETWORK}/pull-now`,
+      headers: { "x-tenant-id": TENANT },
+    });
+    expect(second.statusCode).toBe(202);
+    expect(second.json().pull.status).toBe("RUNNING");
+    expect(second.json().pull.started).toBe(false);
+
+    release();
+    await waitForPullSettled(ctx);
+    expect(calls).toBe(1);
+    expect(ctx.networks[0].pullStatus).toBe("SUCCESS");
+    expect(ctx.offers).toHaveLength(1);
+  });
+
+  it("POST /:id/pull-now settles FAILED with pullError when the adapter blows up", async () => {
+    const adapter: NetworkAdapter = {
+      kind: "impact",
+      displayName: "Impact",
+      pullOffers: async () => {
+        throw new Error("kaboom upstream");
+      },
+    };
+    const ctx: Ctx = {
+      networks: [networkRowWithCreds()],
+      offers: [],
+      pulls: [],
+    };
+    const app = await buildApp(ctx, adapter);
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/networks/${NETWORK}/pull-now`,
+      headers: { "x-tenant-id": TENANT },
+    });
+    expect(res.statusCode).toBe(202);
+    expect(res.json().pull.status).toBe("RUNNING");
+
+    await waitForPullSettled(ctx);
+    expect(ctx.networks[0].pullStatus).toBe("FAILED");
+    expect(ctx.networks[0].pullError).toContain("kaboom upstream");
+    expect(ctx.pulls[0].status).toBe("FAILED");
   });
 
   it("GET /:id/offers and /:id/pulls return pulled data (tenant-scoped)", async () => {
@@ -360,6 +465,8 @@ describe("networks routes", () => {
       url: `/api/v1/networks/${NETWORK}/pull-now`,
       headers: { "x-tenant-id": TENANT },
     });
+    // 拉取已异步化：等后台落定后再查 staging 数据。
+    await waitForPullSettled(ctx);
 
     const offers = await app.inject({
       method: "GET",

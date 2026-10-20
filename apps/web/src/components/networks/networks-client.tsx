@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { EntityPageHeader } from "@/components/entities/ui";
 import { formatDateTime } from "@/lib/api/entities-config";
@@ -78,6 +78,15 @@ export function NetworksClient({
 
   const [networks, setNetworks] = useState(initial);
   useEffect(() => setNetworks(initial), [initial]);
+
+  // 任一网络在后台拉取中（以服务端 pullStatus 为准）→ 每 5 秒刷新列表，
+  // 全部落定后自动停轮询。刷新页面也能凭服务端状态恢复“拉取中”显示。
+  const anyPullRunning = networks.some((n) => n.pullStatus === "RUNNING");
+  useEffect(() => {
+    if (!anyPullRunning) return;
+    const t = setInterval(() => router.refresh(), 5000);
+    return () => clearInterval(t);
+  }, [anyPullRunning, router]);
   const [msg, setMsg] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<NetworkRow | null>(null);
@@ -102,6 +111,22 @@ export function NetworksClient({
   const [offers, setOffers] = useState<NetworkOfferRow[]>([]);
   const [pulls, setPulls] = useState<NetworkPullRow[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
+
+  // 展开的网络刚从 RUNNING 落定 → 顺手刷新它的详情（offers/pulls），
+  // 与旧同步版“拉完即刷新详情”的体验对齐。
+  const prevRunningRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const runningNow = new Set(
+      networks.filter((n) => n.pullStatus === "RUNNING").map((n) => n.id)
+    );
+    const justSettled =
+      expanded !== null &&
+      prevRunningRef.current.has(expanded) &&
+      !runningNow.has(expanded);
+    prevRunningRef.current = runningNow;
+    if (justSettled) void loadDetail(expanded, tab);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [networks, expanded, tab]);
 
   function openCreate() {
     setEditing(null);
@@ -200,14 +225,9 @@ export function NetworksClient({
     try {
       const res = await pullNetworkNowAction(n.id);
       if (res.ok) {
-        const s = res.data;
-        if (s.status === "SUCCESS") {
-          setMsg(d.toast.pulled(s));
-        } else {
-          setMsg(`${d.toast.failedPrefix}${s.error ?? ""}`);
-        }
+        // 异步拉取：POST 只回“已启动”，最终结果由轮询带回（卡片 pullStatus 落定）。
+        setMsg(d.toast.pullStarted);
         router.refresh();
-        if (expanded === n.id) await loadDetail(n.id, tab);
       } else {
         setMsg(`${d.toast.failedPrefix}${res.error}`);
       }
@@ -316,11 +336,17 @@ export function NetworksClient({
               <button
                 type="button"
                 className={btnPrimary}
-                disabled={pullingId === n.id || !n.apiConfigured}
+                disabled={
+                  pullingId === n.id ||
+                  n.pullStatus === "RUNNING" ||
+                  !n.apiConfigured
+                }
                 onClick={() => onPull(n)}
                 title={!n.apiConfigured ? d.page.noCredentialsHint : undefined}
               >
-                {pullingId === n.id ? d.card.pulling : d.card.pullNow}
+                {pullingId === n.id || n.pullStatus === "RUNNING"
+                  ? d.card.pulling
+                  : d.card.pullNow}
               </button>
               <button
                 type="button"

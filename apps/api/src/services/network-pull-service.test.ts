@@ -5,8 +5,10 @@
 import { describe, expect, it } from "vitest";
 import type { PrismaClient } from "@adlinklab/database";
 import {
+  isNetworkPullInFlight,
   pullAllConfiguredNetworks,
   pullNetwork,
+  startNetworkPullInBackground,
   type NetworkPullServiceDeps,
 } from "./network-pull-service.js";
 import { encryptApiKey } from "../networks/network-crypto.js";
@@ -235,6 +237,81 @@ describe("pullNetwork", () => {
     await expect(
       pullNetwork(deps, TENANT, "99999999-9999-4999-8999-999999999999")
     ).rejects.toThrow("Network not found");
+  });
+});
+
+describe("startNetworkPullInBackground", () => {
+  async function waitFor(cond: () => boolean, timeoutMs = 2000): Promise<void> {
+    const start = Date.now();
+    while (!cond()) {
+      if (Date.now() - start > timeoutMs) throw new Error("waitFor timed out");
+      await new Promise((r) => setTimeout(r, 5));
+    }
+  }
+
+  it("starts immediately, refuses a concurrent second start, and settles SUCCESS", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let calls = 0;
+    const adapter: NetworkAdapter = {
+      kind: "impact",
+      displayName: "Impact",
+      defaultBaseUrl: "https://api.impact.com",
+      pullOffers: async () => {
+        calls += 1;
+        await gate;
+        return [makeOffer("1")];
+      },
+    };
+    const ctx: Ctx = { networks: [networkRow()], offers: [], pulls: [] };
+    const deps = buildDeps(ctx, adapter);
+
+    expect(startNetworkPullInBackground(deps, TENANT, NETWORK)).toBe(true);
+    expect(isNetworkPullInFlight(NETWORK)).toBe(true);
+    // 在途时第二次启动被拒，适配器不会被调第二次。
+    expect(startNetworkPullInBackground(deps, TENANT, NETWORK)).toBe(false);
+
+    release();
+    await waitFor(() => !isNetworkPullInFlight(NETWORK));
+    expect(calls).toBe(1);
+    expect(ctx.networks[0].pullStatus).toBe("SUCCESS");
+    expect(ctx.offers).toHaveLength(1);
+
+    // 落定后可以再次启动。
+    expect(startNetworkPullInBackground(deps, TENANT, NETWORK)).toBe(true);
+    await waitFor(() => !isNetworkPullInFlight(NETWORK));
+    expect(calls).toBe(2);
+  });
+
+  it("settles FAILED (status + pullError in DB) when the adapter blows up", async () => {
+    const adapter: NetworkAdapter = {
+      kind: "impact",
+      displayName: "Impact",
+      defaultBaseUrl: "https://api.impact.com",
+      pullOffers: async () => {
+        throw new Error("upstream exploded");
+      },
+    };
+    const ctx: Ctx = { networks: [networkRow()], offers: [], pulls: [] };
+    const deps = buildDeps(ctx, adapter);
+
+    expect(startNetworkPullInBackground(deps, TENANT, NETWORK)).toBe(true);
+    await waitFor(() => !isNetworkPullInFlight(NETWORK));
+    expect(ctx.networks[0].pullStatus).toBe("FAILED");
+    expect(ctx.networks[0].pullError).toContain("upstream exploded");
+    expect(ctx.pulls[0].status).toBe("FAILED");
+  });
+
+  it("swallows a crashed pull (unknown network) without unhandled rejection", async () => {
+    const ctx: Ctx = { networks: [], offers: [], pulls: [] };
+    const deps = buildDeps(ctx, stubAdapter([]));
+    const MISSING = "99999999-9999-4999-8999-999999999999";
+    // pullNetwork 对未知网络抛 NotFoundError；后台启动不得把它变成未处理 rejection。
+    expect(startNetworkPullInBackground(deps, TENANT, MISSING)).toBe(true);
+    expect(isNetworkPullInFlight(MISSING)).toBe(true);
+    await waitFor(() => !isNetworkPullInFlight(MISSING));
   });
 });
 

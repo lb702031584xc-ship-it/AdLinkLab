@@ -51,14 +51,12 @@ export interface NetworkPullRow {
   error: string | null;
 }
 
-export interface NetworkPullSummary {
-  networkId: string;
-  tenantId: string;
-  status: "SUCCESS" | "FAILED";
-  offerCount: number;
-  newCount: number;
-  updatedCount: number;
-  error?: string;
+/** pull-now 已异步化：响应只是“已启动”回执，最终结果看列表里的 pullStatus。 */
+export interface NetworkPullStartResult {
+  /** 恒为 "RUNNING"（拉取已在后台进行）。 */
+  status: string;
+  /** 本次点击是否真正启动了新拉取（false = 已有拉取在跑，未双启）。 */
+  started: boolean;
 }
 
 async function attempt<T>(
@@ -154,7 +152,7 @@ export async function pullNetworkNowAction(id: string) {
     const body = await apiFetch(`/api/v1/networks/${id}/pull-now`, {
       method: "POST",
     });
-    return (body as { pull: NetworkPullSummary }).pull;
+    return (body as { pull: NetworkPullStartResult }).pull;
   }, ["/networks"]);
 }
 

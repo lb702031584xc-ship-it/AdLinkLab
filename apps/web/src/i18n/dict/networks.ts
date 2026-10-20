@@ -83,6 +83,7 @@ export const zh = {
     updated: "网络已更新",
     pulled: (s: { offerCount: number; newCount: number; updatedCount: number }) =>
       `拉取完成：共 ${s.offerCount} 个 offer，新增 ${s.newCount}，更新 ${s.updatedCount}。`,
+    pullStarted: "已开始后台拉取，完成后列表会自动刷新。",
     failedPrefix: "操作失败：",
   },
 };
@@ -168,6 +169,8 @@ export const en = {
     updated: "Network updated",
     pulled: (s: { offerCount: number; newCount: number; updatedCount: number }) =>
       `Pull complete: ${s.offerCount} offers, ${s.newCount} new, ${s.updatedCount} updated.`,
+    pullStarted:
+      "Pull started in the background — the list refreshes automatically when it finishes.",
     failedPrefix: "Failed: ",
   },
 };
