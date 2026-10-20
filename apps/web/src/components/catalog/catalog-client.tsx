@@ -1619,8 +1619,8 @@ export function CatalogClient({
     dragState.current.down = false;
   }
 
-  /** 可排序表头（autoads 式：点击切换 降序/升序） */
-  function sortTh(base: string, label: string, thCls?: string) {
+  /** 可排序表头（autoads 式：点击切换 降序/升序；label 可带图标节点） */
+  function sortTh(base: string, label: React.ReactNode, thCls?: string) {
     const [b, dir] = sort.split("_");
     const active = b === base;
     return (
@@ -1634,10 +1634,12 @@ export function CatalogClient({
           title={active && dir === "asc" ? d.products.sortAsc : d.products.sortDesc}
         >
           {label}
-          {active && (
+          {active ? (
             <span className="text-[10px] text-signal">
               {dir === "desc" ? "▼" : "▲"}
             </span>
+          ) : (
+            <span className="text-[10px] text-ink/30">↕</span>
           )}
         </button>
       </th>
@@ -2278,9 +2280,15 @@ export function CatalogClient({
           onPointerLeave={endTableDrag}
           className="mt-2 cursor-grab overflow-x-auto rounded-xl border border-ink/10 active:cursor-grabbing"
         >
-          <table className="w-full min-w-[1900px] border-collapse text-sm">
+          <table
+            className="w-full min-w-[1900px] border-collapse text-xs"
+            style={{
+              fontFamily:
+                '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif',
+            }}
+          >
             <thead className="sticky top-0 z-20">
-              <tr className="bg-[#f7f8fa] text-left text-[11px] uppercase tracking-wide text-ink/50">
+              <tr className="bg-[#f7f8fa] text-left text-xs text-ink/55">
                 <th className="sticky left-0 z-30 w-[36px] min-w-[36px] bg-inherit px-2 py-2.5">
                   <input
                     type="checkbox"
@@ -2289,32 +2297,40 @@ export function CatalogClient({
                     onChange={toggleAll}
                   />
                 </th>
-                <th className="sticky left-[36px] z-30 w-[44px] min-w-[44px] bg-inherit px-2 py-2.5 font-medium">
+                <th className="sticky left-[36px] z-30 w-[44px] min-w-[44px] bg-inherit px-2 py-2.5 ">
                   {d.products.colSeq}
                 </th>
-                <th className="sticky left-[80px] z-30 min-w-[300px] max-w-[360px] bg-inherit px-3 py-2.5 font-medium">
-                  {d.products.colName}
-                </th>
                 {sortTh("id", d.products.colExtId)}
-                <th className="px-3 py-2.5 font-medium">{d.products.colNetwork}</th>
-                <th className="px-3 py-2.5 font-medium">{d.products.colAccount}</th>
-                <th className="px-3 py-2.5 font-medium">{d.products.colStatus}</th>
-                <th className="px-3 py-2.5 font-medium">{d.products.colMid}</th>
-                <th className="px-3 py-2.5 font-medium">{d.products.colMerchant}</th>
-                <th className="px-3 py-2.5 font-medium">{d.products.colBrand}</th>
-                <th className="px-3 py-2.5 font-medium">{d.products.colAsin}</th>
-                <th className="px-3 py-2.5 font-medium">{d.products.colLandingType}</th>
+                <th className="px-3 py-2.5 ">{d.products.colNetwork}</th>
+                <th className="px-3 py-2.5 ">{d.products.colAccount}</th>
+                <th className="px-3 py-2.5 ">{d.products.colStatus}</th>
+                <th className="px-3 py-2.5 ">{d.products.colMid}</th>
+                <th className="px-3 py-2.5 ">{d.products.colMerchant}</th>
+                {sortTh("brand", d.products.colBrand)}
+                {sortTh(
+                  "asin",
+                  <>
+                    {d.products.colAsin}
+                    <span className="ml-1 text-ink/35" title={d.products.asinTip ?? ""}>
+                      ℹ️
+                    </span>
+                  </>
+                )}
+                <th className="px-3 py-2.5 ">{d.products.colLandingType}</th>
                 {sortTh("reviews", d.products.colReviews)}
                 {sortTh("score", d.products.colScore)}
-                <th className="px-3 py-2.5 font-medium">{d.products.colAds}</th>
-                <th className="px-3 py-2.5 font-medium">{d.products.colCountry}</th>
+                <th className="min-w-[220px] max-w-[280px] px-3 py-2.5 ">
+                  {d.products.colName}
+                </th>
+                <th className="px-3 py-2.5 ">{d.products.colCountry}</th>
                 {sortTh("price", d.products.colPrice)}
-                <th className="px-3 py-2.5 font-medium">{d.products.colCommissionRate}</th>
-                <th className="px-3 py-2.5 font-medium">{d.products.colCommissionAmount}</th>
-                <th className="px-3 py-2.5 font-medium">{d.products.colPromo}</th>
-                <th className="px-3 py-2.5 font-medium">{d.products.colOfferCount}</th>
+                <th className="px-3 py-2.5 ">{d.products.colCommissionRate}</th>
+                <th className="px-3 py-2.5 ">{d.products.colCommissionAmount}</th>
+                <th className="px-3 py-2.5 ">{d.products.colPromo}</th>
+                <th className="px-3 py-2.5 ">{d.products.colOfferCount}</th>
+                <th className="px-3 py-2.5 ">{d.products.colAds}</th>
                 {sortTh("created", d.products.colCreated)}
-                <th className="sticky right-0 z-30 bg-inherit px-3 py-2.5 font-medium shadow-[-1px_0_0_0_rgba(0,0,0,0.06)]">
+                <th className="sticky right-0 z-30 bg-inherit px-3 py-2.5  shadow-[-1px_0_0_0_rgba(0,0,0,0.06)]">
                   {d.products.colActions}
                 </th>
               </tr>
@@ -2348,8 +2364,60 @@ export function CatalogClient({
                     <td className="sticky left-[36px] z-10 w-[44px] min-w-[44px] bg-inherit px-2 py-3 text-xs tabular-nums text-ink/50">
                       {seq}
                     </td>
+                    
+                    <td className="whitespace-nowrap px-3 py-2 tabular-nums text-ink/70">
+                      {p.productId ?? p.externalId ?? "—"}
+                    </td>
+                    <td className="px-3 py-2">
+                      <span className="text-xs font-medium text-ink/70">
+                        {kindAbbr(p.networkKind)}
+                      </span>
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 text-ink/70">
+                      {p.networkName ?? kindLabel(p.networkKind ?? "")}
+                    </td>
+                    <td className="px-3 py-2">
+                      {p.status === "inactive" ? (
+                        <span className="whitespace-nowrap rounded-full bg-ink/10 px-2 py-0.5 text-xs font-medium text-ink/60">
+                          {d.products.statusInactive}
+                        </span>
+                      ) : (
+                        <span className="whitespace-nowrap rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">
+                          {d.products.statusActive}
+                        </span>
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 font-mono text-xs tabular-nums text-ink/70">
+                      {p.mid ?? "—"}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 text-ink/70">
+                      {p.merchantName ?? "—"}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 text-ink/70">{p.brand ?? "—"}</td>
+                    <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-ink/70">
+                      {p.asin ?? "—"}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2">
+                      <span className="whitespace-nowrap rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">
+                        {landingPageTypeLabel(p.landingPageType)}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 tabular-nums text-ink/70">
+                      {fmtNum(p.reviewCount)}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 tabular-nums text-ink/70">
+                      {p.recommendationScore != null ? (
+                        <span title={d.products.scoreTip ?? "推荐指数"}>
+                          <span className="mr-1">⭐</span>
+                          {fmtNum(p.recommendationScore)}
+                          <span className="ml-1 text-ink/35">ⓘ</span>
+                        </span>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
                     <td
-                      className="sticky left-[80px] z-10 min-w-[300px] max-w-[360px] bg-inherit px-3 py-3"
+                      className="min-w-[220px] max-w-[280px] px-3 py-2"
                       title={p.name}
                     >
                       <span className="line-clamp-2 font-medium text-ink">{p.name}</span>
@@ -2371,61 +2439,20 @@ export function CatalogClient({
                         )}
                       </span>
                     </td>
-                    <td className="whitespace-nowrap px-3 py-3 font-mono text-xs tabular-nums text-ink/70">
-                      {p.productId ?? p.externalId ?? "—"}
-                    </td>
-                    <td className="px-3 py-3">
-                      <span className="rounded bg-ink/10 px-1.5 py-0.5 font-mono text-xs font-medium text-ink/70">
-                        {kindAbbr(p.networkKind)}
-                      </span>
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-3 text-ink/70">
-                      {p.networkName ?? kindLabel(p.networkKind ?? "")}
-                    </td>
-                    <td className="px-3 py-3">
-                      {p.status === "inactive" ? (
-                        <span className="whitespace-nowrap rounded-full bg-ink/10 px-2 py-0.5 text-xs font-medium text-ink/60">
-                          {d.products.statusInactive}
-                        </span>
-                      ) : (
-                        <span className="whitespace-nowrap rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
-                          {d.products.statusActive}
-                        </span>
-                      )}
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-3 font-mono text-xs tabular-nums text-ink/70">
-                      {p.mid ?? "—"}
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-3 text-ink/70">
-                      {p.merchantName ?? "—"}
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-3 text-ink/70">{p.brand ?? "—"}</td>
-                    <td className="whitespace-nowrap px-3 py-3 font-mono text-xs text-ink/70">
-                      {p.asin ?? "—"}
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-3 text-ink/70">
-                      {landingPageTypeLabel(p.landingPageType)}
-                    </td>
-                    <td className="px-3 py-3 tabular-nums text-ink/70">
-                      {fmtNum(p.reviewCount)}
-                    </td>
-                    <td className="px-3 py-3 tabular-nums text-ink/70">
-                      {fmtNum(p.recommendationScore)}
-                    </td>
-                    <td className="px-3 py-3 text-ink/40">—</td>
-                    <td className="whitespace-nowrap px-3 py-3 text-ink/70">
+                    
+                    <td className="whitespace-nowrap px-3 py-2 text-ink/70">
                       {p.countryCode ?? "—"}
                     </td>
-                    <td className="whitespace-nowrap px-3 py-3 tabular-nums text-ink/80">
+                    <td className="whitespace-nowrap px-3 py-2 tabular-nums text-ink/80">
                       {fmtMoney(p.price, p.currency)}
                     </td>
-                    <td className="whitespace-nowrap px-3 py-3 tabular-nums text-ink/80">
+                    <td className="whitespace-nowrap px-3 py-2 tabular-nums text-ink/80">
                       {fmtRate(p.commissionRate)}
                     </td>
-                    <td className="whitespace-nowrap px-3 py-3 tabular-nums text-ink/80">
+                    <td className="whitespace-nowrap px-3 py-2 tabular-nums text-ink/80">
                       {commissionAmountCell(p)}
                     </td>
-                    <td className="px-3 py-3">
+                    <td className="px-3 py-2">
                       {p.promoUrl ? (
                         <a
                           href={p.promoUrl}
@@ -2439,11 +2466,12 @@ export function CatalogClient({
                         <span className="text-ink/40">—</span>
                       )}
                     </td>
-                    <td className="px-3 py-3 text-ink/40">—</td>
-                    <td className="whitespace-nowrap px-3 py-3 text-xs tabular-nums text-ink/60">
+                    <td className="px-3 py-2 text-ink/40">—</td>
+                    <td className="px-3 py-2 text-ink/40">—</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-xs tabular-nums text-ink/60">
                       {formatDate(p.createdAt)}
                     </td>
-                    <td className="sticky right-0 z-10 bg-inherit px-3 py-3 shadow-[-1px_0_0_0_rgba(0,0,0,0.06)]">
+                    <td className="sticky right-0 z-10 bg-inherit px-3 py-2 shadow-[-1px_0_0_0_rgba(0,0,0,0.06)]">
                       <span className="flex gap-2">
                         <button
                           className="whitespace-nowrap text-xs text-signal hover:underline disabled:opacity-40"

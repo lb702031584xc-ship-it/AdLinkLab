@@ -218,6 +218,14 @@ export function buildProductOrderBy(sort: unknown): Array<Record<string, string>
       return [{ recommendationScore: "desc" }, { externalId: "desc" }];
     case "score_asc":
       return [{ recommendationScore: "asc" }, { externalId: "desc" }];
+    case "brand_desc":
+      return [{ brand: "desc" }, { externalId: "desc" }];
+    case "brand_asc":
+      return [{ brand: "asc" }, { externalId: "desc" }];
+    case "asin_desc":
+      return [{ asin: "desc" }, { externalId: "desc" }];
+    case "asin_asc":
+      return [{ asin: "asc" }, { externalId: "desc" }];
     case "created_desc":
       return [{ createdAt: "desc" }, { externalId: "desc" }];
     case "created_asc":
