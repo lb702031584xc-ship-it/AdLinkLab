@@ -17,6 +17,7 @@
  */
 import {
   pickField,
+  pickNumericField,
   sessionAsNumber,
   sessionAsString,
   TemplateSessionAdapter,
@@ -81,7 +82,7 @@ export class PartnerBoostSessionAdapter extends TemplateSessionAdapter {
       ) ?? null;
     return {
       externalId:
-        sessionAsString(pickField(item, "product_id", "productId", "id", "asin")) ??
+        sessionAsString(pickNumericField(item, "product_id", "productId", "id", "asin")) ??
         "",
       name:
         sessionAsString(pickField(item, "product_name", "productName", "name", "title")) ??

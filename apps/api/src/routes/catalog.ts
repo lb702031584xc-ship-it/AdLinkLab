@@ -6,7 +6,7 @@
  * screen 接口内强制执行，无授权 403。绝不返回 session 明文。
  *
  *   POST   /api/v1/catalog/sync                    {networkId} → 同步商品库
- *   GET    /api/v1/catalog/products                商品分页（白名单置顶标记）
+ *   GET    /api/v1/catalog/products                商品分页（白名单置顶标记；sort=id_desc 默认主键倒序）
  *   GET    /api/v1/catalog/screening-preset        当前预设（无则默认 + saved:false）
  *   PUT    /api/v1/catalog/screening-preset        改预设（auto* 仅管理员）
  *   POST   /api/v1/catalog/screen                  {networkId?} 重跑筛选
@@ -107,6 +107,36 @@ const numOrNull = (v: unknown): number | null => {
   return Number.isFinite(n) ? n : null;
 };
 
+/**
+ * 从 rawData 提取数字型商品主键（PB product_id，如 62837599）。
+ * 找不到数字 id → 用数字型 externalId → 都没有 → null。
+ * （历史 session 同步可能把哈希写进了 externalId，那些行显示十六进制。）
+ */
+export function extractProductId(
+  rawData: unknown,
+  externalId: unknown
+): string | null {
+  let raw: Record<string, unknown> = {};
+  if (rawData && typeof rawData === "object")
+    raw = rawData as Record<string, unknown>;
+  else if (typeof rawData === "string") {
+    try {
+      raw = JSON.parse(rawData) as Record<string, unknown>;
+    } catch {
+      raw = {};
+    }
+  }
+  const isNumericId = (v: unknown): v is string => {
+    const s = String(v ?? "").trim();
+    return s !== "" && /^\d+$/.test(s);
+  };
+  for (const k of ["product_id", "productId", "productID", "id"]) {
+    if (isNumericId(raw[k])) return String(raw[k]).trim();
+  }
+  if (isNumericId(externalId)) return String(externalId).trim();
+  return null;
+}
+
 function serializeProduct(r: Record<string, unknown>, whitelisted: boolean) {
   // MID：网络侧商家 ID（PB rawData.brand_id），内部 merchantId 是 UUID 不对外展示。
   let raw: Record<string, unknown> = {};
@@ -128,6 +158,8 @@ function serializeProduct(r: Record<string, unknown>, whitelisted: boolean) {
   return {
     id: r.id,
     externalId: r.externalId,
+    /** 数字型商品主键（autoads 式，主键ID 列展示用；无数字 id 时回退 externalId）。 */
+    productId: extractProductId(r.rawData, r.externalId) ?? r.externalId,
     networkId: r.networkId ?? null,
     name: r.name,
     brand: r.brand,
@@ -163,6 +195,39 @@ async function findNetwork(prisma: PrismaClient, tenantId: string, id: string) {
     name: string;
     syncMode: string;
   };
+}
+
+/**
+ * 商品列表排序（autoads 式：默认按数字主键 ID 倒序，最新商品在前）。
+ * externalId 归一化后是数字串；同长度数字串的字典序 = 数字序。
+ */
+export function buildProductOrderBy(sort: unknown): Array<Record<string, string>> {
+  const s = typeof sort === "string" ? sort.trim() : "";
+  switch (s) {
+    case "id_asc":
+      return [{ externalId: "asc" }];
+    case "price_desc":
+      return [{ price: "desc" }, { externalId: "desc" }];
+    case "price_asc":
+      return [{ price: "asc" }, { externalId: "desc" }];
+    case "reviews_desc":
+      return [{ reviewCount: "desc" }, { externalId: "desc" }];
+    case "reviews_asc":
+      return [{ reviewCount: "asc" }, { externalId: "desc" }];
+    case "score_desc":
+      return [{ recommendationScore: "desc" }, { externalId: "desc" }];
+    case "score_asc":
+      return [{ recommendationScore: "asc" }, { externalId: "desc" }];
+    case "created_desc":
+      return [{ createdAt: "desc" }, { externalId: "desc" }];
+    case "created_asc":
+      return [{ createdAt: "asc" }, { externalId: "desc" }];
+    case "recommended":
+      return [{ recommended: "desc" }, { syncedAt: "desc" }];
+    case "id_desc":
+    default:
+      return [{ externalId: "desc" }];
+  }
 }
 
 /**
@@ -314,7 +379,7 @@ export async function registerCatalogRoutes(
       prisma.networkProduct.count({ where }),
       prisma.networkProduct.findMany({
         where,
-        orderBy: [{ recommended: "desc" }, { syncedAt: "desc" }],
+        orderBy: buildProductOrderBy(query.sort) as never,
         skip: (page - 1) * pageSize,
         take: pageSize,
       }),
@@ -428,7 +493,12 @@ export async function registerCatalogRoutes(
     };
   });
 
-  /* ── 回填：从 rawData 补 brand/asin/price/reviewCount（老数据同步时适配器没映射） ── */
+  /* ── 回填：从 rawData 补缺失字段（老数据同步时适配器没映射） ──
+   *  - brand/asin/price/reviewCount/currency：只补空
+   *  - externalId：十六进制哈希 → 数字 product_id（解决主键ID显示哈希串；
+   *    归一化后未来同步 upsert 能按数字 id 命中，不再产生重复行；冲突则跳过）
+   *  - landingPageType：null/unknown 时按 promoUrl 重新推导
+   */
 
   app.post<{ Body: { networkId?: unknown } }>(
     "/api/v1/catalog/products/backfill",
@@ -451,30 +521,48 @@ export async function registerCatalogRoutes(
             : parseInt(String(v).replace(/[^0-9]/g, ""), 10);
         return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
       };
+      const deriveType = (url: unknown): string => {
+        const u = String(url ?? "").toLowerCase();
+        if (!u.trim()) return "unknown";
+        if (u.includes("/stores/") || u.includes("amazon.com/s?"))
+          return "amazon_storefront";
+        if (u.includes("/dp/") || u.includes("/gp/product/"))
+          return "amazon_product";
+        return "dtc";
+      };
       let scanned = 0;
       let backfilled = 0;
+      let normalizedIds = 0;
       const BATCH = 500;
       for (let skip = 0; ; skip += BATCH) {
         const rows = (await prisma.networkProduct.findMany({
           where,
           select: {
             id: true,
+            networkId: true,
+            externalId: true,
             brand: true,
             asin: true,
             price: true,
             reviewCount: true,
             currency: true,
+            promoUrl: true,
+            landingPageType: true,
             rawData: true,
           },
           skip,
           take: BATCH,
         })) as Array<{
           id: string;
+          networkId: string;
+          externalId: string;
           brand: string | null;
           asin: string | null;
           price: unknown;
           reviewCount: number | null;
           currency: string | null;
+          promoUrl: string | null;
+          landingPageType: string | null;
           rawData: unknown;
         }>;
         if (rows.length === 0) break;
@@ -514,6 +602,31 @@ export async function registerCatalogRoutes(
               data.currency = c.trim().toUpperCase();
             else if (r.currency === "%") data.currency = "USD";
           }
+          if (r.landingPageType == null || r.landingPageType === "unknown") {
+            const t = deriveType(
+              r.promoUrl ?? raw.partnerboost_link ?? raw.link ?? raw.url
+            );
+            if (t !== "unknown") data.landingPageType = t;
+          }
+          // externalId 归一化：哈希串 → rawData 里的数字 product_id
+          const numericPid = extractProductId(r.rawData, null);
+          const extIsNumeric = /^\d+$/.test(String(r.externalId ?? "").trim());
+          if (!extIsNumeric && numericPid && numericPid !== r.externalId) {
+            const clash = (await prisma.networkProduct.findUnique({
+              where: {
+                tenantId_networkId_externalId: {
+                  tenantId: info.tenantId,
+                  networkId: r.networkId,
+                  externalId: numericPid,
+                },
+              },
+              select: { id: true },
+            })) as { id: string } | null;
+            if (!clash) {
+              data.externalId = numericPid;
+              normalizedIds += 1;
+            }
+          }
           if (Object.keys(data).length > 0) {
             await prisma.networkProduct.update({
               where: { id: r.id },
@@ -524,7 +637,7 @@ export async function registerCatalogRoutes(
         }
         if (rows.length < BATCH) break;
       }
-      return { scanned, backfilled };
+      return { scanned, backfilled, normalizedIds };
     }
   );
 

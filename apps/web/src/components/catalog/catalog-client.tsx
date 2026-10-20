@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { EntityPageHeader } from "@/components/entities/ui";
 import { formatDateTime } from "@/lib/api/entities-config";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -1491,6 +1491,7 @@ export function CatalogClient({
   const [onlyRecommended, setOnlyRecommended] = useState(false);
   const [applyPreset, setApplyPreset] = useState(true);
   const [presetExcluded, setPresetExcluded] = useState(0);
+  const [sort, setSort] = useState("id_desc");
   const [loadingProducts, setLoadingProducts] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [batching, setBatching] = useState(false);
@@ -1512,6 +1513,7 @@ export function CatalogClient({
       page: targetPage,
       pageSize: PAGE_SIZE,
       preset: applyPreset ? undefined : false,
+      sort,
     });
     setLoadingProducts(false);
     if (!res.ok) {
@@ -1539,7 +1541,14 @@ export function CatalogClient({
     setMsg(
       d.products.backfillDone
         .replace("{a}", String(res.data.scanned))
-        .replace("{b}", String(res.data.backfilled))
+        .replace("{b}", String(res.data.backfilled)) +
+        (res.data.normalizedIds
+          ? "；" +
+            d.products.backfillIdsNormalized.replace(
+              "{c}",
+              String(res.data.normalizedIds)
+            )
+          : "")
     );
     await reloadProducts(page);
   }
@@ -1578,7 +1587,78 @@ export function CatalogClient({
     setQ("");
     setQDraft("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, onlyRecommended, applyPreset]);
+  }, [selectedId, onlyRecommended, applyPreset, sort]);
+
+  /** 点击表头切换排序：同列在 desc/asc 间切换 */
+  function onSortCol(base: string) {
+    setSort((prev) => {
+      const [b, dir] = prev.split("_");
+      if (b === base) return `${base}_${dir === "desc" ? "asc" : "desc"}`;
+      return `${base}_desc`;
+    });
+  }
+
+  /* 表格横向拖拽滚动（autoads 式：按住拖动看全列） */
+  const tableWrapRef = useRef<HTMLDivElement>(null);
+  const dragState = useRef({ down: false, startX: 0, startLeft: 0 });
+  function onTablePointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    // 链接/按钮/输入框上不启动拖拽，避免误触
+    const t = e.target as HTMLElement;
+    if (t.closest("a,button,input,select,textarea")) return;
+    const el = tableWrapRef.current;
+    if (!el) return;
+    dragState.current = { down: true, startX: e.clientX, startLeft: el.scrollLeft };
+  }
+  function onTablePointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    const el = tableWrapRef.current;
+    const st = dragState.current;
+    if (!st.down || !el) return;
+    el.scrollLeft = st.startLeft - (e.clientX - st.startX);
+  }
+  function endTableDrag() {
+    dragState.current.down = false;
+  }
+
+  /** 可排序表头（autoads 式：点击切换 降序/升序） */
+  function sortTh(base: string, label: string, thCls?: string) {
+    const [b, dir] = sort.split("_");
+    const active = b === base;
+    return (
+      <th className={`px-3 py-2.5 ${thCls ?? ""}`}>
+        <button
+          type="button"
+          onClick={() => onSortCol(base)}
+          className={`inline-flex items-center gap-1 font-medium hover:text-ink ${
+            active ? "text-ink" : ""
+          }`}
+          title={active && dir === "asc" ? d.products.sortAsc : d.products.sortDesc}
+        >
+          {label}
+          {active && (
+            <span className="text-[10px] text-signal">
+              {dir === "desc" ? "▼" : "▲"}
+            </span>
+          )}
+        </button>
+      </th>
+    );
+  }
+
+  /** 佣金金额：实数优先；只有佣金率+价格时给预计值（明确标注，不编数字）。 */
+  function commissionAmountCell(p: CatalogProduct) {
+    if (p.commissionAmount != null)
+      return <span>{fmtMoney(p.commissionAmount, p.currency)}</span>;
+    if (p.commissionRate != null && p.price != null) {
+      const est = Math.round(p.price * p.commissionRate) / 100;
+      return (
+        <span>
+          {fmtMoney(est, p.currency)}{" "}
+          <span className="text-xs text-ink/40">({d.products.estimated})</span>
+        </span>
+      );
+    }
+    return <span className="text-ink/40">—</span>;
+  }
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const selectable = selectableProducts(products);
@@ -2189,11 +2269,19 @@ export function CatalogClient({
           </span>
         </div>
 
-        <div className="mt-4 overflow-x-auto">
-          <table className="w-full min-w-[1800px] text-sm">
-            <thead>
-              <tr className="border-b border-ink/10 text-left text-xs text-ink/60">
-                <th className="py-2 pr-2">
+        <p className="mt-3 text-xs text-ink/40">{d.products.dragHint}</p>
+        <div
+          ref={tableWrapRef}
+          onPointerDown={onTablePointerDown}
+          onPointerMove={onTablePointerMove}
+          onPointerUp={endTableDrag}
+          onPointerLeave={endTableDrag}
+          className="mt-2 cursor-grab overflow-x-auto rounded-xl border border-ink/10 active:cursor-grabbing"
+        >
+          <table className="w-full min-w-[1900px] border-collapse text-sm">
+            <thead className="sticky top-0 z-20">
+              <tr className="bg-[#f7f8fa] text-left text-[11px] uppercase tracking-wide text-ink/50">
+                <th className="sticky left-0 z-30 w-[36px] min-w-[36px] bg-inherit px-2 py-2.5">
                   <input
                     type="checkbox"
                     aria-label={d.products.selectAll}
@@ -2201,28 +2289,34 @@ export function CatalogClient({
                     onChange={toggleAll}
                   />
                 </th>
-                <th className="py-2 pr-2">{d.products.colSeq}</th>
-                <th className="py-2 pr-2">{d.products.colName}</th>
-                <th className="py-2 pr-2">{d.products.colExtId}</th>
-                <th className="py-2 pr-2">{d.products.colNetwork}</th>
-                <th className="py-2 pr-2">{d.products.colAccount}</th>
-                <th className="py-2 pr-2">{d.products.colStatus}</th>
-                <th className="py-2 pr-2">{d.products.colMid}</th>
-                <th className="py-2 pr-2">{d.products.colMerchant}</th>
-                <th className="py-2 pr-2">{d.products.colBrand}</th>
-                <th className="py-2 pr-2">{d.products.colAsin}</th>
-                <th className="py-2 pr-2">{d.products.colLandingType}</th>
-                <th className="py-2 pr-2">{d.products.colReviews}</th>
-                <th className="py-2 pr-2">{d.products.colScore}</th>
-                <th className="py-2 pr-2">{d.products.colAds}</th>
-                <th className="py-2 pr-2">{d.products.colCountry}</th>
-                <th className="py-2 pr-2">{d.products.colPrice}</th>
-                <th className="py-2 pr-2">{d.products.colCommissionRate}</th>
-                <th className="py-2 pr-2">{d.products.colCommissionAmount}</th>
-                <th className="py-2 pr-2">{d.products.colPromo}</th>
-                <th className="py-2 pr-2">{d.products.colOfferCount}</th>
-                <th className="py-2 pr-2">{d.products.colCreated}</th>
-                <th className="py-2 pr-2">{d.products.colActions}</th>
+                <th className="sticky left-[36px] z-30 w-[44px] min-w-[44px] bg-inherit px-2 py-2.5 font-medium">
+                  {d.products.colSeq}
+                </th>
+                <th className="sticky left-[80px] z-30 min-w-[300px] max-w-[360px] bg-inherit px-3 py-2.5 font-medium">
+                  {d.products.colName}
+                </th>
+                {sortTh("id", d.products.colExtId)}
+                <th className="px-3 py-2.5 font-medium">{d.products.colNetwork}</th>
+                <th className="px-3 py-2.5 font-medium">{d.products.colAccount}</th>
+                <th className="px-3 py-2.5 font-medium">{d.products.colStatus}</th>
+                <th className="px-3 py-2.5 font-medium">{d.products.colMid}</th>
+                <th className="px-3 py-2.5 font-medium">{d.products.colMerchant}</th>
+                <th className="px-3 py-2.5 font-medium">{d.products.colBrand}</th>
+                <th className="px-3 py-2.5 font-medium">{d.products.colAsin}</th>
+                <th className="px-3 py-2.5 font-medium">{d.products.colLandingType}</th>
+                {sortTh("reviews", d.products.colReviews)}
+                {sortTh("score", d.products.colScore)}
+                <th className="px-3 py-2.5 font-medium">{d.products.colAds}</th>
+                <th className="px-3 py-2.5 font-medium">{d.products.colCountry}</th>
+                {sortTh("price", d.products.colPrice)}
+                <th className="px-3 py-2.5 font-medium">{d.products.colCommissionRate}</th>
+                <th className="px-3 py-2.5 font-medium">{d.products.colCommissionAmount}</th>
+                <th className="px-3 py-2.5 font-medium">{d.products.colPromo}</th>
+                <th className="px-3 py-2.5 font-medium">{d.products.colOfferCount}</th>
+                {sortTh("created", d.products.colCreated)}
+                <th className="sticky right-0 z-30 bg-inherit px-3 py-2.5 font-medium shadow-[-1px_0_0_0_rgba(0,0,0,0.06)]">
+                  {d.products.colActions}
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -2234,11 +2328,11 @@ export function CatalogClient({
                     key={p.id}
                     className={
                       blacklisted
-                        ? "border-b border-ink/5 bg-ink/[0.04] opacity-60"
-                        : "border-b border-ink/5 hover:bg-ink/[0.02]"
+                        ? "border-t border-ink/5 bg-ink/[0.04] opacity-60"
+                        : "border-t border-ink/5 bg-white hover:bg-ink/[0.02]"
                     }
                   >
-                    <td className="py-2 pr-2">
+                    <td className="sticky left-0 z-10 w-[36px] min-w-[36px] bg-inherit px-2 py-3">
                       <input
                         type="checkbox"
                         checked={selectedIds.has(p.id)}
@@ -2251,10 +2345,15 @@ export function CatalogClient({
                         }
                       />
                     </td>
-                    <td className="py-2 pr-2 text-xs text-ink/50">{seq}</td>
-                    <td className="py-2 pr-2">
-                      <span className="font-medium text-ink">{p.name}</span>
-                      <span className="ml-2 inline-flex gap-1 align-middle">
+                    <td className="sticky left-[36px] z-10 w-[44px] min-w-[44px] bg-inherit px-2 py-3 text-xs tabular-nums text-ink/50">
+                      {seq}
+                    </td>
+                    <td
+                      className="sticky left-[80px] z-10 min-w-[300px] max-w-[360px] bg-inherit px-3 py-3"
+                      title={p.name}
+                    >
+                      <span className="line-clamp-2 font-medium text-ink">{p.name}</span>
+                      <span className="mt-1 inline-flex gap-1 align-middle">
                         {p.recommended && (
                           <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
                             {d.products.recommendedBadge}
@@ -2272,67 +2371,67 @@ export function CatalogClient({
                         )}
                       </span>
                     </td>
-                    <td className="py-2 pr-2 font-mono text-xs text-ink/70">
-                      {p.externalId ?? "—"}
+                    <td className="whitespace-nowrap px-3 py-3 font-mono text-xs tabular-nums text-ink/70">
+                      {p.productId ?? p.externalId ?? "—"}
                     </td>
-                    <td className="py-2 pr-2">
+                    <td className="px-3 py-3">
                       <span className="rounded bg-ink/10 px-1.5 py-0.5 font-mono text-xs font-medium text-ink/70">
                         {kindAbbr(p.networkKind)}
                       </span>
                     </td>
-                    <td className="py-2 pr-2 text-ink/70">
+                    <td className="whitespace-nowrap px-3 py-3 text-ink/70">
                       {p.networkName ?? kindLabel(p.networkKind ?? "")}
                     </td>
-                    <td className="py-2 pr-2">
+                    <td className="px-3 py-3">
                       {p.status === "inactive" ? (
-                        <span className="rounded-full bg-ink/10 px-2 py-0.5 text-xs font-medium text-ink/60">
+                        <span className="whitespace-nowrap rounded-full bg-ink/10 px-2 py-0.5 text-xs font-medium text-ink/60">
                           {d.products.statusInactive}
                         </span>
                       ) : (
-                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
+                        <span className="whitespace-nowrap rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
                           {d.products.statusActive}
                         </span>
                       )}
                     </td>
-                    <td className="py-2 pr-2 font-mono text-xs text-ink/70">
+                    <td className="whitespace-nowrap px-3 py-3 font-mono text-xs tabular-nums text-ink/70">
                       {p.mid ?? "—"}
                     </td>
-                    <td className="py-2 pr-2 text-ink/70">
+                    <td className="whitespace-nowrap px-3 py-3 text-ink/70">
                       {p.merchantName ?? "—"}
                     </td>
-                    <td className="py-2 pr-2 text-ink/70">{p.brand ?? "—"}</td>
-                    <td className="py-2 pr-2 font-mono text-xs text-ink/70">
+                    <td className="whitespace-nowrap px-3 py-3 text-ink/70">{p.brand ?? "—"}</td>
+                    <td className="whitespace-nowrap px-3 py-3 font-mono text-xs text-ink/70">
                       {p.asin ?? "—"}
                     </td>
-                    <td className="py-2 pr-2 text-ink/70">
+                    <td className="whitespace-nowrap px-3 py-3 text-ink/70">
                       {landingPageTypeLabel(p.landingPageType)}
                     </td>
-                    <td className="py-2 pr-2 text-ink/70">
+                    <td className="px-3 py-3 tabular-nums text-ink/70">
                       {fmtNum(p.reviewCount)}
                     </td>
-                    <td className="py-2 pr-2 text-ink/70">
+                    <td className="px-3 py-3 tabular-nums text-ink/70">
                       {fmtNum(p.recommendationScore)}
                     </td>
-                    <td className="py-2 pr-2 text-ink/40">—</td>
-                    <td className="py-2 pr-2 text-ink/70">
+                    <td className="px-3 py-3 text-ink/40">—</td>
+                    <td className="whitespace-nowrap px-3 py-3 text-ink/70">
                       {p.countryCode ?? "—"}
                     </td>
-                    <td className="py-2 pr-2 text-ink/80">
+                    <td className="whitespace-nowrap px-3 py-3 tabular-nums text-ink/80">
                       {fmtMoney(p.price, p.currency)}
                     </td>
-                    <td className="py-2 pr-2 text-ink/80">
+                    <td className="whitespace-nowrap px-3 py-3 tabular-nums text-ink/80">
                       {fmtRate(p.commissionRate)}
                     </td>
-                    <td className="py-2 pr-2 text-ink/80">
-                      {fmtMoney(p.commissionAmount, p.currency)}
+                    <td className="whitespace-nowrap px-3 py-3 tabular-nums text-ink/80">
+                      {commissionAmountCell(p)}
                     </td>
-                    <td className="py-2 pr-2">
+                    <td className="px-3 py-3">
                       {p.promoUrl ? (
                         <a
                           href={p.promoUrl}
                           target="_blank"
                           rel="noreferrer"
-                          className="text-signal hover:underline"
+                          className="whitespace-nowrap text-signal hover:underline"
                         >
                           {d.products.viewLink}
                         </a>
@@ -2340,21 +2439,21 @@ export function CatalogClient({
                         <span className="text-ink/40">—</span>
                       )}
                     </td>
-                    <td className="py-2 pr-2 text-ink/40">—</td>
-                    <td className="py-2 pr-2 text-xs text-ink/60">
+                    <td className="px-3 py-3 text-ink/40">—</td>
+                    <td className="whitespace-nowrap px-3 py-3 text-xs tabular-nums text-ink/60">
                       {formatDate(p.createdAt)}
                     </td>
-                    <td className="py-2 pr-2">
+                    <td className="sticky right-0 z-10 bg-inherit px-3 py-3 shadow-[-1px_0_0_0_rgba(0,0,0,0.06)]">
                       <span className="flex gap-2">
                         <button
-                          className="text-xs text-signal hover:underline disabled:opacity-40"
+                          className="whitespace-nowrap text-xs text-signal hover:underline disabled:opacity-40"
                           onClick={() => void onCreateOfferOne(p.id)}
                           disabled={batching || blacklisted}
                         >
                           {d.products.createOfferOne}
                         </button>
                         <button
-                          className="text-xs text-ink/60 hover:underline disabled:opacity-40"
+                          className="whitespace-nowrap text-xs text-ink/60 hover:underline disabled:opacity-40"
                           onClick={() => void onOfflineOne(p)}
                           disabled={offlining || p.status === "inactive"}
                         >

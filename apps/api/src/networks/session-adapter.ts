@@ -323,6 +323,24 @@ export function pickField(
   return undefined;
 }
 
+/**
+ * 在候选键里优先挑"纯数字"值（商品主键用，如 PB product_id 62837599）。
+ * 第一个候选是哈希串（如某些后台的 uuid id）时会跳过，继续找数字值；
+ * 全都不是数字 → 回退 pickField 的第一个非空值。
+ */
+export function pickNumericField(
+  item: Record<string, unknown>,
+  ...keys: string[]
+): unknown {
+  for (const k of keys) {
+    const v = item[k];
+    if (v === undefined || v === null || v === "") continue;
+    const s = String(v).trim();
+    if (/^\d+$/.test(s)) return v;
+  }
+  return pickField(item, ...keys);
+}
+
 export { asNumber as sessionAsNumber, asString as sessionAsString };
 
 /**

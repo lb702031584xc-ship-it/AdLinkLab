@@ -64,6 +64,8 @@ export interface CatalogProduct {
   networkKind: string;
   networkName?: string | null;
   externalId: string | null;
+  /** 数字型商品主键（主键ID 列展示；无数字 id 时回退 externalId）。 */
+  productId?: string | null;
   mid?: string | null;
   name: string;
   brand: string | null;
@@ -599,6 +601,8 @@ export async function listCatalogProductsAction(params: {
   pageSize?: number;
   /** false → preset=0，关闭预设自动过滤；默认开启。 */
   preset?: boolean;
+  /** 排序：id_desc（默认）/id_asc/price_desc/price_asc/reviews_desc/reviews_asc/score_desc/score_asc/created_desc/created_asc/recommended */
+  sort?: string;
 }) {
   const qs = new URLSearchParams();
   if (params.networkId) qs.set("networkId", params.networkId);
@@ -606,6 +610,7 @@ export async function listCatalogProductsAction(params: {
     qs.set("recommended", String(params.recommended));
   if (params.q) qs.set("q", params.q);
   if (params.preset === false) qs.set("preset", "0");
+  if (params.sort) qs.set("sort", params.sort);
   qs.set("page", String(params.page ?? 1));
   qs.set("pageSize", String(params.pageSize ?? 20));
   return attempt(
@@ -626,7 +631,7 @@ export async function listCatalogProductsAction(params: {
 export async function backfillCatalogProductsAction(networkId?: string) {
   return attempt(
     () =>
-      apiFetch<{ scanned: number; backfilled: number }>(
+      apiFetch<{ scanned: number; backfilled: number; normalizedIds?: number }>(
         "/api/v1/catalog/products/backfill",
         {
           method: "POST",
