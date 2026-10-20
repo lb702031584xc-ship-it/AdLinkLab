@@ -229,6 +229,9 @@ export async function registerRoutes(
     await registerApiKeyRoutes(app, { prisma: services.prisma });
     await registerIpBanRoutes(app, { prisma: services.prisma });
     await registerAiRoutes(app, { prisma: services.prisma });
+    // 每租户系统设置（AI 引擎/广告发布/代理/系统偏好；租户级覆盖，不动全局配置）
+    const { registerSettingsRoutes } = await import("./settings.js");
+    await registerSettingsRoutes(app, { prisma: services.prisma });
     await registerMonitoringRoutes(app, { prisma: services.prisma });
     await registerOfferIntelRoutes(app, { prisma: services.prisma });
     await registerTrafficIntelRoutes(app, { prisma: services.prisma });

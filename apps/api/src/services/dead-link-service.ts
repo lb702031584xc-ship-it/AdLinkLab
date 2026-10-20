@@ -39,6 +39,11 @@ export interface DeadLinkScanSummary {
 export interface DeadLinkScanOpts {
   /** Injectable health-check implementation for tests (no network). */
   checkImpl?: typeof checkLinkHealth;
+  /**
+   * 可选的租户门控：返回 false 的租户其链接本次完全跳过（不计数）。
+   * 缺省时行为不变（老链路不受影响）。
+   */
+  tenantGate?: (tenantId: string) => boolean;
 }
 
 interface ScanLinkRow {
@@ -164,6 +169,9 @@ export async function checkAllActiveLinks(
 
   for (const link of links) {
     try {
+      // 每租户系统设置门控（tenant_settings.system.linkCheckEnabled/Hour）：
+      // 未配过设置的老租户不受影响（缺省扫描）。
+      if (opts.tenantGate && !opts.tenantGate(link.tenantId)) continue;
       // Per-link interval: skip if checked recently enough.
       const intervalSec = Math.max(link.healthCheckIntervalSec || 3600, MIN_INTERVAL_SEC);
       const lastChecked = link.healthChecks[0]?.checkedAt?.getTime();

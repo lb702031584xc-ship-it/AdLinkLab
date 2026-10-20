@@ -247,6 +247,8 @@ model Tenant {
   catalogWhitelist      CatalogWhitelist[]
   catalogMerchantPolicy CatalogMerchantPolicy?
   catalogMerchantSignals CatalogMerchantSignal[]
+  /// 每租户系统设置 back-references (additive)
+  tenantSettings        TenantSetting[]
 
   @@map("tenants")
 }
@@ -2573,4 +2575,20 @@ model AdminGrantAudit {
   @@index([tenantId])
   @@index([grantId])
   @@map("admin_grant_audits")
+}
+
+/// 每租户系统设置（对标 autoads 系统设置）：key = ai | ads | proxies | system，
+/// value 为 JSON 字符串；密钥类字段入库前 AES-256-GCM 加密。
+model TenantSetting {
+  id        String   @id @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  key       String
+  value     String
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, key], name: "tenant_settings_tenant_key_unique")
+  @@index([tenantId])
+  @@map("tenant_settings")
 }

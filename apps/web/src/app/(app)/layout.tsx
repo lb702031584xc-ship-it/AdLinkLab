@@ -8,6 +8,7 @@ import { zh as termsWatchZh, en as termsWatchEn } from "@/i18n/dict/cashback-ter
 import { zh as redirectCheckZh, en as redirectCheckEn } from "@/i18n/dict/cashback-redirect-check";
 import { zh as rateCompareZh, en as rateCompareEn } from "@/i18n/dict/cashback-rate-compare";
 import { zh as arbCoachZh, en as arbCoachEn } from "@/i18n/dict/arb-coach";
+import { zh as settingsZh, en as settingsEn } from "@/i18n/dict/settings";
 import { LangSwitcher } from "@/components/lang-switcher";
 import { getCurrentUser, getViewTenant } from "@/lib/api/auth";
 import { clearViewTenantAction, logoutAction } from "@/lib/api/auth-actions";
@@ -215,6 +216,10 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         {
           title: s.system,
           items: [
+            {
+              href: "/settings",
+              label: (lang === "en" ? settingsEn : settingsZh).page.title,
+            },
             { href: "/script-integrations", label: t.common.nav.scriptIntegrations },
             { href: "/jobs", label: t.common.nav.jobs },
             { href: "/audit-logs", label: t.common.nav.auditLogs },

@@ -84,13 +84,32 @@ interface LlmSettings {
   apiKeyEnc?: string;
 }
 
-async function readSettings(prisma: PrismaClient): Promise<LlmSettings> {
+async function readSettings(
+  prisma: PrismaClient,
+  tenantId?: string | null
+): Promise<LlmSettings> {
   const rows = await prisma.aiSetting.findMany();
   const out: LlmSettings = {};
   for (const r of rows as Array<{ key: string; value: string }>) {
     if (r.key === SETTING_BASE_URL) out.baseUrl = r.value;
     else if (r.key === SETTING_MODEL) out.model = r.value;
     else if (r.key === SETTING_API_KEY_ENC) out.apiKeyEnc = r.value;
+  }
+  // 只做加法：租户在系统设置里配全了 AI 三元组才覆盖；否则走原有全局配置。
+  if (tenantId) {
+    try {
+      const { resolveTenantLlmOverride } = await import(
+        "../services/tenant-settings.js"
+      );
+      const override = await resolveTenantLlmOverride(prisma, tenantId);
+      if (override) {
+        out.baseUrl = override.baseUrl;
+        out.model = override.model;
+        out.apiKeyEnc = override.apiKeyEnc;
+      }
+    } catch {
+      // 覆盖失败 → 静默回退全局，不影响老链路。
+    }
   }
   return out;
 }
@@ -105,8 +124,11 @@ interface LlmConfig {
   apiKey: string;
 }
 
-async function requireLlmConfig(prisma: PrismaClient): Promise<LlmConfig> {
-  const settings = await readSettings(prisma);
+async function requireLlmConfig(
+  prisma: PrismaClient,
+  tenantId?: string | null
+): Promise<LlmConfig> {
+  const settings = await readSettings(prisma, tenantId);
   if (!isConfigured(settings)) {
     throw new AppError("AI is not configured", {
       code: "AI_NOT_CONFIGURED",
@@ -226,7 +248,7 @@ export async function offerAnalyst(
       statusCode: 400,
     });
   }
-  const config = await requireLlmConfig(deps.prisma);
+  const config = await requireLlmConfig(deps.prisma, tenantId);
   const { system, user } = buildTermsPrompt(text.slice(0, 12_000), input.language);
   let terms: TermsShape;
   let accounting: AgentAccounting;
@@ -383,7 +405,7 @@ export async function riskAnalyst(
     };
   }
 
-  const config = await requireLlmConfig(deps.prisma);
+  const config = await requireLlmConfig(deps.prisma, tenantId);
   const { system, user } = buildAnalysisPrompt({
     pageText: input.pageText ?? input.terms.summary,
     merchant: input.merchant,

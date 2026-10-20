@@ -56,7 +56,45 @@ export async function processDeadLinkJob(
 
   let summary: DeadLinkScanSummary;
   try {
-    summary = await checkAllActiveLinks(input.prisma, input.tenantId, input.checkOpts);
+    // 每租户链接检查偏好（系统设置 → 系统偏好）：定时全局扫描时，
+    // 只有「显式保存过设置」的租户才受开关/时刻约束；老租户缺省全量扫描。
+    const opts = input.checkOpts ?? {};
+    if (!input.tenantId && input.triggeredBy === "schedule" && !opts.tenantGate) {
+      let rows: Array<{ tenantId: string; value: string }> = [];
+      try {
+        rows = (await input.prisma.tenantSetting.findMany({
+          where: { key: "system" },
+          select: { tenantId: true, value: true },
+        })) as Array<{ tenantId: string; value: string }>;
+      } catch {
+        rows = []; // 读不到偏好（如测试 fake）→ fail-open，老行为不变
+      }
+      const prefs = new Map<string, { linkCheckEnabled: boolean; linkCheckHour: number }>();
+      for (const r of rows) {
+        try {
+          const v = JSON.parse(r.value) as {
+            linkCheckEnabled?: boolean;
+            linkCheckHour?: number;
+          };
+          prefs.set(r.tenantId, {
+            linkCheckEnabled: v.linkCheckEnabled !== false,
+            linkCheckHour: typeof v.linkCheckHour === "number" ? v.linkCheckHour : 2,
+          });
+        } catch {
+          /* 坏行忽略，视为未配置 */
+        }
+      }
+      if (prefs.size > 0) {
+        const hourUtc = new Date().getUTCHours();
+        opts.tenantGate = (tid) => {
+          const p = prefs.get(tid);
+          if (!p) return true; // 未配过 → 老行为
+          if (!p.linkCheckEnabled) return false;
+          return p.linkCheckHour === hourUtc;
+        };
+      }
+    }
+    summary = await checkAllActiveLinks(input.prisma, input.tenantId, opts);
   } catch (error) {
     // Defensive: the service already swallows per-link errors, but the
     // worker must never fail the repeatable job either.

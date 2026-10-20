@@ -158,7 +158,29 @@ interface LlmSettings {
   keepaApiKeyEnc?: string;
 }
 
-async function readSettings(prisma: PrismaClient): Promise<LlmSettings> {
+/**
+ * 从请求解析租户（与 AI 限流 hook 同口径：session → header → session 鉴权）。
+ * 解析不到时返回 null，调用方回退全局配置。
+ */
+async function tenantIdOf(
+  prisma: PrismaClient,
+  request: FastifyRequest
+): Promise<string | null> {
+  if (request.sessionAuth?.tenantId) return request.sessionAuth.tenantId;
+  const h = request.headers["x-tenant-id"];
+  if (typeof h === "string" && h.trim()) return h.trim();
+  try {
+    const info = await authenticateSessionRequest(prisma, request);
+    return info?.tenantId ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function readSettings(
+  prisma: PrismaClient,
+  tenantId?: string | null
+): Promise<LlmSettings> {
   const rows = await prisma.aiSetting.findMany();
   const out: LlmSettings = {};
   for (const r of rows as Array<{ key: string; value: string }>) {
@@ -178,6 +200,22 @@ async function readSettings(prisma: PrismaClient): Promise<LlmSettings> {
         .split(",")
         .map((d) => d.trim().toLowerCase())
         .filter(Boolean);
+    }
+  }
+  // 只做加法：租户在系统设置里配全了 AI 三元组才覆盖；否则走原有全局配置。
+  if (tenantId) {
+    try {
+      const { resolveTenantLlmOverride } = await import(
+        "../services/tenant-settings.js"
+      );
+      const override = await resolveTenantLlmOverride(prisma, tenantId);
+      if (override) {
+        out.baseUrl = override.baseUrl;
+        out.model = override.model;
+        out.apiKeyEnc = override.apiKeyEnc;
+      }
+    } catch {
+      // 覆盖失败（表不存在/解密失败）→ 静默回退全局，不影响老链路。
     }
   }
   return out;
@@ -652,7 +690,7 @@ export async function registerAiRoutes(
       throw new ValidationError("Either url or text is required");
     }
 
-    const settings = await readSettings(prisma);
+    const settings = await readSettings(prisma, await tenantIdOf(prisma, request));
     if (!isConfigured(settings)) {
       throw new AppError("AI is not configured", {
         code: "AI_NOT_CONFIGURED",
@@ -774,7 +812,7 @@ export async function registerAiRoutes(
     const count = Math.min(Math.max(Number(body.count) || 10, 5), 20);
     const language: AnalysisLanguage = body.language === "en" ? "en" : "zh";
 
-    const settings = await readSettings(prisma);
+    const settings = await readSettings(prisma, await tenantIdOf(prisma, request));
     if (!isConfigured(settings)) {
       throw new AppError("AI is not configured", {
         code: "AI_NOT_CONFIGURED",
@@ -912,7 +950,7 @@ export async function registerAiRoutes(
         "text must be at least 50 characters of offer terms"
       );
     }
-    const settings = await readSettings(prisma);
+    const settings = await readSettings(prisma, await tenantIdOf(prisma, request));
     if (!isConfigured(settings)) {
       throw new AppError("AI is not configured", {
         code: "AI_NOT_CONFIGURED",
@@ -1029,7 +1067,7 @@ export async function registerAiRoutes(
       notes: asTrimmedString(body.notes) || undefined,
     };
 
-    const settings = await readSettings(prisma);
+    const settings = await readSettings(prisma, await tenantIdOf(prisma, request));
     if (!isConfigured(settings)) {
       throw new AppError("AI is not configured", {
         code: "AI_NOT_CONFIGURED",
@@ -1126,7 +1164,7 @@ export async function registerAiRoutes(
           : null;
       items.push({ name, text });
     }
-    const settings = await readSettings(prisma);
+    const settings = await readSettings(prisma, await tenantIdOf(prisma, request));
     if (!isConfigured(settings)) {
       throw new AppError("AI is not configured", {
         code: "AI_NOT_CONFIGURED",
@@ -1269,7 +1307,7 @@ export async function registerAiRoutes(
         update: { value: ownedDomains.join(",") },
       });
     } else {
-      ownedDomains = (await readSettings(prisma)).ownedDomains ?? [];
+      ownedDomains = (await readSettings(prisma, await tenantIdOf(prisma, request))).ownedDomains ?? [];
     }
 
     const results: Array<{
@@ -1741,7 +1779,7 @@ export async function registerAiRoutes(
       select: { pageText: true },
     });
     if (!row) throw new ValidationError("抓取记录不存在");
-    const settings = await readSettings(prisma);
+    const settings = await readSettings(prisma, await tenantIdOf(prisma, request));
     if (!isConfigured(settings)) {
       throw new AppError("AI is not configured", {
         code: "AI_NOT_CONFIGURED",
@@ -1806,7 +1844,7 @@ export async function registerAiRoutes(
       });
     }
     if (keywords.length === 0) throw new ValidationError("keywords is required");
-    const settings = await readSettings(prisma);
+    const settings = await readSettings(prisma, await tenantIdOf(prisma, request));
     if (!isConfigured(settings)) {
       throw new AppError("AI is not configured", {
         code: "AI_NOT_CONFIGURED",
@@ -1848,7 +1886,7 @@ export async function registerAiRoutes(
       select: { pageText: true },
     });
     if (!row) throw new ValidationError("抓取记录不存在");
-    const settings = await readSettings(prisma);
+    const settings = await readSettings(prisma, await tenantIdOf(prisma, request));
     if (!isConfigured(settings)) {
       throw new AppError("AI is not configured", {
         code: "AI_NOT_CONFIGURED",
@@ -1887,7 +1925,7 @@ export async function registerAiRoutes(
       select: { pageText: true },
     });
     if (!row) throw new ValidationError("抓取记录不存在");
-    const settings = await readSettings(prisma);
+    const settings = await readSettings(prisma, await tenantIdOf(prisma, request));
     if (!isConfigured(settings)) {
       throw new AppError("AI is not configured", {
         code: "AI_NOT_CONFIGURED",
@@ -1927,7 +1965,7 @@ export async function registerAiRoutes(
       select: { pageText: true },
     });
     if (!row) throw new ValidationError("抓取记录不存在");
-    const settings = await readSettings(prisma);
+    const settings = await readSettings(prisma, await tenantIdOf(prisma, request));
     if (!isConfigured(settings)) {
       throw new AppError("AI is not configured", {
         code: "AI_NOT_CONFIGURED",
@@ -1989,7 +2027,7 @@ export async function registerAiRoutes(
     }
     const text = ocrText.replace(/\s+/g, " ").trim();
     if (!text) throw new ValidationError("截图中未识别出任何文字");
-    const settings = await readSettings(prisma);
+    const settings = await readSettings(prisma, await tenantIdOf(prisma, request));
     if (!isConfigured(settings)) {
       throw new AppError("AI is not configured", {
         code: "AI_NOT_CONFIGURED",
@@ -2060,7 +2098,7 @@ export async function registerAiRoutes(
       volumeYoyPct: numOrNull(body.volumeYoyPct),
       score: numOrNull(body.score),
     };
-    const settings = await readSettings(prisma);
+    const settings = await readSettings(prisma, await tenantIdOf(prisma, request));
     if (!isConfigured(settings)) {
       throw new AppError("AI is not configured", {
         code: "AI_NOT_CONFIGURED",
@@ -2115,7 +2153,7 @@ export async function registerAiRoutes(
       commissionRate: numOrNull(body.commissionRate),
       network: typeof body.network === "string" ? body.network.trim() : "",
     };
-    const settings = await readSettings(prisma);
+    const settings = await readSettings(prisma, await tenantIdOf(prisma, request));
     if (!isConfigured(settings)) {
       throw new AppError("AI is not configured", {
         code: "AI_NOT_CONFIGURED",
@@ -2288,7 +2326,7 @@ export async function registerAiRoutes(
     const commissionValue = num(body.commissionValue);
     if (commissionValue == null || commissionValue <= 0)
       throw new ValidationError("commissionValue must be a positive number");
-    const settings = await readSettings(prisma);
+    const settings = await readSettings(prisma, await tenantIdOf(prisma, request));
     if (!isConfigured(settings)) {
       throw new AppError("AI is not configured", {
         code: "AI_NOT_CONFIGURED",
