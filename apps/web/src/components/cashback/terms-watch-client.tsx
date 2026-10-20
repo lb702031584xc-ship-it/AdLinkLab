@@ -91,7 +91,24 @@ export function TermsWatchClient() {
     const res = await checkTermsWatchAction(id);
     setCheckingId(null);
     if (res.ok) {
-      setNotice(d.termsWatch.checkDone);
+      const r = res.data.result;
+      const allowedTxt =
+        r.cashbackAllowed == null
+          ? d.termsWatch.allowed.unknown
+          : r.cashbackAllowed
+            ? d.termsWatch.allowed.yes
+            : d.termsWatch.allowed.no;
+      const bits = [
+        `${d.termsWatch.columns.status}：${d.termsWatch.status[r.status]}`,
+        r.hashChanged ? d.termsWatch.hashChanged : d.termsWatch.hashUnchanged,
+        `${d.termsWatch.columns.allowed}：${allowedTxt}`,
+      ];
+      if (r.prohibitedNewly) bits.push(d.termsWatch.prohibitedNewly);
+      if (r.pausedLinks > 0)
+        bits.push(
+          d.termsWatch.pausedLinksNote.replace("{n}", String(r.pausedLinks))
+        );
+      setNotice(`${d.termsWatch.checkDone} ${bits.join("；")}`);
       await refresh();
     } else {
       setError(res.error);

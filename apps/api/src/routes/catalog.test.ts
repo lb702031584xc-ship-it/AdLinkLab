@@ -38,11 +38,19 @@ function buildApp(
     done();
   });
   const offers = {
-    create: async (input: any) => ({
-      offer: { id: randomUUID(), ...input },
-      created: true,
-      replayed: false,
-    }),
+    // 模拟真实 OfferService.create 的持久化：写入 ctx.offer，
+    // 使"批量建 Offer → 漏斗 offersCreated 联动"可端到端验证。
+    create: async (input: any) => {
+      const offer = {
+        id: randomUUID(),
+        tenantId: TEST_TENANT,
+        name: input?.name ?? "Offer",
+        idempotencyKey: input?.idempotencyKey ?? null,
+        ...input,
+      };
+      ctx.offer.push(offer);
+      return { offer, created: true, replayed: false };
+    },
   } as unknown as OfferService;
   void registerCatalogRoutes(app, { prisma, offers });
   return { app, prisma };
@@ -553,18 +561,23 @@ describe("GET /api/v1/catalog/products 广告数过滤（minAdCount / hasAds）"
 });
 
 describe("GET /api/v1/catalog/funnel（可投流漏斗）", () => {
-  it("五段计数口径：total/passedGate/recommended/launchable/offersCreated", async () => {
+  it("六段计数口径：total/passedGate/recommended/launchable/withAds/offersCreated", async () => {
     const { ctx } = makeCatalogFakePrisma();
     ctx.affiliateNetwork.push(testNetwork());
     const merchantId = randomUUID();
-    // 1: recommended + 有链接 + active → launchable，且已建 Offer
+    // 1: recommended + 有链接 + active → launchable，且已建 Offer；adCount=5 → withAds
     const p1 = funnelProduct({
       externalId: "f1",
       recommended: true,
       promoUrl: "https://promo.test/1",
+      adCount: 5,
     });
-    // 2: recommended 但无链接 → 只进 recommended
-    const p2 = funnelProduct({ externalId: "f2", recommended: true });
+    // 2: recommended 但无链接 → 只进 recommended；adCount=0 不进 withAds
+    const p2 = funnelProduct({
+      externalId: "f2",
+      recommended: true,
+      adCount: 0,
+    });
     // 3: recommended + 有链接但被拉黑（商品级）→ 哪段都不进（除 total/passedGate）
     const p3 = funnelProduct({
       externalId: "f3",
@@ -599,6 +612,7 @@ describe("GET /api/v1/catalog/funnel（可投流漏斗）", () => {
       passedGate: 4,
       recommended: 2,
       launchable: 1,
+      withAds: 1,
       offersCreated: 1,
     });
   });
@@ -789,5 +803,187 @@ describe("评分三路径一致性（/screen 与 /calc-score）", () => {
     expect(ctx.networkProduct[0].recommendationScore).toBe(
       afterScreen.recommendationScore
     );
+  });
+});
+
+/* ── 2026-10-20 巡检回归：筛选预设 PUT 留空语义（C-1）──
+ * 口径：显式 null → 写 NULL（读时 ?? DEFAULT_PRESET 回落默认，"留空=默认"）；
+ * 字段省略 → 保持旧值；0 → 写入（=禁用该项检查）；负数/非数字 → 400。 */
+describe("PUT /api/v1/catalog/screening-preset 留空语义", () => {
+  it("显式 null → 写 NULL；GET 回显 null（生效时回落默认 150）", async () => {
+    const { ctx } = makeCatalogFakePrisma();
+    const { app } = buildApp(ctx, "member");
+    let res = await app.inject({
+      method: "PUT",
+      url: "/api/v1/catalog/screening-preset",
+      payload: { maxPrice: 200 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(ctx.catalogScreeningPreset[0].maxPrice).toBe(200);
+    // 用户清空输入框 → 前端发 null → 必须写 NULL，不能静默保持 200
+    res = await app.inject({
+      method: "PUT",
+      url: "/api/v1/catalog/screening-preset",
+      payload: { maxPrice: null },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(ctx.catalogScreeningPreset[0].maxPrice).toBeNull();
+    const get = await app.inject({
+      method: "GET",
+      url: "/api/v1/catalog/screening-preset",
+    });
+    expect(get.statusCode).toBe(200);
+    expect(get.json().preset.maxPrice).toBeNull();
+    expect(get.json().saved).toBe(true);
+  });
+
+  it("0 正常写入（=禁用该项检查）；负数/非数字 → 400", async () => {
+    const { ctx } = makeCatalogFakePrisma();
+    const { app } = buildApp(ctx, "member");
+    let res = await app.inject({
+      method: "PUT",
+      url: "/api/v1/catalog/screening-preset",
+      payload: { minReviews: 0 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(ctx.catalogScreeningPreset[0].minReviews).toBe(0);
+    res = await app.inject({
+      method: "PUT",
+      url: "/api/v1/catalog/screening-preset",
+      payload: { minReviews: -5 },
+    });
+    expect(res.statusCode).toBe(400);
+    res = await app.inject({
+      method: "PUT",
+      url: "/api/v1/catalog/screening-preset",
+      payload: { minReviews: "abc" },
+    });
+    expect(res.statusCode).toBe(400);
+    // 非法写入未污染已存值
+    expect(ctx.catalogScreeningPreset[0].minReviews).toBe(0);
+  });
+
+  it("字段省略/空串 → 保持旧值（跳过）", async () => {
+    const { ctx } = makeCatalogFakePrisma();
+    const { app } = buildApp(ctx, "member");
+    await app.inject({
+      method: "PUT",
+      url: "/api/v1/catalog/screening-preset",
+      payload: { maxPrice: 200 },
+    });
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/v1/catalog/screening-preset",
+      payload: { minReviews: 10, maxPrice: "" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(ctx.catalogScreeningPreset[0].maxPrice).toBe(200);
+    expect(ctx.catalogScreeningPreset[0].minReviews).toBe(10);
+  });
+});
+
+/* ── 2026-10-20 巡检模拟：商品库全流程数字自洽 ──
+ * 同步入库（fixture）→ 筛选 → 列表过滤组合 → 广告数 → 批量建 Offer →
+ * 漏斗每段数字必须与列表对应过滤的条数一致（"一轮轮筛选到底有没有搞"
+ * 的数字证据链）。 */
+describe("商品库全流程数字自洽（漏斗 = 列表过滤）", () => {
+  async function seedFlow() {
+    const { ctx } = makeCatalogFakePrisma();
+    ctx.affiliateNetwork.push(testNetwork());
+    const merchantId = randomUUID();
+    const p1 = funnelProduct({
+      externalId: "e1",
+      recommended: true,
+      promoUrl: "https://promo.test/1",
+      adCount: 5,
+    }); // launchable + withAds
+    const p2 = funnelProduct({
+      externalId: "e2",
+      recommended: true,
+      promoUrl: "https://promo.test/2",
+      adCount: null,
+    }); // launchable，无广告数
+    const p3 = funnelProduct({
+      externalId: "e3",
+      recommended: true,
+      promoUrl: null,
+      adCount: 3,
+    }); // 仅推荐 + withAds
+    const p4 = funnelProduct({ externalId: "e4", recommended: false, adCount: 0 });
+    const p5 = funnelProduct({
+      externalId: "e5",
+      recommended: false,
+      status: "inactive",
+      adCount: null,
+    });
+    const p6 = funnelProduct({
+      externalId: "e6",
+      recommended: true,
+      promoUrl: "https://promo.test/6",
+      adCount: 2,
+      merchantId,
+    }); // 商家黑名单 → 不进 recommended/launchable，但 withAds 照计
+    ctx.networkProduct.push(p1, p2, p3, p4, p5, p6);
+    ctx.catalogBlacklist.push(
+      blacklistRow({ entityType: "merchant", entityId: merchantId })
+    );
+    const { app } = buildApp(ctx, "member");
+    return { ctx, app, p1, p2 };
+  }
+
+  async function getJson(app: any, url: string) {
+    const res = await app.inject({ method: "GET", url });
+    expect(res.statusCode).toBe(200);
+    return res.json();
+  }
+
+  it("漏斗六段与列表过滤逐项对齐", async () => {
+    const { app } = await seedFlow();
+    const funnel = await getJson(app, "/api/v1/catalog/funnel");
+    expect(funnel).toEqual({
+      total: 6,
+      passedGate: 5,
+      recommended: 3,
+      launchable: 2,
+      withAds: 3,
+      offersCreated: 0,
+    });
+    // 每段 = 列表对应过滤的条数
+    expect((await getJson(app, "/api/v1/catalog/products")).total).toBe(
+      funnel.total
+    );
+    expect(
+      (await getJson(app, "/api/v1/catalog/products?recommended=true")).total
+    ).toBe(funnel.recommended);
+    expect(
+      (await getJson(app, "/api/v1/catalog/products?hasAds=1")).total
+    ).toBe(funnel.withAds);
+    expect(
+      (await getJson(app, "/api/v1/catalog/products?minAdCount=3")).total
+    ).toBe(2); // e1(5)、e3(3)
+    expect(
+      (
+        await getJson(
+          app,
+          "/api/v1/catalog/products?recommended=true&hasAds=1"
+        )
+      ).total
+    ).toBe(2); // e1、e3（e6 被商家黑名单排除）
+  });
+
+  it("批量建 Offer → 漏斗 offersCreated 联动；失败项原因可见", async () => {
+    const { app, p1, p2 } = await seedFlow();
+    const batch = await app.inject({
+      method: "POST",
+      url: "/api/v1/catalog/offers/batch",
+      payload: { productIds: [p1.id, p2.id, "11111111-1111-4111-8111-111111111111"] },
+    });
+    expect(batch.statusCode).toBe(200);
+    const body = batch.json();
+    expect(body.created).toHaveLength(2);
+    expect(body.failed).toHaveLength(1);
+    expect(body.failed[0].reason).toMatch(/不存在/);
+    const funnel = await getJson(app, "/api/v1/catalog/funnel");
+    expect(funnel.offersCreated).toBe(2);
   });
 });

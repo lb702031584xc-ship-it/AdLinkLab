@@ -470,7 +470,14 @@ function GroupDetail({
           )}
           {lastCheck && (
             <p className="text-xs text-ink/45">
-              {d.rateCompare.compareDone} · {new Date(lastCheck.checkedAt).toLocaleString()}
+              {d.rateCompare.compareDone}：
+              {d.rateCompare.compareSummary(
+                lastCheck.results.length,
+                lastCheck.results.filter((r) => r.ok).length,
+                lastCheck.bestPortal,
+                lastCheck.bestRate
+              )}{" "}
+              · {new Date(lastCheck.checkedAt).toLocaleString()}
             </p>
           )}
         </>

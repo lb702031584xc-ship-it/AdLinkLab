@@ -40,6 +40,17 @@ export const zh = {
     compareNow: "立即比价",
     comparing: "比价中…",
     compareDone: "比价完成",
+    compareSummary: (
+      total: number,
+      ok: number,
+      bestPortal: string | null,
+      bestRate: string | null
+    ) =>
+      `检查 ${total} 家，成功 ${ok} 家${
+        bestPortal
+          ? `，最优 ${bestPortal}${bestRate ? `（${bestRate}）` : ""}`
+          : ""
+      }`,
     alertHint: "高出主推 ≥1 个百分点时会自动生成一条切换建议（告警）。",
     latestTitle: "各家返利对比",
     historyTitle: "抓取历史",
@@ -85,6 +96,15 @@ export const en = {
     compareNow: "Compare Now",
     comparing: "Comparing…",
     compareDone: "Comparison done",
+    compareSummary: (
+      total: number,
+      ok: number,
+      bestPortal: string | null,
+      bestRate: string | null
+    ) =>
+      `checked ${total}, ok ${ok}${
+        bestPortal ? `, best ${bestPortal}${bestRate ? ` (${bestRate})` : ""}` : ""
+      }`,
     alertHint:
       "A switch suggestion (alert) is created automatically when another portal beats the primary by ≥1 percentage point.",
     latestTitle: "Portal Rate Comparison",

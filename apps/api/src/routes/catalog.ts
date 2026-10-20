@@ -9,7 +9,7 @@
  *   GET    /api/v1/catalog/sync-jobs               最近 20 条同步任务（?networkId）
  *   GET    /api/v1/catalog/sync-jobs/:id           单条同步任务（轮询进度/结果）
  *   GET    /api/v1/catalog/funnel                  ?networkId → 可投流漏斗计数
- *   GET    /api/v1/catalog/products                商品分页（白名单置顶标记；sort=id_desc 默认主键倒序；?poolStage=inbox|pool|testing|live 过滤）
+ *   GET    /api/v1/catalog/products                商品分页（白名单置顶标记；sort=id_desc 默认主键倒序；?poolStage=inbox|pool|testing/live 过滤；recommended=true 时排除黑名单，与漏斗口径一致）
  *   PATCH  /api/v1/catalog/products/:id/pool-stage {poolStage} 单条移动备选池阶段（B6 catalog-sync 门禁+审计）
  *   POST   /api/v1/catalog/products/pool-stage     {ids[], poolStage} 批量移动阶段（B6 catalog-sync 门禁+审计）
  *   GET    /api/v1/catalog/screening-preset        当前预设（无则默认 + saved:false）
@@ -345,6 +345,39 @@ export function buildAdCountWhere(query: {
   if (query.hasAds === "1" || query.hasAds === "true")
     floor = Math.max(floor, 1);
   return floor > 0 ? { adCount: { gte: floor } } : {};
+}
+
+/**
+ * 黑名单排除（商品级 + 商家级），与漏斗 recommended/launchable 口径一致：
+ * status='active' 的黑名单行。列表 `recommended=true` 过滤同样排除，
+ * 保证"漏斗推荐数 = 列表按推荐筛出的条数"自洽（2026-10-20 巡检）。
+ */
+async function getBlacklistExclusion(
+  prisma: PrismaClient,
+  tenantId: string,
+  candidateProductIds?: string[]
+): Promise<{ productIds: string[]; merchantIds: string[] }> {
+  const [pRows, mRows] = await Promise.all([
+    prisma.catalogBlacklist.findMany({
+      where: {
+        tenantId,
+        status: "active",
+        entityType: "product",
+        ...(candidateProductIds && candidateProductIds.length > 0
+          ? { entityId: { in: candidateProductIds } }
+          : {}),
+      },
+      select: { entityId: true },
+    }),
+    prisma.catalogBlacklist.findMany({
+      where: { tenantId, status: "active", entityType: "merchant" },
+      select: { entityId: true },
+    }),
+  ]);
+  return {
+    productIds: (pRows as Array<{ entityId: string }>).map((r) => r.entityId),
+    merchantIds: (mRows as Array<{ entityId: string }>).map((r) => r.entityId),
+  };
 }
 
 /**
@@ -760,6 +793,16 @@ export async function registerCatalogRoutes(
     Object.assign(where, buildAdCountWhere(query));
     // 投放国家过滤（country=US,CA）：与预设/广告数过滤叠加生效。
     Object.assign(where, buildCountryWhere(query));
+    // 仅看推荐 → 排除黑名单（商品级 + 商家级），与漏斗 recommended/launchable
+    // 口径对齐，保证"漏斗推荐数 = 列表按推荐筛出的条数"（2026-10-20 巡检）。
+    // 不用 AND（fake prisma 不支持）：直接键 notIn，真 Prisma 同样合法。
+    if (query.recommended === "true" || query.recommended === "1") {
+      const { productIds: blProducts, merchantIds: blMerchants } =
+        await getBlacklistExclusion(prisma, info.tenantId);
+      if (blProducts.length > 0) where.id = { notIn: blProducts };
+      if (blMerchants.length > 0)
+        where.merchantId = { notIn: blMerchants };
+    }
     const [total, rows] = await Promise.all([
       prisma.networkProduct.count({ where }),
       prisma.networkProduct.findMany({
@@ -919,6 +962,9 @@ export async function registerCatalogRoutes(
    * - recommended：recommended=true 且未命中黑名单（商品/商家，判定口径
    *   与商品列表的 blacklisted 标记一致：status='active' 的黑名单行）。
    * - launchable：recommended 基础上 promoUrl 非空且 status='active'。
+   * - withAds：范围内 adCount >= 1 的商品数（未计算=null 的不计入；
+   *   品牌级信号，一个品牌有广告在投时该品牌 0 佣金商品也可能被计入，
+   *   见筛选预设口径说明）。
    * - offersCreated：launchable 中已建过 Offer 的商品数；Offer 关联方式 =
    *   idempotencyKey `catalog:{networkId}:{externalId}`（与 launch-counts 同口径）。
    */
@@ -930,9 +976,12 @@ export async function registerCatalogRoutes(
       : null;
     const base: Record<string, unknown> = { tenantId: info.tenantId };
     if (networkId) base.networkId = networkId;
-    const [total, passedGate] = await Promise.all([
+    const [total, passedGate, withAds] = await Promise.all([
       prisma.networkProduct.count({ where: base }),
       prisma.networkProduct.count({ where: { ...base, status: "active" } }),
+      prisma.networkProduct.count({
+        where: { ...base, adCount: { gte: 1 } },
+      }),
     ]);
     const candidates = (await prisma.networkProduct.findMany({
       where: { ...base, recommended: true },
@@ -953,37 +1002,14 @@ export async function registerCatalogRoutes(
       status: string;
     }>;
     const candIds = candidates.map((c) => c.id);
-    const blackProductIds = new Set(
-      candIds.length === 0
-        ? []
-        : (
-            (await prisma.catalogBlacklist.findMany({
-              where: {
-                tenantId: info.tenantId,
-                status: "active",
-                entityType: "product",
-                entityId: { in: candIds },
-              },
-              select: { entityId: true },
-            })) as Array<{ entityId: string }>
-          ).map((r) => r.entityId)
-    );
-    const blackMerchantIds = new Set(
-      (
-        (await prisma.catalogBlacklist.findMany({
-          where: {
-            tenantId: info.tenantId,
-            status: "active",
-            entityType: "merchant",
-          },
-          select: { entityId: true },
-        })) as Array<{ entityId: string }>
-      ).map((r) => r.entityId)
-    );
+    const { productIds: blackProductIds, merchantIds: blackMerchantIds } =
+      await getBlacklistExclusion(prisma, info.tenantId, candIds);
+    const blackProductSet = new Set(blackProductIds);
+    const blackMerchantSet = new Set(blackMerchantIds);
     const clean = candidates.filter(
       (c) =>
-        !blackProductIds.has(c.id) &&
-        !(c.merchantId && blackMerchantIds.has(c.merchantId))
+        !blackProductSet.has(c.id) &&
+        !(c.merchantId && blackMerchantSet.has(c.merchantId))
     );
     const recommended = clean.length;
     const launchableRows = clean.filter(
@@ -1013,7 +1039,7 @@ export async function registerCatalogRoutes(
         hitKeys.has(`catalog:${c.networkId}:${c.externalId}`)
       ).length;
     }
-    return { total, passedGate, recommended, launchable, offersCreated };
+    return { total, passedGate, recommended, launchable, withAds, offersCreated };
   });
 
   /* ── 回填：从 rawData 补缺失字段（老数据同步时适配器没映射） ──
@@ -1497,11 +1523,22 @@ export async function registerCatalogRoutes(
         "maxPrice",
         "minScore",
       ]) {
-        const n = asNumber(body[k]);
-        if (n !== undefined) {
-          if (n < 0) throw new ValidationError(`${k} 不能为负数`);
-          patch[k] = n;
+        // 口径（2026-10-20 巡检定案，与 MEMORY 一致）：
+        // - 字段未提供/空串 → 跳过（保持旧值）；
+        // - 显式 null → 写 NULL，读取时 `?? DEFAULT_PRESET` 回落默认值
+        //   （"留空=默认"，如 maxPrice 留空=150 而非无上限）；
+        // - 0 → 生效时禁用该项检查；
+        // - 非数字 → 400 明错，不再静默跳过。
+        const v = body[k];
+        if (v === undefined || v === "") continue;
+        if (v === null) {
+          patch[k] = null;
+          continue;
         }
+        const n = asNumber(v);
+        if (n === undefined) throw new ValidationError(`${k} 必须是数字`);
+        if (n < 0) throw new ValidationError(`${k} 不能为负数`);
+        patch[k] = n;
       }
       if (body.autoCreateOffer !== undefined) {
         patch.autoCreateOffer = body.autoCreateOffer === true;

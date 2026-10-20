@@ -1568,7 +1568,11 @@ export function CatalogClient({
       setMsg(res.error);
       return;
     }
-    setScreenMsg(d.preset.screened);
+    setScreenMsg(
+      d.preset.screened
+        .replace("{a}", String(res.data.screened))
+        .replace("{b}", String(res.data.recommended))
+    );
     await reloadProducts(1);
     void loadFunnel();
   }
@@ -1722,7 +1726,20 @@ export function CatalogClient({
       setMsg(res.error);
       return;
     }
-    setMsg(d.products.batchResultCreated.replace("{n}", String(res.data.created.length)));
+    // 单条也可能失败/被黑名单跳过：只报"成功创建 N 个"会掩盖原因。
+    const failedOne = res.data.failed[0];
+    const skippedOne = res.data.skippedBlacklist?.[0];
+    if (res.data.created.length > 0) {
+      setMsg(d.products.batchResultCreated.replace("{n}", "1"));
+    } else if (skippedOne) {
+      setMsg(
+        `${d.products.offerOneSkipped ?? "未创建（黑名单）"}：${skippedOne.reason}`
+      );
+    } else {
+      setMsg(
+        `${d.products.offerOneFailed ?? "创建失败"}：${failedOne?.reason ?? d.products.unknownReason ?? "未知原因"}`
+      );
+    }
     await reloadProducts(page);
   }
 
@@ -1951,6 +1968,22 @@ export function CatalogClient({
         "{e}",
         String(res.data.errors.length)
       );
+      // 失败组的原因要可见：前 3 组明细 + 溢出计数。
+      const detail = res.data.errors
+        .slice(0, 3)
+        .map(
+          (e) =>
+            `${e.brand}${e.countryCode ? `(${e.countryCode})` : ""}: ${e.message}`.slice(0, 120)
+        )
+        .join("；");
+      text += `：${detail}${
+        res.data.errors.length > 3
+          ? d.products.calcAdCountErrorsMore.replace(
+              "{n}",
+              String(res.data.errors.length - 3)
+            )
+          : ""
+      }`;
     }
     setMsg(text);
     await reloadProducts(page);
@@ -2403,6 +2436,7 @@ export function CatalogClient({
             />
           </div>
         </div>
+        <p className="mt-2 text-xs text-ink/50">{d.preset.hint}</p>
 
         {isAdmin && (
           <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4">
@@ -2457,21 +2491,57 @@ export function CatalogClient({
       <section className={cardCls}>
         <h2 className="text-lg font-semibold text-ink">{d.products.title}</h2>
         {funnel && (
-          <p className="mt-2 text-sm text-ink/60">
-            {d.products.funnelTotal}{" "}
-            <span className="font-medium text-ink">{funnel.total}</span>
-            <span className="mx-1.5 text-ink/30">→</span>
-            {d.products.funnelRecommended}{" "}
-            <span className="font-medium text-ink">{funnel.recommended}</span>
-            <span className="mx-1.5 text-ink/30">→</span>
-            {d.products.funnelLaunchable}{" "}
-            <span className="font-medium text-ink">{funnel.launchable}</span>
-            <span className="mx-1.5 text-ink/30">→</span>
-            {d.products.funnelOffers}{" "}
-            <span className="font-medium text-ink">
-              {funnel.offersCreated ?? "—"}
-            </span>
-          </p>
+          <div className="mt-3">
+            <div
+              className="flex h-9 w-full overflow-hidden rounded-lg border border-ink/10 text-sm"
+              role="img"
+              aria-label={`${d.products.funnelTotal} ${funnel.total} → ${d.products.funnelRecommended} ${funnel.recommended} → ${d.products.funnelLaunchable} ${funnel.launchable} → ${d.products.funnelWithAds} ${funnel.withAds} → ${d.products.funnelOffers} ${funnel.offersCreated ?? "—"}`}
+            >
+              {(
+                [
+                  { label: d.products.funnelTotal, n: funnel.total, cls: "bg-slate-200 text-slate-800" },
+                  { label: d.products.funnelRecommended, n: funnel.recommended, cls: "bg-sky-200 text-sky-900" },
+                  { label: d.products.funnelLaunchable, n: funnel.launchable, cls: "bg-emerald-200 text-emerald-900" },
+                  { label: d.products.funnelWithAds, n: funnel.withAds, cls: "bg-amber-200 text-amber-900" },
+                  { label: d.products.funnelOffers, n: funnel.offersCreated, cls: "bg-violet-200 text-violet-900" },
+                ] as const
+              ).map((s, i) => (
+                <div
+                  key={s.label}
+                  className={`flex flex-1 items-center justify-center gap-1.5 px-2 font-medium ${s.cls}${i > 0 ? " border-l border-white/70" : ""}`}
+                  title={`${s.label}：${s.n ?? "—"}`}
+                >
+                  <span className="truncate text-xs">{s.label}</span>
+                  <span className="text-base font-bold tabular-nums">
+                    {s.n ?? "—"}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <p className="mt-1.5 text-xs text-ink/45">
+              {d.products.funnelTotal}
+              {" "}
+              <span className="font-medium text-ink/70 tabular-nums">{funnel.total}</span>
+              <span className="mx-1.5 text-ink/30">→</span>
+              {d.products.funnelRecommended}
+              {" "}
+              <span className="font-medium text-ink/70 tabular-nums">{funnel.recommended}</span>
+              <span className="mx-1.5 text-ink/30">→</span>
+              {d.products.funnelLaunchable}
+              {" "}
+              <span className="font-medium text-ink/70 tabular-nums">{funnel.launchable}</span>
+              <span className="mx-1.5 text-ink/30">→</span>
+              {d.products.funnelWithAds}
+              {" "}
+              <span className="font-medium text-ink/70 tabular-nums">{funnel.withAds}</span>
+              <span className="mx-1.5 text-ink/30">→</span>
+              {d.products.funnelOffers}
+              {" "}
+              <span className="font-medium text-ink/70 tabular-nums">
+                {funnel.offersCreated ?? "—"}
+              </span>
+            </p>
+          </div>
         )}
         <div className="mt-4 flex flex-wrap gap-2">
           {(["", "inbox", "pool", "testing", "live"] as const).map((st) => (
@@ -2578,8 +2648,11 @@ export function CatalogClient({
             </button>
           </div>
           <span className="ml-auto flex items-center gap-3">
-            <span className="text-sm text-ink/60">
-              {total} · {page}/{totalPages}
+            <span className="rounded-full bg-signal/10 px-3 py-1 text-sm font-semibold text-signal">
+              {d.products.resultCount.replace("{n}", String(total))}
+            </span>
+            <span className="text-xs text-ink/50 tabular-nums">
+              {page}/{totalPages}
             </span>
             <button
               className={btnGhost}
@@ -2649,6 +2722,7 @@ export function CatalogClient({
                 <th className="px-3 py-2.5 ">{d.products.colLandingType}</th>
                 {sortTh("reviews", d.products.colReviews)}
                 {sortTh("score", d.products.colScore)}
+                <th className="px-3 py-2.5 ">{d.products.colAds}</th>
                 <th className="min-w-[220px] max-w-[280px] px-3 py-2.5 ">
                   {d.products.colName}
                 </th>
@@ -2658,7 +2732,6 @@ export function CatalogClient({
                 <th className="px-3 py-2.5 ">{d.products.colCommissionAmount}</th>
                 <th className="px-3 py-2.5 ">{d.products.colPromo}</th>
                 <th className="px-3 py-2.5 ">{d.products.colOfferCount}</th>
-                <th className="px-3 py-2.5 ">{d.products.colAds}</th>
                 {sortTh("created", d.products.colCreated)}
                 <th className="sticky right-0 z-30 bg-inherit px-3 py-2.5  shadow-[-1px_0_0_0_rgba(0,0,0,0.06)]">
                   {d.products.colActions}
@@ -2780,6 +2853,38 @@ export function CatalogClient({
                         "—"
                       )}
                     </td>
+                    <td className="whitespace-nowrap px-3 py-2">
+                      {p.adCount == null ? (
+                        <span className="text-xs text-ink/40">
+                          {d.products.adsNotCalculated}
+                        </span>
+                      ) : (
+                        <span className="block">
+                          <span className="tabular-nums text-ink/80">
+                            {d.products.adsApprox.replace(
+                              "{n}",
+                              String(p.adCount)
+                            )}
+                          </span>
+                          {p.adCountCheckedAt &&
+                            Date.now() -
+                              new Date(p.adCountCheckedAt).getTime() >
+                              14 * 24 * 3600 * 1000 && (
+                              <span className="ml-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">
+                                {d.products.adsExpired}
+                              </span>
+                            )}
+                          {p.adCountSelf != null &&
+                            p.adCountOthers != null && (
+                              <span className="block text-[11px] text-ink/50">
+                                {d.products.adsSelfOthers
+                                  .replace("{s}", String(p.adCountSelf))
+                                  .replace("{o}", String(p.adCountOthers))}
+                              </span>
+                            )}
+                        </span>
+                      )}
+                    </td>
                     <td
                       className="min-w-[220px] max-w-[280px] px-3 py-2"
                       title={p.name}
@@ -2830,38 +2935,11 @@ export function CatalogClient({
                         <span className="text-ink/40">—</span>
                       )}
                     </td>
-                    <td className="px-3 py-2 text-ink/40">—</td>
-                    <td className="whitespace-nowrap px-3 py-2">
-                      {p.adCount == null ? (
-                        <span className="text-xs text-ink/40">
-                          {d.products.adsNotCalculated}
-                        </span>
-                      ) : (
-                        <span className="block">
-                          <span className="tabular-nums text-ink/80">
-                            ~{p.adCount} ads
-                          </span>
-                          {p.adCountCheckedAt &&
-                            Date.now() -
-                              new Date(p.adCountCheckedAt).getTime() >
-                              14 * 24 * 3600 * 1000 && (
-                              <span className="ml-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">
-                                {d.products.adsExpired}
-                              </span>
-                            )}
-                          {p.adCountSelf != null && p.adCountOthers != null && (
-                            <span className="block text-[11px] text-ink/50">
-                              {d.products.adsSelfOthers
-                                .replace("{s}", String(p.adCountSelf))
-                                .replace("{o}", String(p.adCountOthers))}
-                            </span>
-                          )}
-                        </span>
-                      )}
-                      {(launchCounts[p.id] ?? 0) > 0 && (
+                    <td className="whitespace-nowrap px-3 py-2 tabular-nums">
+                      {(launchCounts[p.id] ?? 0) > 0 ? (
                         <button
                           type="button"
-                          className="block text-[11px] tabular-nums text-signal hover:underline"
+                          className="text-[13px] text-signal hover:underline"
                           onClick={() =>
                             setHistoryFor({ id: p.id, name: p.name })
                           }
@@ -2872,6 +2950,8 @@ export function CatalogClient({
                             String(launchCounts[p.id])
                           )}
                         </button>
+                      ) : (
+                        <span className="text-ink/40">—</span>
                       )}
                     </td>
                     <td className="whitespace-nowrap px-3 py-2 text-xs tabular-nums text-ink/60">

@@ -83,6 +83,7 @@ export const zh = {
     goToPlanner: "去投流页调整 →",
     emptyDesc: "暂无出价数据。先去投流页填写 payout / CVR 并生成出价参考，这里会自动引用。",
     emptyButton: "去投流页填写 →",
+    snapshotAt: "投流页快照更新时间：{t}",
     /** #16：冷启动参考价（品类中位 CPC × 0.7 × 1.2）+ 阶梯调价建议，全部只读。 */
     coldStartTitle: "冷启动参考价（只读建议）",
     coldStartCategory: "判读品类",
@@ -377,6 +378,7 @@ export const en = {
     goToPlanner: "Adjust on the traffic planner →",
     emptyDesc: "No bid data yet. Fill payout / CVR on the traffic planner page first; this card will pick it up automatically.",
     emptyButton: "Go to traffic planner →",
+    snapshotAt: "Traffic-planner snapshot updated: {t}",
     /** #16: cold-start reference price (category median CPC × 0.7 × 1.2) + step-ladder advice, read-only. */
     coldStartTitle: "Cold-start reference price (read-only suggestion)",
     coldStartCategory: "Detected category",

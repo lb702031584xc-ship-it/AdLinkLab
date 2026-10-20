@@ -171,3 +171,20 @@ Cookie 以 AES-256-GCM 加密存储（`session_ref`），明文永不记日志�
   `GET /api/v1/networks` 只返回 `sessionUsername` / `sessionPasswordSet`（布尔）/
   `sessionValidDays` / `lastLoginAt` / `sessionExpiresAt`，**永不返回密码及任何可逆字段**。
 - Cookie 粘贴方式保留：已有账号密码的用户也可只用 Cookie，不强制二选一。
+
+## 模板验证 checklist：mapSessionItem 必映射字段（2026-10-20 巡检 A-3）
+
+各 `*-session-adapter.ts` 的 `mapSessionItem` 在模板被验证启用前，必须补齐
+以下字段，否则入库时静默丢失（SessionProduct 缺 key → upsert 写 null）：
+
+- `countryCode`：显式字段（`country_code`/`countryCode`/`country`）优先，
+  缺失时按 `market_place`/`marketPlace` 用 `countryCodeFromMarketPlace` 派生，
+  都缺失 → `null`（不猜国家）；
+- `landingPageType`：`deriveLandingPageType(promoUrl)`（amazon_product /
+  amazon_storefront / dtc / unknown）；
+- `priceCurrency`（如有）：商品货币，注意与佣金口径 `%` 区分。
+
+前车之鉴：2026-10-20 发现 YP `mapSessionItem` 漏掉 `countryCode`/
+`landingPageType`（API 模式 `mapApiItem` 有、session 模式没有），导致切
+session 模式的账号投放国家列恒为「—」。已修复并补回归测试
+（`yeahpromos-adapter.test.ts` "pullViaSession（session 模式字段完整性）"）。

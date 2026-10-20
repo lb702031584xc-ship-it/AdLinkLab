@@ -1265,6 +1265,8 @@ export function AdsAutoClient({
   const [categoryKeyUsed, setCategoryKeyUsed] = useState<string | null>(null);
   /** 目标产出比：只读，取自投流页快照（投流页是唯一输入地）。 */
   const [plannerTargetRatio, setPlannerTargetRatio] = useState<string | null>(null);
+  /** 投流页快照更新时间：展示给用户，避免 2.5s 自动保存竞态下读到旧快照而不自知。 */
+  const [plannerSnapshotAt, setPlannerSnapshotAt] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -1272,6 +1274,7 @@ export function AdsAutoClient({
         // 库里 Offer 按 offerId 读快照；手动 Offer（offerId 为空）读手动快照（offerId null）。
         const res = await loadWorkStateAction("traffic-planner", offerId);
         if (cancelled || !res.ok || !res.data.state) return;
+        if (res.data.updatedAt) setPlannerSnapshotAt(res.data.updatedAt);
         const snap = res.data.state as Record<string, unknown>;
         const str = (v: unknown) =>
           typeof v === "string" ? v.trim() : typeof v === "number" ? String(v) : "";
@@ -2023,6 +2026,14 @@ export function AdsAutoClient({
           <div className={`mt-4 ${cardClass}`}>
             <h3 className="text-sm font-semibold text-ink">{d.bidStrategy.title}</h3>
             <p className="mt-1 text-sm text-ink/65">{d.bidStrategy.description}</p>
+            {plannerSnapshotAt && (
+              <p className="mt-1 text-xs text-ink/50">
+                {d.bidStrategy.snapshotAt.replace(
+                  "{t}",
+                  new Date(plannerSnapshotAt).toLocaleString()
+                )}
+              </p>
+            )}
             {plannerProfit ? (
               <>
                 <dl className="mt-3 grid grid-cols-2 gap-2 text-sm md:grid-cols-4">

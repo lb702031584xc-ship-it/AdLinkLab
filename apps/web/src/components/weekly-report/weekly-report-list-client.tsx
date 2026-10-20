@@ -36,7 +36,18 @@ export function WeeklyReportListClient({
     try {
       const res = await generateWeeklyReportAction();
       if (res.ok) {
-        setMsg(d.list.generatedOk);
+        const r = res.data.data;
+        setMsg(
+          d.list.generatedOk +
+            " " +
+            d.list.generatedSummary
+              .replace("{s}", r.weekStart)
+              .replace("{e}", r.weekEnd)
+              .replace("{c}", String(r.conversions))
+              .replace("{a}", String(r.alerts))
+              .replace("{t}", String(r.newTasks))
+              .replace("{d}", String(r.deadLinks))
+        );
         router.refresh();
       } else {
         setMsg(`${d.list.generateFailedPrefix}${res.error}`);

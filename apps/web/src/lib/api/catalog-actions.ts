@@ -163,6 +163,8 @@ export interface CatalogFunnel {
   passedGate: number;
   recommended: number;
   launchable: number;
+  /** adCount >= 1 的商品数（未计算的不计入）。 */
+  withAds: number;
   /** 算不出时后端给 null → UI 显示 "—"。 */
   offersCreated: number | null;
 }

@@ -466,6 +466,13 @@ export class YeahPromosAdapter
     const commissionRate = sessionAsNumber(
       pickField(item, "commission_rate", "commissionRate", "commission_pct")
     );
+    // 与 API 模式 mapApiItem 同口径：countryCode（显式字段优先，缺失时按
+    // market_place 派生）+ landingPageType（按推广链接推导）。2026-10-20
+    // 巡检发现 session 路径曾漏掉这两个字段，导致国家列恒为「—」。
+    const url =
+      sessionAsString(
+        pickField(item, "promo_url", "promoUrl", "promotion_url", "track_link", "amazon_track_link", "url", "link")
+      ) ?? null;
     return {
       externalId,
       name,
@@ -475,10 +482,16 @@ export class YeahPromosAdapter
       termsText:
         sessionAsString(pickField(item, "terms", "terms_text", "description")) ??
         null,
-      url:
+      url,
+      countryCode:
         sessionAsString(
-          pickField(item, "promo_url", "promoUrl", "promotion_url", "track_link", "amazon_track_link", "url", "link")
-        ) ?? null,
+          pickField(item, "country_code", "countryCode", "country")
+        ) ??
+        countryCodeFromMarketPlace(
+          pickField(item, "market_place", "marketPlace")
+        ) ??
+        null,
+      landingPageType: deriveLandingPageType(url),
       brand: sessionAsString(pickField(item, "brand", "brand_name", "brandName")),
       asin: sessionAsString(pickField(item, "asin")),
       price: ypPriceToNumber(
@@ -489,10 +502,7 @@ export class YeahPromosAdapter
       reviewCount: sessionAsNumber(
         pickField(item, "review_count", "reviewCount", "reviews", "total_reviews", "totalReviews")
       ),
-      promoUrl:
-        sessionAsString(
-          pickField(item, "promo_url", "promoUrl", "promotion_url", "track_link", "amazon_track_link", "url", "link")
-        ) ?? null,
+      promoUrl: url,
       rawData: item,
     };
   }

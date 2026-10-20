@@ -133,11 +133,32 @@ export function CashbackRotationsClient() {
     const res = await rotateGroupNowAction(group.id);
     setBusyGroup(null);
     if (res.ok) {
-      setNotice(
-        res.data.result.rotated
-          ? d.rotations.rotateDone
-          : d.rotations.rotateSkipped
-      );
+      const r = res.data.result;
+      if (r.rotated) {
+        setNotice(
+          d.rotations.rotateDoneCount.replace(
+            "{n}",
+            String(r.updatedTrackingLinkIds.length)
+          )
+        );
+      } else {
+        // 后端 skipped 带英文原因码，转成中文展示，未知码原样透出。
+        const reasonMap: Record<string, string> = {
+          "no active offers with tracking links": "组内没有带跟踪链接的有效 offer",
+          "tracking links missing": "跟踪链接缺失",
+          "group not found": "轮换组不存在",
+        };
+        setNotice(
+          r.skipped && reasonMap[r.skipped]
+            ? d.rotations.rotateSkippedReason.replace(
+                "{reason}",
+                reasonMap[r.skipped]
+              )
+            : r.skipped
+              ? d.rotations.rotateSkippedReason.replace("{reason}", r.skipped)
+              : d.rotations.rotateSkipped
+        );
+      }
       await refresh();
     } else {
       setError(res.error);

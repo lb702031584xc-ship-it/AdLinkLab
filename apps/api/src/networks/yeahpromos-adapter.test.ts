@@ -804,3 +804,73 @@ describe("countryCodeFromMarketPlace（market_place → 投放国家）", () => 
     expect(countryCodeFromMarketPlace(42)).toBeNull();
   });
 });
+
+/* ── 2026-10-20 巡检回归：session 模式 mapSessionItem 不得丢 countryCode/landingPageType ── */
+describe("YeahPromosAdapter.pullViaSession（session 模式字段完整性）", () => {
+  function sessionCtx(list: unknown[]) {
+    const fetchImpl = (async () =>
+      jsonResponse({ data: { list, has_more: false } })) as typeof fetch;
+    return ctxWith(fetchImpl);
+  }
+
+  it("countryCode 走显式字段；缺失时按 market_place 派生；landingPageType 按链接推导", async () => {
+    const ctx = sessionCtx([
+      {
+        product_id: 3208738,
+        product_name: "CA Widget",
+        market_place: "amazon.ca",
+        promo_url: "https://www.amazon.ca/dp/B0TEST123",
+        country_code: "CA",
+        commission_amount: 12.5,
+        commission_rate: 10,
+        currency: "USD",
+        brand: "TestBrand",
+        price: 120,
+        review_count: 300,
+      },
+      {
+        product_id: 3208739,
+        product_name: "UK Widget",
+        market_place: "amazon.co.uk",
+        promo_url: "https://promo.test/track/abc",
+        commission_amount: 9,
+        currency: "USD",
+        brand: "TestBrand",
+        price: 90,
+      },
+    ]);
+    const products = await new YeahPromosAdapter().pullViaSession({
+      cookie: "session=abc",
+      baseUrl: "https://yeahpromos.com",
+      fetchImpl: ctx.fetchImpl,
+      ssrfCheck: ctx.ssrfCheck,
+    });
+    expect(products).toHaveLength(2);
+    // 显式 country_code 优先
+    expect(products[0].countryCode).toBe("CA");
+    expect(products[0].landingPageType).toBe("amazon_product");
+    expect(products[0].url).toBe("https://www.amazon.ca/dp/B0TEST123");
+    // 无显式字段 → market_place 派生；非 Amazon 链接 → dtc
+    expect(products[1].countryCode).toBe("GB");
+    expect(products[1].landingPageType).toBe("dtc");
+    expect(products[1].promoUrl).toBe("https://promo.test/track/abc");
+  });
+
+  it("country_code 与 market_place 都缺失 → countryCode 为 null（不猜）", async () => {
+    const ctx = sessionCtx([
+      {
+        product_id: 1,
+        product_name: "NoCountry",
+        promo_url: "https://promo.test/x",
+      },
+    ]);
+    const products = await new YeahPromosAdapter().pullViaSession({
+      cookie: "session=abc",
+      baseUrl: "https://yeahpromos.com",
+      fetchImpl: ctx.fetchImpl,
+      ssrfCheck: ctx.ssrfCheck,
+    });
+    expect(products[0].countryCode).toBeNull();
+    expect(products[0].landingPageType).toBe("dtc");
+  });
+});
