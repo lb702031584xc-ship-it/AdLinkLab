@@ -321,6 +321,119 @@ export async function registerCatalogRoutes(
     }
   );
 
+  /**
+   * 历史投放次数（批量）：商品 → 由它建的 Offer（idempotencyKey=catalog:<networkId>:<externalId>）
+   * → 投放档案条数。只读聚合，真实数据，未投过的商品计 0。
+   */
+  app.get("/api/v1/catalog/products/launch-counts", async (request) => {
+    const info = await requireSession(deps, request);
+    const q = request.query as Record<string, unknown>;
+    const ids = String(typeof q.ids === "string" ? q.ids : "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 100);
+    const counts: Record<string, number> = {};
+    if (ids.length === 0) return { counts };
+    const products = (await prisma.networkProduct.findMany({
+      where: { tenantId: info.tenantId, id: { in: ids } },
+      select: { id: true, networkId: true, externalId: true },
+    })) as Array<{ id: string; networkId: string; externalId: string }>;
+    if (products.length === 0) return { counts };
+    const keys = products.map(
+      (p) => `catalog:${p.networkId}:${p.externalId}`
+    );
+    const offers = (await prisma.offer.findMany({
+      where: { tenantId: info.tenantId, idempotencyKey: { in: keys } },
+      select: { id: true, idempotencyKey: true },
+    })) as Array<{ id: string; idempotencyKey: string | null }>;
+    const offerToProduct = new Map<string, string>();
+    for (const o of offers) {
+      const p = products.find(
+        (pp) => `catalog:${pp.networkId}:${pp.externalId}` === o.idempotencyKey
+      );
+      if (p) offerToProduct.set(o.id, p.id);
+    }
+    if (offerToProduct.size > 0) {
+      const archives = (await prisma.launchArchive.findMany({
+        where: {
+          tenantId: info.tenantId,
+          offerId: { in: [...offerToProduct.keys()] },
+        },
+        select: { offerId: true },
+      })) as Array<{ offerId: string | null }>;
+      for (const a of archives) {
+        if (!a.offerId) continue;
+        const pid = offerToProduct.get(a.offerId);
+        if (pid) counts[pid] = (counts[pid] ?? 0) + 1;
+      }
+    }
+    return { counts };
+  });
+
+  /** 单个商品的投放历史：建过的 Offer + 每次投放档案（真实数据）。 */
+  app.get("/api/v1/catalog/products/:id/launch-history", async (request) => {
+    const info = await requireSession(deps, request);
+    const { id } = request.params as { id: string };
+    const product = (await prisma.networkProduct.findFirst({
+      where: { tenantId: info.tenantId, id },
+      select: { id: true, networkId: true, externalId: true, name: true },
+    })) as { id: string; networkId: string; externalId: string; name: string } | null;
+    if (!product) {
+      return { offers: [], archives: [] };
+    }
+    const key = `catalog:${product.networkId}:${product.externalId}`;
+    const offers = (await prisma.offer.findMany({
+      where: { tenantId: info.tenantId, idempotencyKey: key },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, name: true, status: true, createdAt: true },
+    })) as Array<{ id: string; name: string; status: string; createdAt: Date }>;
+    const archives =
+      offers.length === 0
+        ? []
+        : ((await prisma.launchArchive.findMany({
+            where: {
+              tenantId: info.tenantId,
+              offerId: { in: offers.map((o) => o.id) },
+            },
+            orderBy: { createdAt: "desc" },
+            select: {
+              id: true,
+              offerName: true,
+              decision: true,
+              impressions: true,
+              clicks: true,
+              spend: true,
+              conversions: true,
+              revenue: true,
+              launchedAt: true,
+              endedAt: true,
+              createdAt: true,
+            },
+          })) as Array<Record<string, unknown>>);
+    return {
+      offers: offers.map((o) => ({
+        offerId: o.id,
+        name: o.name,
+        status: o.status,
+        createdAt: o.createdAt.toISOString(),
+      })),
+      archives: archives.map((a) => ({
+        id: a.id,
+        offerName: a.offerName,
+        decision: a.decision,
+        impressions: a.impressions,
+        clicks: a.clicks,
+        spend: a.spend,
+        conversions: a.conversions,
+        revenue: a.revenue,
+        launchedAt: a.launchedAt ? (a.launchedAt as Date).toISOString() : null,
+        endedAt: a.endedAt ? (a.endedAt as Date).toISOString() : null,
+        createdAt: (a.createdAt as Date).toISOString(),
+      })),
+    };
+  });
+
   app.get("/api/v1/catalog/products", async (request) => {
     const info = await requireSession(deps, request);
     const query = request.query as Record<string, unknown>;

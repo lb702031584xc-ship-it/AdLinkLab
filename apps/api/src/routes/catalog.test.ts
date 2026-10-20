@@ -346,3 +346,116 @@ describe("POST /api/v1/catalog/session-credentials（登录账号）", () => {
     expect(res.statusCode).toBe(403);
   });
 });
+
+describe("GET /api/v1/catalog/products/launch-counts（历史投放次数）", () => {
+  const prod = (overrides: Record<string, any> = {}) => ({
+    id: randomUUID(),
+    tenantId: TEST_TENANT,
+    networkId: TEST_NETWORK,
+    externalId: "62837599",
+    name: "Midea 产品",
+    ...overrides,
+  });
+  it("offer.idempotencyKey 挂钩 → 投放档案条数聚合", async () => {
+    const { ctx } = makeCatalogFakePrisma();
+    const p = prod();
+    ctx.networkProduct.push(p);
+    const key = `catalog:${TEST_NETWORK}:62837599`;
+    const offer = {
+      id: randomUUID(),
+      tenantId: TEST_TENANT,
+      name: "Midea Offer",
+      idempotencyKey: key,
+    };
+    ctx.offer.push(offer);
+    ctx.launchArchive.push({
+      id: randomUUID(),
+      tenantId: TEST_TENANT,
+      offerId: offer.id,
+      offerName: "Midea Offer",
+    });
+    ctx.launchArchive.push({
+      id: randomUUID(),
+      tenantId: TEST_TENANT,
+      offerId: offer.id,
+      offerName: "Midea Offer",
+    });
+    // 其他租户的档案不计入
+    ctx.launchArchive.push({
+      id: randomUUID(),
+      tenantId: "other-tenant",
+      offerId: offer.id,
+      offerName: "Midea Offer",
+    });
+    const { app } = buildApp(ctx, "member");
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/catalog/products/launch-counts?ids=${p.id}`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().counts[p.id]).toBe(2);
+  });
+
+  it("没投过 → 返回 0（不编数）", async () => {
+    const { ctx } = makeCatalogFakePrisma();
+    const p = prod({ externalId: "99999999" });
+    ctx.networkProduct.push(p);
+    const { app } = buildApp(ctx, "member");
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/catalog/products/launch-counts?ids=${p.id}`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().counts[p.id] ?? 0).toBe(0);
+  });
+});
+
+describe("GET /api/v1/catalog/products/:id/launch-history（单条投放历史）", () => {
+  it("返回 Offer + 投放档案明细", async () => {
+    const { ctx } = makeCatalogFakePrisma();
+    const p = {
+      id: randomUUID(),
+      tenantId: TEST_TENANT,
+      networkId: TEST_NETWORK,
+      externalId: "62837599",
+      name: "Midea 产品",
+    };
+    ctx.networkProduct.push(p);
+    const offer = {
+      id: randomUUID(),
+      tenantId: TEST_TENANT,
+      name: "Midea Offer",
+      status: "ACTIVE",
+      idempotencyKey: `catalog:${TEST_NETWORK}:62837599`,
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+    };
+    ctx.offer.push(offer);
+    ctx.launchArchive.push({
+      id: randomUUID(),
+      tenantId: TEST_TENANT,
+      offerId: offer.id,
+      offerName: "Midea Offer",
+      decision: "go",
+      impressions: 1000,
+      clicks: 50,
+      spend: 10,
+      conversions: 2,
+      revenue: 16,
+      launchedAt: new Date("2026-01-02T00:00:00Z"),
+      endedAt: new Date("2026-01-03T00:00:00Z"),
+      createdAt: new Date("2026-01-03T00:00:00Z"),
+    });
+    const { app } = buildApp(ctx, "member");
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/catalog/products/${p.id}/launch-history`,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.offers).toHaveLength(1);
+    expect(body.offers[0].name).toBe("Midea Offer");
+    expect(body.archives).toHaveLength(1);
+    expect(body.archives[0].decision).toBe("go");
+    expect(body.archives[0].clicks).toBe(50);
+  });
+});

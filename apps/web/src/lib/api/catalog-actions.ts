@@ -699,3 +699,43 @@ export async function setScoreCalcPausedAction(paused: boolean) {
     }
   ), []);
 }
+
+/* ── 历史投放记录（商品 → Offer → 投放档案；真实数据） ── */
+
+export interface ProductLaunchArchive {
+  id: string;
+  offerName: string;
+  decision: string | null;
+  impressions: number | null;
+  clicks: number | null;
+  spend: number | null;
+  conversions: number | null;
+  revenue: number | null;
+  launchedAt: string | null;
+  endedAt: string | null;
+  createdAt: string;
+}
+
+export interface ProductLaunchHistory {
+  offers: Array<{ offerId: string; name: string; status: string; createdAt: string }>;
+  archives: ProductLaunchArchive[];
+}
+
+/** 批量查投放次数（列表用；无记录 → 0，不编数）。 */
+export async function getProductLaunchCountsAction(ids: string[]) {
+  if (ids.length === 0) return { ok: true as const, data: { counts: {} as Record<string, number> } };
+  return attempt(() =>
+    apiFetch<{ counts: Record<string, number> }>(
+      `/api/v1/catalog/products/launch-counts?ids=${encodeURIComponent(ids.join(","))}`
+    )
+  , []);
+}
+
+/** 单个商品的投放历史（弹窗用）。 */
+export async function getProductLaunchHistoryAction(productId: string) {
+  return attempt(() =>
+    apiFetch<ProductLaunchHistory>(
+      `/api/v1/catalog/products/${encodeURIComponent(productId)}/launch-history`
+    )
+  , []);
+}

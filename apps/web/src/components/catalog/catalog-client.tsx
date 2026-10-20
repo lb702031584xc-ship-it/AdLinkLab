@@ -19,6 +19,7 @@ import {
   getSessionStatusAction,
   importBlacklistAction,
   listBlacklistAction,
+  getProductLaunchCountsAction,
   listCatalogProductsAction,
   listMerchantSignalsAction,
   listWhitelistAction,
@@ -45,6 +46,7 @@ import {
   type SyncResult,
   type WhitelistEntry,
 } from "@/lib/api/catalog-actions";
+import { LaunchHistoryModal } from "./launch-history-modal";
 import { selectableProducts } from "./list-helpers";
 import Link from "next/link";
 
@@ -1497,6 +1499,9 @@ export function CatalogClient({
   const [batching, setBatching] = useState(false);
   const [batchResult, setBatchResult] = useState<BatchCreateResult | null>(null);
   const [backfilling, setBackfilling] = useState(false);
+  /** 历史投放次数（商品 id → 投放档案条数；无记录 → 0，不编数）。 */
+  const [launchCounts, setLaunchCounts] = useState<Record<string, number>>({});
+  const [historyFor, setHistoryFor] = useState<{ id: string; name: string } | null>(null);
 
   async function reloadProducts(targetPage: number, qOverride?: string) {
     if (!selectedId) {
@@ -1521,6 +1526,9 @@ export function CatalogClient({
       return;
     }
     setProducts(res.data.items);
+    void getProductLaunchCountsAction(res.data.items.map((p) => p.id)).then((r) => {
+      if (r.ok) setLaunchCounts(r.data.counts);
+    });
     setTotal(res.data.total);
     setPage(res.data.page);
     setPresetExcluded(res.data.presetExcluded ?? 0);
@@ -2467,7 +2475,25 @@ export function CatalogClient({
                       )}
                     </td>
                     <td className="px-3 py-2 text-ink/40">—</td>
-                    <td className="px-3 py-2 text-ink/40">—</td>
+                    <td className="whitespace-nowrap px-3 py-2">
+                      {(launchCounts[p.id] ?? 0) > 0 ? (
+                        <button
+                          type="button"
+                          className="text-xs tabular-nums text-signal hover:underline"
+                          onClick={() =>
+                            setHistoryFor({ id: p.id, name: p.name })
+                          }
+                          title={d.products.launchHistoryTip ?? ""}
+                        >
+                          {(d.products.launchTimes ?? "{n} 次").replace(
+                            "{n}",
+                            String(launchCounts[p.id])
+                          )}
+                        </button>
+                      ) : (
+                        <span className="text-xs text-ink/40">—</span>
+                      )}
+                    </td>
                     <td className="whitespace-nowrap px-3 py-2 text-xs tabular-nums text-ink/60">
                       {formatDate(p.createdAt)}
                     </td>
@@ -2501,6 +2527,14 @@ export function CatalogClient({
           )}
           {loadingProducts && (
             <p className="py-6 text-center text-sm text-ink/50">…</p>
+          )}
+          {historyFor && (
+            <LaunchHistoryModal
+              productId={historyFor.id}
+              productName={historyFor.name}
+              lang={lang}
+              onClose={() => setHistoryFor(null)}
+            />
           )}
         </div>
 
