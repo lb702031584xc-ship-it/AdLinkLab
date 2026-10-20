@@ -2289,14 +2289,14 @@ export function CatalogClient({
           className="mt-2 cursor-grab overflow-x-auto rounded-xl border border-ink/10 active:cursor-grabbing"
         >
           <table
-            className="w-full min-w-[1900px] border-collapse text-xs"
+            className="w-full min-w-[1900px] border-collapse text-sm"
             style={{
               fontFamily:
                 '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif',
             }}
           >
             <thead className="sticky top-0 z-20">
-              <tr className="bg-[#f7f8fa] text-left text-xs text-ink/55">
+              <tr className="bg-[#f7f8fa] text-left text-sm text-ink/55 [&>th]:whitespace-nowrap">
                 <th className="sticky left-0 z-30 w-[36px] min-w-[36px] bg-inherit px-2 py-2.5">
                   <input
                     type="checkbox"
@@ -2428,7 +2428,7 @@ export function CatalogClient({
                       className="min-w-[220px] max-w-[280px] px-3 py-2"
                       title={p.name}
                     >
-                      <span className="line-clamp-2 font-medium text-ink">{p.name}</span>
+                      <span className="line-clamp-2 text-[15px] font-semibold leading-snug text-ink">{p.name}</span>
                       <span className="mt-1 inline-flex gap-1 align-middle">
                         {p.recommended && (
                           <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
