@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildAdCountWhere,
+  buildCountryWhere,
   buildPresetWhere,
   buildProductOrderBy,
   extractProductId,
@@ -85,6 +86,28 @@ describe("buildAdCountWhere（广告投放数量过滤）", () => {
     });
     expect(buildAdCountWhere({ minAdCount: 0, hasAds: "1" })).toEqual({
       adCount: { gte: 1 },
+    });
+  });
+});
+
+describe("buildCountryWhere（投放国家过滤）", () => {
+  it("无参数/非法值 → 不过滤", () => {
+    expect(buildCountryWhere({})).toEqual({});
+    expect(buildCountryWhere({ country: "" })).toEqual({});
+    expect(buildCountryWhere({ country: "USA" })).toEqual({});
+    expect(buildCountryWhere({ country: "C1" })).toEqual({});
+    expect(buildCountryWhere({ country: 12 })).toEqual({});
+  });
+
+  it("单个国家 → 等值过滤（小写自动转大写）", () => {
+    expect(buildCountryWhere({ country: "ca" })).toEqual({
+      countryCode: "CA",
+    });
+  });
+
+  it("多个国家 → in 过滤，去重且忽略非法片段", () => {
+    expect(buildCountryWhere({ country: "US, ca ,US,x" })).toEqual({
+      countryCode: { in: ["US", "CA"] },
     });
   });
 });

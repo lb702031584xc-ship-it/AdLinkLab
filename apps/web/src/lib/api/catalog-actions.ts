@@ -687,6 +687,8 @@ export async function listCatalogProductsAction(params: {
   sort?: string;
   /** 广告投放数量下限（adCount >= 值；未计算的不命中）。 */
   minAdCount?: number;
+  /** 投放国家代码（两位大写，如 CA；不传 = 不限国家）。 */
+  country?: string;
   /** true → 只看有广告在投的（adCount > 0）。 */
   hasAds?: boolean;
   /** 补强 #3：备选池阶段过滤（不传 = 全部阶段）。 */
@@ -701,6 +703,7 @@ export async function listCatalogProductsAction(params: {
   if (params.sort) qs.set("sort", params.sort);
   if (params.minAdCount != null && params.minAdCount > 0)
     qs.set("minAdCount", String(Math.floor(params.minAdCount)));
+  if (params.country) qs.set("country", params.country);
   if (params.hasAds) qs.set("hasAds", "1");
   if (params.poolStage) qs.set("poolStage", params.poolStage);
   qs.set("page", String(params.page ?? 1));
@@ -715,6 +718,18 @@ export async function listCatalogProductsAction(params: {
         presetApplied?: boolean;
         presetExcluded?: number;
       }>(`/api/v1/catalog/products?${qs.toString()}`),
+    []
+  );
+}
+
+/** 投放国家清单（当前租户在库商品出现过的国家代码，供列表国家筛选下拉）。 */
+export async function listCatalogCountriesAction(networkId?: string) {
+  const qs = new URLSearchParams();
+  if (networkId) qs.set("networkId", networkId);
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return attempt(
+    () =>
+      apiFetch<{ countries: string[] }>(`/api/v1/catalog/countries${suffix}`),
     []
   );
 }

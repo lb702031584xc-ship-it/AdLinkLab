@@ -54,6 +54,7 @@ import {
   type ScreeningPreset,
 } from "../services/catalog-screening.js";
 import { calcBrandAdCounts } from "../services/brand-ad-count.js";
+import { countryCodeFromMarketPlace } from "../networks/yeahpromos-adapter.js";
 import {
   addToBlacklist,
   addWhitelistEntry,
@@ -344,6 +345,30 @@ export function buildAdCountWhere(query: {
   if (query.hasAds === "1" || query.hasAds === "true")
     floor = Math.max(floor, 1);
   return floor > 0 ? { adCount: { gte: floor } } : {};
+}
+
+/**
+ * 投放国家过滤（列表查询参数 country，逗号分隔可多选，如 country=US,CA）：
+ * 只接受两位大写国家代码，非法片段忽略；无有效代码 → 不过滤。
+ * countryCode 为 null（国家未知）的商品不命中——与广告数过滤同口径：
+ * 用户主动按国家筛选时，没数据的不能冒充属于某国。
+ */
+export function buildCountryWhere(query: {
+  country?: unknown;
+}): Record<string, unknown> {
+  const raw = typeof query.country === "string" ? query.country : "";
+  const codes = [
+    ...new Set(
+      raw
+        .split(",")
+        .map((s) => s.trim().toUpperCase())
+        .filter((s) => /^[A-Z]{2}$/.test(s))
+    ),
+  ];
+  if (codes.length === 0) return {};
+  return codes.length === 1
+    ? { countryCode: codes[0] }
+    : { countryCode: { in: codes } };
 }
 
 /** 补强 #3：备选池阶段（与 schema NetworkProduct.poolStage 口径一致）。 */
@@ -733,6 +758,8 @@ export async function registerCatalogRoutes(
     }
     // 广告投放数量过滤（minAdCount / hasAds=1）：与预设过滤叠加生效。
     Object.assign(where, buildAdCountWhere(query));
+    // 投放国家过滤（country=US,CA）：与预设/广告数过滤叠加生效。
+    Object.assign(where, buildCountryWhere(query));
     const [total, rows] = await Promise.all([
       prisma.networkProduct.count({ where }),
       prisma.networkProduct.findMany({
@@ -860,6 +887,27 @@ export async function registerCatalogRoutes(
       presetApplied,
       presetExcluded,
     };
+  });
+
+  /* ── 投放国家清单（当前租户在库商品出现过的国家，供列表国家筛选下拉） ── */
+  app.get("/api/v1/catalog/countries", async (request) => {
+    const info = await requireSession(deps, request);
+    const query = request.query as Record<string, unknown>;
+    const where: Record<string, unknown> = {
+      tenantId: info.tenantId,
+      countryCode: { not: null },
+    };
+    if (query.networkId) where.networkId = assertId(query.networkId, "networkId");
+    const rows = (await prisma.networkProduct.findMany({
+      where,
+      select: { countryCode: true },
+      distinct: ["countryCode"],
+    })) as Array<{ countryCode: string | null }>;
+    const countries = rows
+      .map((r) => (typeof r.countryCode === "string" ? r.countryCode : ""))
+      .filter((c) => /^[A-Z]{2}$/.test(c))
+      .sort();
+    return { countries };
   });
 
   /* ── 可投流漏斗计数 ──
@@ -1023,6 +1071,7 @@ export async function registerCatalogRoutes(
             currency: true,
             promoUrl: true,
             landingPageType: true,
+            countryCode: true,
             rawData: true,
           },
           skip,
@@ -1038,6 +1087,7 @@ export async function registerCatalogRoutes(
           currency: string | null;
           promoUrl: string | null;
           landingPageType: string | null;
+          countryCode: string | null;
           rawData: unknown;
         }>;
         if (rows.length === 0) break;
@@ -1082,6 +1132,20 @@ export async function registerCatalogRoutes(
               r.promoUrl ?? raw.partnerboost_link ?? raw.link ?? raw.url
             );
             if (t !== "unknown") data.landingPageType = t;
+          }
+          if (r.countryCode == null) {
+            // YP 商品的国家在 rawData.market_place（如 amazon.ca → CA）；
+            // 其他来源可能有 country_code/country 原值。只补空，不覆盖。
+            const rawCc =
+              typeof raw.country_code === "string" && raw.country_code.trim()
+                ? raw.country_code.trim().toUpperCase()
+                : typeof raw.countryCode === "string" && raw.countryCode.trim()
+                  ? raw.countryCode.trim().toUpperCase()
+                  : null;
+            const cc =
+              rawCc ??
+              countryCodeFromMarketPlace(raw.market_place ?? raw.marketPlace);
+            if (cc && /^[A-Z]{2}$/.test(cc)) data.countryCode = cc;
           }
           // externalId 归一化：哈希串 → rawData 里的数字 product_id
           const numericPid = extractProductId(r.rawData, null);

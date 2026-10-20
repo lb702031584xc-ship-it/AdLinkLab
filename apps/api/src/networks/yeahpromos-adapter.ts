@@ -352,6 +352,46 @@ function isYpRateLimitText(text: string): boolean {
 }
 
 /**
+ * Amazon 站点域名 → 国家代码（2026-10-20 商品真实响应证实）：YP 商品的国家
+ * 不在 country_code 字段里，而在 market_place（如 "amazon.ca"）。投放国家
+ * 列、广告数按国家分组、国家筛选都依赖它。表外站点一律 null（不猜）。
+ */
+const MARKET_PLACE_COUNTRY: Record<string, string> = {
+  "amazon.com": "US",
+  "amazon.ca": "CA",
+  "amazon.co.uk": "GB",
+  "amazon.de": "DE",
+  "amazon.fr": "FR",
+  "amazon.it": "IT",
+  "amazon.es": "ES",
+  "amazon.com.au": "AU",
+  "amazon.co.jp": "JP",
+  "amazon.com.mx": "MX",
+  "amazon.com.br": "BR",
+  "amazon.in": "IN",
+  "amazon.nl": "NL",
+  "amazon.se": "SE",
+  "amazon.pl": "PL",
+  "amazon.sg": "SG",
+  "amazon.ae": "AE",
+  "amazon.sa": "SA",
+  "amazon.com.tr": "TR",
+  "amazon.ie": "IE",
+  "amazon.at": "AT",
+  "amazon.ch": "CH",
+  "amazon.com.be": "BE",
+  "amazon.eg": "EG",
+  "amazon.co.za": "ZA",
+  "amazon.cn": "CN",
+};
+
+export function countryCodeFromMarketPlace(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const key = v.trim().toLowerCase().replace(/^www\./, "");
+  return MARKET_PLACE_COUNTRY[key] ?? null;
+}
+
+/**
  * ID 取值（2026-10-20 商品真实响应证实）：YP 的 product_id / advert_id 是
  * **数字**（如 3208738），sessionAsString 只认字符串会把数字 ID 读成 null
  * → externalId 变空、整批商品在入库前被静默丢弃（同步"成功"但 0 入库的
@@ -507,7 +547,9 @@ export class YeahPromosAdapter
       countryCode:
         sessionAsString(
           pickField(item, "country_code", "countryCode", "country")
-        ) ?? null,
+        ) ??
+        countryCodeFromMarketPlace(pickField(item, "market_place", "marketPlace")) ??
+        null,
       brand,
       asin: sp.asin ?? null,
       price: sp.price ?? null,

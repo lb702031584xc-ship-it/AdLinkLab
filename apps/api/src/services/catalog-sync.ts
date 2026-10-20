@@ -257,6 +257,10 @@ function offerToSessionProduct(o: NetworkOffer): SessionProduct {
     commissionRate: isPct ? (o.payout ?? null) : null,
     reviewCount: o.reviewCount ?? null,
     promoUrl: o.url ?? null,
+    // 国家/落地页类型此前在这里被丢掉（NetworkOffer 有、转换时没透传）：
+    // 投放国家列恒为「—」、广告数按国家分组全落空。补透传（PB/YP 同受益）。
+    countryCode: o.countryCode ?? null,
+    landingPageType: o.landingPageType ?? null,
   };
 }
 

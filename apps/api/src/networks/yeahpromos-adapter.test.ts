@@ -14,6 +14,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { NetworkAdapterError } from "./partnerboost-adapter.js";
 import {
+  countryCodeFromMarketPlace,
   parseYpApiCredentials,
   YP_API_DEFAULT_TIMEOUT_MS,
   YP_API_MIN_REQUEST_INTERVAL_MS,
@@ -308,6 +309,8 @@ describe("YeahPromosAdapter.pullOffers (api 模式)", () => {
       reviewCount: 28,
       // 数字 advert_id 命中 brands 映射回填品牌名。
       brand: "Cutluxe",
+      // 国家不在 country_code 字段里，按 market_place（amazon.ca）推导。
+      countryCode: "CA",
     });
     expect(offers[1].externalId).toBe("3208696");
     expect(offers[1].price).toBe(17.99);
@@ -782,5 +785,22 @@ describe("parseYpApiCredentials", () => {
     expect(() => parseYpApiCredentials("")).toThrowError(
       expect.objectContaining({ code: "BAD_CREDENTIALS" })
     );
+  });
+});
+
+describe("countryCodeFromMarketPlace（market_place → 投放国家）", () => {
+  it("常见 Amazon 站点映射正确", () => {
+    expect(countryCodeFromMarketPlace("amazon.ca")).toBe("CA");
+    expect(countryCodeFromMarketPlace("amazon.com")).toBe("US");
+    expect(countryCodeFromMarketPlace("Amazon.CO.UK")).toBe("GB");
+    expect(countryCodeFromMarketPlace("www.amazon.de")).toBe("DE");
+    expect(countryCodeFromMarketPlace("amazon.com.au")).toBe("AU");
+  });
+
+  it("表外/非法值 → null（不猜国家）", () => {
+    expect(countryCodeFromMarketPlace("amazon.zz")).toBeNull();
+    expect(countryCodeFromMarketPlace("")).toBeNull();
+    expect(countryCodeFromMarketPlace(null)).toBeNull();
+    expect(countryCodeFromMarketPlace(42)).toBeNull();
   });
 });

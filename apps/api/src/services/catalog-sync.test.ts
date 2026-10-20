@@ -19,6 +19,10 @@ import {
   type SessionProduct,
 } from "../networks/session-adapter.js";
 import { encryptApiKey } from "../networks/network-crypto.js";
+import type {
+  NetworkAdapter,
+  NetworkOffer,
+} from "../networks/types.js";
 import {
   activeGrant,
   makeCatalogFakePrisma,
@@ -46,6 +50,16 @@ class FakeSessionAdapter extends BaseSessionAdapter {
     this.calls += 1;
     if (this.error) throw this.error;
     return this.products;
+  }
+}
+
+class FakeApiAdapter implements NetworkAdapter {
+  readonly kind = "yeahpromos";
+  readonly displayName = "FakeApiYP";
+  readonly defaultBaseUrl = "https://fake.test";
+  offers: NetworkOffer[] = [];
+  async pullOffers(): Promise<NetworkOffer[]> {
+    return this.offers;
   }
 }
 
@@ -237,6 +251,53 @@ describe("syncCatalog session 错误语义", () => {
     await syncCatalog(deps, input);
     expect(ctx.affiliateNetwork[0].sessionExpireStrikes).toBe(0);
     expect(ctx.affiliateNetwork[0].sessionStatus).toBe("OK");
+  });
+});
+
+describe("syncCatalog API 模式字段透传", () => {
+  it("countryCode / landingPageType 从 NetworkOffer 透传到入库行", async () => {
+    // 回归：offerToSessionProduct 曾丢掉这两个字段 → 投放国家列恒为「—」、
+    // 广告数按国家分组全落空。API 模式（YP 官方 API）走这条转换，必须透传。
+    process.env.NETWORK_API_PEPPER = PEPPER;
+    const adapter = new FakeApiAdapter();
+    adapter.offers = [
+      {
+        externalId: "yp-1",
+        name: "API Product",
+        payout: 15,
+        currency: "%",
+        price: 100,
+        priceCurrency: "CAD",
+        reviewCount: 50,
+        brand: "ApiBrand",
+        countryCode: "CA",
+        landingPageType: "amazon_product",
+        rawData: { product_id: "yp-1" },
+      },
+    ];
+    const { prisma, ctx } = makeCatalogFakePrisma();
+    ctx.affiliateNetwork.push(
+      testNetwork({
+        syncMode: "api",
+        apiKeyRef: encryptApiKey("test-api-key", PEPPER),
+        sessionRef: null,
+      })
+    );
+    ctx.adminGrant.push(activeGrant("yeahpromos"));
+    const deps: CatalogSyncDeps = {
+      prisma,
+      getAdapterImpl: () => adapter,
+      createOfferImpl: async () => ({
+        offer: { id: randomUUID() },
+        created: true,
+        replayed: false,
+      }),
+    };
+    const summary = await syncCatalog(deps, input);
+    expect(summary.synced).toBe(1);
+    const p = ctx.networkProduct[0];
+    expect(p.countryCode).toBe("CA");
+    expect(p.landingPageType).toBe("amazon_product");
   });
 });
 

@@ -23,6 +23,7 @@ import {
   importBlacklistAction,
   listBlacklistAction,
   getProductLaunchCountsAction,
+  listCatalogCountriesAction,
   listCatalogProductsAction,
   listMerchantSignalsAction,
   listSyncJobsAction,
@@ -1520,12 +1521,9 @@ export function CatalogClient({
   const [screening, setScreening] = useState(false);
   const [screenMsg, setScreenMsg] = useState<string | null>(null);
 
-  async function onSavePreset(adminFields: boolean) {
-    if (savingPreset) return;
-    setSavingPreset(true);
-    setMsg(null);
+  function buildPresetPayload(adminFields: boolean) {
     const topN = numOrNull(pAutoTopN);
-    const res = await saveScreeningPresetAction({
+    return {
       minReviews: numOrNull(pMinReviews),
       minCommissionAmount: numOrNull(pMinCommissionAmount),
       minCommissionRate: numOrNull(pMinCommissionRate),
@@ -1533,9 +1531,18 @@ export function CatalogClient({
       maxPrice: numOrNull(pMaxPrice),
       minScore: numOrNull(pMinScore),
       autoCreateOffer: adminFields ? pAutoCreate : undefined,
-      autoCreateTopN: adminFields ? Math.min(50, Math.max(1, Math.round(topN ?? 20))) : undefined,
+      autoCreateTopN: adminFields
+        ? Math.min(50, Math.max(1, Math.round(topN ?? 20)))
+        : undefined,
       admin: adminFields,
-    });
+    };
+  }
+
+  async function onSavePreset(adminFields: boolean) {
+    if (savingPreset) return;
+    setSavingPreset(true);
+    setMsg(null);
+    const res = await saveScreeningPresetAction(buildPresetPayload(adminFields));
     setSavingPreset(false);
     if (!res.ok) {
       setMsg(res.error);
@@ -1548,6 +1555,13 @@ export function CatalogClient({
     if (screening) return;
     setScreening(true);
     setScreenMsg(null);
+    // 先保存表单现值再筛：筛选跑的是已保存预设，只改数字不保存 = 按旧值筛（白改）。
+    const saved = await saveScreeningPresetAction(buildPresetPayload(isAdmin));
+    if (!saved.ok) {
+      setScreening(false);
+      setMsg(saved.error);
+      return;
+    }
     const res = await screenCatalogAction(selectedId || undefined);
     setScreening(false);
     if (!res.ok) {
@@ -1572,6 +1586,9 @@ export function CatalogClient({
   /** 广告数下限过滤：草稿（输入框）与已生效值分离，回车/失焦才生效。 */
   const [minAdsDraft, setMinAdsDraft] = useState("");
   const [minAds, setMinAds] = useState<number | undefined>(undefined);
+  /** 投放国家过滤："" = 全部国家；选项来自当前网络在库商品的国家清单。 */
+  const [countryFilter, setCountryFilter] = useState("");
+  const [countryOptions, setCountryOptions] = useState<string[]>([]);
   /** 补强 #3：备选池阶段筛选（"" = 全部阶段）与批量移动目标阶段。 */
   const [poolStageFilter, setPoolStageFilter] = useState<PoolStage | "">("");
   const [batchPoolStage, setBatchPoolStage] = useState<PoolStage>("pool");
@@ -1602,6 +1619,7 @@ export function CatalogClient({
       preset: applyPreset ? undefined : false,
       sort,
       minAdCount: minAds,
+      country: countryFilter || undefined,
       poolStage: poolStageFilter || undefined,
     });
     setLoadingProducts(false);
@@ -1688,6 +1706,10 @@ export function CatalogClient({
           : "")
     );
     await reloadProducts(page);
+    // 回填可能刚补上国家 → 同步刷新国家下拉选项。
+    void listCatalogCountriesAction(selectedId).then((r) => {
+      if (r.ok) setCountryOptions(r.data.countries);
+    });
   }
 
   async function onCreateOfferOne(id: string) {
@@ -1724,7 +1746,19 @@ export function CatalogClient({
     setQ("");
     setQDraft("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, onlyRecommended, applyPreset, sort, minAds, poolStageFilter]);
+  }, [selectedId, onlyRecommended, applyPreset, sort, minAds, countryFilter, poolStageFilter]);
+
+  /** 网络切换时刷新国家选项并清空国家过滤（别网络的国家代码不通用）。 */
+  useEffect(() => {
+    setCountryFilter("");
+    if (!selectedId) {
+      setCountryOptions([]);
+      return;
+    }
+    void listCatalogCountriesAction(selectedId).then((r) => {
+      if (r.ok) setCountryOptions(r.data.countries);
+    });
+  }, [selectedId]);
 
   /** 提交广告数下限草稿：正整数生效，空/非法 → 清除过滤。 */
   function commitMinAds() {
@@ -2495,6 +2529,21 @@ export function CatalogClient({
               }}
               onBlur={commitMinAds}
             />
+          </label>
+          <label className="flex items-center gap-2 text-sm text-ink">
+            {d.products.colCountry}
+            <select
+              className={inputCls}
+              value={countryFilter}
+              onChange={(e) => setCountryFilter(e.target.value)}
+            >
+              <option value="">{d.products.allCountries}</option>
+              {countryOptions.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
           </label>
           <button
             className={btnGhost}
