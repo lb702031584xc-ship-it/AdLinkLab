@@ -1,16 +1,18 @@
 /**
- * 商品推荐指数计算（2026-10-19）。
+ * 商品推荐指数计算（2026-10-19；2026-10-20 并入统一评分入口）。
  *
- * 与 catalog-screening.ts 的 scoreProduct 的区别：
- * - scoreProduct 绑定用户筛选预设（ScreeningPreset），阈值可配，缺数据的项按 0 分；
- * - 本函数权重固定、公式透明，缺数据的项按中性（50 分）处理，绝不编造数据。
- *   用于商品库列表的"推荐指数"列和"提交推荐指数计算"批量操作（对标 AutoAds）。
+ * 本函数是 recommendationScore 的唯一计算来源（质量分，公式不变）。
+ * recommended 的判定不在这里：由 catalog-screening.ts 的 evaluateProduct
+ * 统一负责（有预设走预设阈值，无预设时才用本函数的 score >= 60 口径）。
+ * 同步评分、POST /catalog/screen、POST /catalog/products/calc-score 三处
+ * 都经 evaluateProduct 调用本函数，同一商品结果一致，不再互相覆盖。
  *
  * 权重（固定）：
  *   佣金金额  40% — 单次转化能赚多少是第一位的
  *   评论数    25% — 社会证明，评论越多转化越稳
  *   价格      20% — 适中最好：太便宜佣金绝对值小，太贵付费流量难转化
  *   佣金率    15% — 比例高低的辅助信号
+ * 缺数据的项按中性（50 分）处理，绝不编造数据。
  *
  * $8 门槛（MIN_COMMISSION_USD，packages/shared/src/commission-gate.ts）：
  * 可算出单次佣金且 < $8 → 直接限分（最高 25 分）。这是经济性判断

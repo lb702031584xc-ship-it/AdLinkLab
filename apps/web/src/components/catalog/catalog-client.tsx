@@ -16,13 +16,16 @@ import {
   deleteBlacklistAction,
   deleteWhitelistAction,
   evaluateMerchantsAction,
+  getCatalogFunnelAction,
   getScoreCalcPausedAction,
   getSessionStatusAction,
+  getSyncJobAction,
   importBlacklistAction,
   listBlacklistAction,
   getProductLaunchCountsAction,
   listCatalogProductsAction,
   listMerchantSignalsAction,
+  listSyncJobsAction,
   listWhitelistAction,
   offlineProductsAction,
   recheckBlacklistAction,
@@ -36,8 +39,10 @@ import {
   type BlacklistEntry,
   type BlacklistEntityType,
   type CatalogChannel,
+  type CatalogFunnel,
   type CatalogNetwork,
   type CatalogProduct,
+  type CatalogSyncJob,
   type MerchantEvaluateResult,
   type MerchantSignal,
   type RecheckResult,
@@ -1271,6 +1276,40 @@ export function CatalogClient({
   const [brandIdInput, setBrandIdInput] = useState("");
   /** 正在按商家同步时的 brandId（用于显示状态）。 */
   const [syncingBrandId, setSyncingBrandId] = useState<string | null>(null);
+  /** 当前轮询中的同步任务（显示阶段用）。 */
+  const [syncJob, setSyncJob] = useState<CatalogSyncJob | null>(null);
+  /** 最近同步任务列表（当前所选网络）。 */
+  const [syncJobs, setSyncJobs] = useState<CatalogSyncJob[]>([]);
+  /** 可投流漏斗计数（当前所选网络）。 */
+  const [funnel, setFunnel] = useState<CatalogFunnel | null>(null);
+  const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (pollTimer.current) clearTimeout(pollTimer.current);
+    },
+    []
+  );
+
+  async function loadSyncJobs() {
+    const res = await listSyncJobsAction(selectedId || undefined);
+    if (res.ok) setSyncJobs(res.data);
+  }
+
+  async function loadFunnel() {
+    if (!selectedId) {
+      setFunnel(null);
+      return;
+    }
+    const res = await getCatalogFunnelAction(selectedId);
+    if (res.ok) setFunnel(res.data);
+  }
+
+  // 所选网络变化 → 刷新任务列表 + 漏斗。
+  useEffect(() => {
+    void loadSyncJobs();
+    void loadFunnel();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId]);
 
   async function onSync(brandId?: string) {
     if (!selectedId || syncing) return;
@@ -1280,10 +1319,12 @@ export function CatalogClient({
     setMsg(null);
     setSyncForbidden(false);
     setSyncResult(null);
+    setSyncJob(null);
+    // 后端改为后台任务：POST 只建 job 立即返回，之后每 2 秒轮询状态。
     const res = await syncCatalogAction(selectedId, trimmedBrandId);
-    setSyncing(false);
-    setSyncingBrandId(null);
     if (!res.ok) {
+      setSyncing(false);
+      setSyncingBrandId(null);
       if (res.forbidden) {
         setSyncForbidden(true);
       } else {
@@ -1291,7 +1332,36 @@ export function CatalogClient({
       }
       return;
     }
-    setSyncResult(res.data);
+    void pollSyncJob(res.data.jobId);
+  }
+
+  async function pollSyncJob(jobId: string) {
+    const res = await getSyncJobAction(jobId);
+    if (!res.ok) {
+      setSyncing(false);
+      setSyncingBrandId(null);
+      setMsg(res.error);
+      return;
+    }
+    const job = res.data;
+    setSyncJob(job);
+    if (job.status === "succeeded" || job.status === "skipped") {
+      setSyncing(false);
+      setSyncingBrandId(null);
+      setSyncResult(job.result ?? null);
+      await reloadProducts(1);
+      void loadFunnel();
+      void loadSyncJobs();
+      return;
+    }
+    if (job.status === "failed") {
+      setSyncing(false);
+      setSyncingBrandId(null);
+      setMsg(job.error ?? d.top.syncJobFailed);
+      void loadSyncJobs();
+      return;
+    }
+    pollTimer.current = setTimeout(() => void pollSyncJob(jobId), 2000);
   }
 
   function onSyncByBrand() {
@@ -1483,6 +1553,7 @@ export function CatalogClient({
     }
     setScreenMsg(d.preset.screened);
     await reloadProducts(1);
+    void loadFunnel();
   }
 
   // ---- product list ----
@@ -1495,6 +1566,9 @@ export function CatalogClient({
   const [applyPreset, setApplyPreset] = useState(true);
   const [presetExcluded, setPresetExcluded] = useState(0);
   const [sort, setSort] = useState("id_desc");
+  /** 广告数下限过滤：草稿（输入框）与已生效值分离，回车/失焦才生效。 */
+  const [minAdsDraft, setMinAdsDraft] = useState("");
+  const [minAds, setMinAds] = useState<number | undefined>(undefined);
   const [loadingProducts, setLoadingProducts] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [batching, setBatching] = useState(false);
@@ -1520,6 +1594,7 @@ export function CatalogClient({
       pageSize: PAGE_SIZE,
       preset: applyPreset ? undefined : false,
       sort,
+      minAdCount: minAds,
     });
     setLoadingProducts(false);
     if (!res.ok) {
@@ -1596,7 +1671,17 @@ export function CatalogClient({
     setQ("");
     setQDraft("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, onlyRecommended, applyPreset, sort]);
+  }, [selectedId, onlyRecommended, applyPreset, sort, minAds]);
+
+  /** 提交广告数下限草稿：正整数生效，空/非法 → 清除过滤。 */
+  function commitMinAds() {
+    const n = Number(minAdsDraft.trim());
+    setMinAds(
+      minAdsDraft.trim() !== "" && Number.isFinite(n) && n > 0
+        ? Math.floor(n)
+        : undefined
+    );
+  }
 
   /** 点击表头切换排序：同列在 desc/asc 间切换 */
   function onSortCol(base: string) {
@@ -1946,22 +2031,78 @@ export function CatalogClient({
                   <> · {d.top.skippedLowCommission}：{syncResult.skippedLowCommission}</>
                 )}
               </div>
-              {syncResult.skipped && syncResult.skipped.length > 0 && (
+              {syncResult.skipped && (
                 <div className="mt-2 rounded-lg bg-amber-50 px-4 py-2 text-sm text-amber-900">
-                  <p className="font-medium">{d.top.skippedNote}</p>
-                  <ul className="mt-1 list-disc pl-5">
-                    {syncResult.skipped.map((s) => (
-                      <li key={s.networkId}>
-                        <span className="font-medium">
-                          {s.networkName ?? s.networkId}
-                        </span>
-                        {s.reason ? `：${s.reason}` : ""}
-                      </li>
-                    ))}
-                  </ul>
+                  {d.top.syncSkipped.replace(
+                    "{reason}",
+                    syncResult.skipReason ?? ""
+                  )}
                 </div>
               )}
             </>
+          )}
+          {syncing && syncJob?.stage && (
+            <p className="mt-3 text-sm text-ink/60">
+              {d.top.syncing} ·{" "}
+              {d.top.syncStage[syncJob.stage as keyof typeof d.top.syncStage] ??
+                syncJob.stage}
+            </p>
+          )}
+          {syncJobs.length > 0 && (
+            <div className="mt-4 border-t border-ink/10 pt-3">
+              <p className="text-sm font-medium text-ink/70">
+                {d.top.jobsTitle}
+              </p>
+              <ul className="mt-2 space-y-1.5">
+                {syncJobs.map((j) => {
+                  const net = networks.find((n) => n.id === j.networkId);
+                  const r = j.result;
+                  return (
+                    <li
+                      key={j.id}
+                      className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-ink/70"
+                    >
+                      <span className="font-medium text-ink">
+                        {net ? net.name : j.networkId}
+                      </span>
+                      <span className="rounded-full bg-ink/5 px-2 py-0.5 text-xs">
+                        {j.scope === "brand"
+                          ? `${d.top.scopeBrand} (${j.brandId ?? ""})`
+                          : d.top.scopeFull}
+                      </span>
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-xs font-medium ${pullStatusColor(
+                          j.status === "succeeded"
+                            ? "SUCCESS"
+                            : j.status === "failed"
+                              ? "FAILED"
+                              : j.status === "running" || j.status === "queued"
+                                ? "RUNNING"
+                                : "NEVER"
+                        )}`}
+                      >
+                        {d.top.jobStatus[j.status] ?? j.status}
+                      </span>
+                      <span className="text-ink/50">
+                        {formatDateTime(j.createdAt)}
+                      </span>
+                      {j.status === "succeeded" && r && (
+                        <span>
+                          synced {r.synced} · created {r.created} · updated{" "}
+                          {r.updated} · recommended {r.recommended}
+                        </span>
+                      )}
+                      {j.status === "skipped" && r?.skipReason && (
+                        <span>{r.skipReason}</span>
+                      )}
+                      {j.status === "failed" && j.error && (
+                        <span className="text-red-700">{j.error}</span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
           )}
         </section>
       )}
@@ -2228,6 +2369,23 @@ export function CatalogClient({
       {/* ===== 商品列表 ===== */}
       <section className={cardCls}>
         <h2 className="text-lg font-semibold text-ink">{d.products.title}</h2>
+        {funnel && (
+          <p className="mt-2 text-sm text-ink/60">
+            {d.products.funnelTotal}{" "}
+            <span className="font-medium text-ink">{funnel.total}</span>
+            <span className="mx-1.5 text-ink/30">→</span>
+            {d.products.funnelRecommended}{" "}
+            <span className="font-medium text-ink">{funnel.recommended}</span>
+            <span className="mx-1.5 text-ink/30">→</span>
+            {d.products.funnelLaunchable}{" "}
+            <span className="font-medium text-ink">{funnel.launchable}</span>
+            <span className="mx-1.5 text-ink/30">→</span>
+            {d.products.funnelOffers}{" "}
+            <span className="font-medium text-ink">
+              {funnel.offersCreated ?? "—"}
+            </span>
+          </p>
+        )}
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-2 text-sm text-ink">
             <input
@@ -2253,6 +2411,23 @@ export function CatalogClient({
               {d.products.presetFilteredNote.replace("{n}", String(presetExcluded))}
             </span>
           )}
+          <label className="flex items-center gap-2 text-sm text-ink">
+            {d.products.minAdCount}
+            <input
+              className={inputCls}
+              style={{ width: 90 }}
+              type="number"
+              min={0}
+              step={1}
+              placeholder={d.products.minAdCountPlaceholder}
+              value={minAdsDraft}
+              onChange={(e) => setMinAdsDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitMinAds();
+              }}
+              onBlur={commitMinAds}
+            />
+          </label>
           <button
             className={btnGhost}
             onClick={onBackfill}

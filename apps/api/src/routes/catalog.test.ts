@@ -459,3 +459,335 @@ describe("GET /api/v1/catalog/products/:id/launch-history（单条投放历史�
     expect(body.archives[0].clicks).toBe(50);
   });
 });
+
+/* ── 2026-10-20 完善批：广告数过滤 / 漏斗 / 同步任务 / 评分一致性 ── */
+
+function funnelProduct(overrides: Record<string, any> = {}): Record<string, any> {
+  return {
+    id: randomUUID(),
+    tenantId: TEST_TENANT,
+    networkId: TEST_NETWORK,
+    externalId: `ext-${Math.random().toString(36).slice(2, 8)}`,
+    name: "P",
+    brand: "B",
+    asin: null,
+    price: 100,
+    commissionAmount: 20,
+    commissionRate: 15,
+    currency: "USD",
+    reviewCount: 100,
+    recommended: false,
+    recommendationScore: null,
+    promoUrl: null,
+    rawData: {},
+    syncedAt: new Date(),
+    createdAt: new Date(),
+    merchantId: null,
+    status: "active",
+    adCount: null,
+    ...overrides,
+  };
+}
+
+describe("GET /api/v1/catalog/products 广告数过滤（minAdCount / hasAds）", () => {
+  function setup() {
+    const { ctx } = makeCatalogFakePrisma();
+    ctx.affiliateNetwork.push(testNetwork());
+    ctx.networkProduct.push(
+      funnelProduct({ externalId: "a0", adCount: 0 }),
+      funnelProduct({ externalId: "a5", adCount: 5 }),
+      funnelProduct({ externalId: "an", adCount: null })
+    );
+    return ctx;
+  }
+
+  it("minAdCount=1 → 只剩 adCount>=1（0 和未计算都排除）", async () => {
+    const ctx = setup();
+    const { app } = buildApp(ctx, "member");
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/catalog/products?minAdCount=1",
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.total).toBe(1);
+    expect(body.items[0].externalId).toBe("a5");
+  });
+
+  it("hasAds=1 → 同 minAdCount=1", async () => {
+    const ctx = setup();
+    const { app } = buildApp(ctx, "member");
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/catalog/products?hasAds=1",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().total).toBe(1);
+  });
+
+  it("无广告参数 → 全部返回", async () => {
+    const ctx = setup();
+    const { app } = buildApp(ctx, "member");
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/catalog/products",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().total).toBe(3);
+  });
+
+  it("与其他过滤组合：minAdCount + recommended", async () => {
+    const ctx = setup();
+    ctx.networkProduct[0].recommended = true; // adCount=0 的那条
+    ctx.networkProduct[1].recommended = true; // adCount=5 的那条
+    const { app } = buildApp(ctx, "member");
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/catalog/products?recommended=true&minAdCount=2",
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.total).toBe(1);
+    expect(body.items[0].externalId).toBe("a5");
+  });
+});
+
+describe("GET /api/v1/catalog/funnel（可投流漏斗）", () => {
+  it("五段计数口径：total/passedGate/recommended/launchable/offersCreated", async () => {
+    const { ctx } = makeCatalogFakePrisma();
+    ctx.affiliateNetwork.push(testNetwork());
+    const merchantId = randomUUID();
+    // 1: recommended + 有链接 + active → launchable，且已建 Offer
+    const p1 = funnelProduct({
+      externalId: "f1",
+      recommended: true,
+      promoUrl: "https://promo.test/1",
+    });
+    // 2: recommended 但无链接 → 只进 recommended
+    const p2 = funnelProduct({ externalId: "f2", recommended: true });
+    // 3: recommended + 有链接但被拉黑（商品级）→ 哪段都不进（除 total/passedGate）
+    const p3 = funnelProduct({
+      externalId: "f3",
+      recommended: true,
+      promoUrl: "https://promo.test/3",
+    });
+    // 4: 未推荐 + inactive → 只进 total
+    const p4 = funnelProduct({ externalId: "f4", status: "inactive" });
+    // 5: recommended + 有链接但商家被拉黑 → 不进 recommended/launchable
+    const p5 = funnelProduct({
+      externalId: "f5",
+      recommended: true,
+      promoUrl: "https://promo.test/5",
+      merchantId,
+    });
+    ctx.networkProduct.push(p1, p2, p3, p4, p5);
+    ctx.catalogBlacklist.push(
+      blacklistRow({ entityType: "product", entityId: p3.id }),
+      blacklistRow({ entityType: "merchant", entityId: merchantId })
+    );
+    ctx.offer.push({
+      id: randomUUID(),
+      tenantId: TEST_TENANT,
+      name: "Offer F1",
+      idempotencyKey: `catalog:${TEST_NETWORK}:f1`,
+    });
+    const { app } = buildApp(ctx, "member");
+    const res = await app.inject({ method: "GET", url: "/api/v1/catalog/funnel" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      total: 5,
+      passedGate: 4,
+      recommended: 2,
+      launchable: 1,
+      offersCreated: 1,
+    });
+  });
+
+  it("networkId 过滤 + 其他租户不计入", async () => {
+    const { ctx } = makeCatalogFakePrisma();
+    ctx.affiliateNetwork.push(testNetwork());
+    const otherNetwork = randomUUID();
+    ctx.networkProduct.push(
+      funnelProduct({ externalId: "n1" }),
+      funnelProduct({ externalId: "n2", networkId: otherNetwork }),
+      funnelProduct({ externalId: "n3", tenantId: "99999999-9999-4999-8999-999999999999" })
+    );
+    const { app } = buildApp(ctx, "member");
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/catalog/funnel?networkId=${TEST_NETWORK}`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().total).toBe(1);
+    const all = await app.inject({ method: "GET", url: "/api/v1/catalog/funnel" });
+    expect(all.json().total).toBe(2);
+  });
+});
+
+describe("POST /api/v1/catalog/sync（后台任务）", () => {
+  async function waitForJob(
+    ctx: CatalogFakeCtx,
+    id: string
+  ): Promise<Record<string, any>> {
+    const start = Date.now();
+    for (;;) {
+      const job = ctx.catalogSyncJob.find((j: any) => j.id === id);
+      if (
+        job &&
+        ["succeeded", "failed", "skipped"].includes(job.status as string)
+      ) {
+        return job as Record<string, any>;
+      }
+      if (Date.now() - start > 5000) throw new Error("sync job 未在期限内结束");
+      await new Promise((r) => setImmediate(r));
+    }
+  }
+
+  it("立即返回 {jobId, status:running}；后台跑完 → skipped（黑名单账号）", async () => {
+    const { ctx } = makeCatalogFakePrisma();
+    ctx.affiliateNetwork.push(testNetwork({ kind: "yeahpromos" }));
+    ctx.adminGrant.push(activeGrant("yeahpromos"));
+    ctx.catalogBlacklist.push(
+      blacklistRow({
+        entityType: "network_account",
+        entityId: TEST_NETWORK,
+        reason: "session_expired_x3",
+      })
+    );
+    const { app } = buildApp(ctx, "member");
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/catalog/sync",
+      payload: { networkId: TEST_NETWORK },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.status).toBe("running");
+    expect(body.jobId).toMatch(/^[0-9a-f-]{36}$/i);
+    const job = await waitForJob(ctx, body.jobId);
+    expect(job.status).toBe("skipped");
+    expect(job.scope).toBe("full");
+    expect((job.result as any).skipped).toBe(true);
+    expect(job.finishedAt).toBeInstanceOf(Date);
+    // 轮询端点能读到同一条
+    const poll = await app.inject({
+      method: "GET",
+      url: `/api/v1/catalog/sync-jobs/${body.jobId}`,
+    });
+    expect(poll.statusCode).toBe(200);
+    expect(poll.json().job.status).toBe("skipped");
+  });
+
+  it("后台执行失败 → job failed + error（api 模式无凭证）", async () => {
+    const { ctx } = makeCatalogFakePrisma();
+    ctx.affiliateNetwork.push(
+      testNetwork({ kind: "yeahpromos", syncMode: "api", apiKeyRef: null })
+    );
+    ctx.adminGrant.push(activeGrant("yeahpromos"));
+    const { app } = buildApp(ctx, "member");
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/catalog/sync",
+      payload: { networkId: TEST_NETWORK, brandId: "66303" },
+    });
+    expect(res.statusCode).toBe(200);
+    const job = await waitForJob(ctx, res.json().jobId);
+    expect(job.status).toBe("failed");
+    expect(job.scope).toBe("brand");
+    expect(job.brandId).toBe("66303");
+    expect(String(job.error)).toContain("API");
+  });
+
+  it("无 B6 授权（member 无 grant）→ 403 且不建 job", async () => {
+    const { ctx } = makeCatalogFakePrisma();
+    ctx.affiliateNetwork.push(testNetwork({ kind: "yeahpromos" }));
+    const { app } = buildApp(ctx, "member");
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/catalog/sync",
+      payload: { networkId: TEST_NETWORK },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(ctx.catalogSyncJob).toHaveLength(0);
+  });
+
+  it("GET /sync-jobs 列表（最近在前）+ tenant 隔离 + :id 隔离 404", async () => {
+    const { ctx } = makeCatalogFakePrisma();
+    const mine = {
+      id: randomUUID(),
+      tenantId: TEST_TENANT,
+      networkId: TEST_NETWORK,
+      userId: TEST_USER,
+      scope: "full",
+      brandId: null,
+      status: "succeeded",
+      stage: "done",
+      result: { synced: 3 },
+      error: null,
+      createdAt: new Date("2026-10-20T01:00:00Z"),
+      startedAt: new Date("2026-10-20T01:00:01Z"),
+      finishedAt: new Date("2026-10-20T01:00:05Z"),
+    };
+    const otherTenantJob = {
+      ...mine,
+      id: randomUUID(),
+      tenantId: "99999999-9999-4999-8999-999999999999",
+      createdAt: new Date("2026-10-20T02:00:00Z"),
+    };
+    ctx.catalogSyncJob.push(otherTenantJob, mine);
+    const { app } = buildApp(ctx, "member");
+    const list = await app.inject({
+      method: "GET",
+      url: "/api/v1/catalog/sync-jobs",
+    });
+    expect(list.statusCode).toBe(200);
+    expect(list.json().jobs).toHaveLength(1);
+    expect(list.json().jobs[0].id).toBe(mine.id);
+    const foreign = await app.inject({
+      method: "GET",
+      url: `/api/v1/catalog/sync-jobs/${otherTenantJob.id}`,
+    });
+    expect(foreign.statusCode).toBe(404);
+  });
+});
+
+describe("评分三路径一致性（/screen 与 /calc-score）", () => {
+  it("同一商品经 /screen 与 /calc-score 得到相同 score/recommended", async () => {
+    const { ctx } = makeCatalogFakePrisma();
+    ctx.affiliateNetwork.push(testNetwork());
+    const p = funnelProduct({
+      externalId: "s1",
+      price: 100,
+      commissionAmount: 30,
+      commissionRate: 20,
+      reviewCount: 5000,
+    });
+    ctx.networkProduct.push(p);
+    // admin 角色 B6 豁免；/screen 与 /calc-score 都走 resolveScreeningPreset（无预设行 → DEFAULT_PRESET）
+    const { app } = buildApp(ctx, "admin");
+    const screen = await app.inject({
+      method: "POST",
+      url: "/api/v1/catalog/screen",
+      payload: { networkId: TEST_NETWORK },
+    });
+    expect(screen.statusCode).toBe(200);
+    const afterScreen = { ...ctx.networkProduct[0] };
+    const calc = await app.inject({
+      method: "POST",
+      url: "/api/v1/catalog/products/calc-score",
+      payload: { ids: [p.id] },
+    });
+    expect(calc.statusCode).toBe(200);
+    const scored = calc.json().scored as Array<{
+      productId: string;
+      score: number;
+      recommended: boolean;
+    }>;
+    expect(scored).toHaveLength(1);
+    expect(scored[0].score).toBe(Number(afterScreen.recommendationScore));
+    expect(scored[0].recommended).toBe(afterScreen.recommended);
+    expect(ctx.networkProduct[0].recommendationScore).toBe(
+      afterScreen.recommendationScore
+    );
+  });
+});

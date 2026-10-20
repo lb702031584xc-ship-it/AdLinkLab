@@ -247,6 +247,7 @@ model Tenant {
   catalogWhitelist      CatalogWhitelist[]
   catalogMerchantPolicy CatalogMerchantPolicy?
   catalogMerchantSignals CatalogMerchantSignal[]
+  catalogSyncJobs       CatalogSyncJob[]
   /// 每租户系统设置 back-references (additive)
   tenantSettings        TenantSetting[]
   /// 创意管理库 back-references (additive)
@@ -273,6 +274,7 @@ model User {
   tenant         Tenant          @relation(fields: [tenantId], references: [id])
   googleAccounts GoogleAccount[]
   sessions       Session[]
+  catalogSyncJobs CatalogSyncJob[]
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -1097,6 +1099,8 @@ model AffiliateNetwork {
   sessionError  String?   @map("session_error") @db.Text
   /// 可配置的 session 商品列表路径（默认由适配器提供；网络设置可覆盖）。
   sessionListPath String? @map("session_list_path")
+  /// 官方 API 商品接口路径覆盖（如 YeahPromos Get Products；null → 适配器默认已验证路径）。
+  apiProductsPath String? @map("api_products_path")
   /// SESSION_EXPIRED 连续次数；连续 3 次 → 自动进黑名单（network_account）。
   sessionExpireStrikes Int @default(0) @map("session_expire_strikes")
   /// session 模式登录用户名（明文可显示）。
@@ -1117,6 +1121,7 @@ model AffiliateNetwork {
   pulls     NetworkOfferPull[]
   offers    NetworkOffer[]
   products  NetworkProduct[]
+  syncJobs  CatalogSyncJob[]
 
   @@index([tenantId])
   @@index([status])
@@ -1170,6 +1175,36 @@ model NetworkProduct {
   @@index([tenantId, networkId])
   @@index([tenantId, recommended])
   @@map("network_products")
+}
+
+/// 商品库同步后台任务（2026-10-20）：POST /catalog/sync 只建行 + 后台执行，
+/// 前端轮询本表看阶段/结果，避免大批量同步阻塞 HTTP 请求。
+/// status: queued | running | succeeded | failed | skipped（skipped = 黑名单账号/登录态过期等业务跳过，result 里有 skipReason）。
+/// stage: 最近一次进度阶段（pulled / upserted / scored / offers / done）。
+/// result: 同步 summary（CatalogSyncSummary）JSON；执行中为最近阶段的 partial。
+model CatalogSyncJob {
+  id         String    @id @db.Uuid
+  tenantId   String    @map("tenant_id") @db.Uuid
+  networkId  String    @map("network_id") @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  /// 同步范围：full（全量）| brand（按商家）。
+  scope      String    @default("full")
+  /// 按商家同步时的 PB brand_id（scope=brand 时有值）。
+  brandId    String?   @map("brand_id")
+  status     String    @default("queued")
+  stage      String?
+  result     Json?     @db.JsonB
+  error      String?   @db.Text
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  startedAt  DateTime? @map("started_at") @db.Timestamptz(3)
+  finishedAt DateTime? @map("finished_at") @db.Timestamptz(3)
+
+  tenant  Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  network AffiliateNetwork @relation(fields: [networkId], references: [id], onDelete: Cascade)
+  user    User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@map("catalog_sync_jobs")
 }
 
 /// 商品库筛选预设（每租户一条；autoCreateOffer 仅管理员可改）。

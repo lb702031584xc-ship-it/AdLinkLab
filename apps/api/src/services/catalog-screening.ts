@@ -1,5 +1,16 @@
 /**
- * 商品库筛选评分（2026-10-18）：确定性公式，无任何 LLM。
+ * 商品库筛选评估（2026-10-18；2026-10-20 统一评分口径）。
+ *
+ * 历史上有两套公式同时写 recommendationScore / recommended 互相覆盖：
+ * - scoreProduct：绑定筛选预设的加权分（金额40/率25/评论20/价格15，缺数据 0 分）；
+ * - calcRecommendationScore：固定权重质量分（缺数据中性 50 分）。
+ * 2026-10-20 起统一为单一入口 evaluateProduct：
+ * - recommendationScore 的唯一计算 = calcRecommendationScore（质量分，公式不变）；
+ * - recommended 的唯一判定 = 预设阈值（本文件的 pass 逻辑：有效佣金用
+ *   estimateCommissionFigure 口径、评论、价格带、佣金率、minScore 全过）；
+ *   无预设（preset=null）时 recommended = score >= RECOMMEND_THRESHOLD(60)。
+ * 同步评分（catalog-sync 第 7 步）、POST /catalog/screen、
+ * POST /catalog/products/calc-score 三处都调 evaluateProduct，结果一致。
  *
  * DEFAULT_PRESET 为 P1-30 讲师经验默认值——讲师经验，非普适真理；
  * 用户可在商品库设置页按自己的品类/渠道调整。
@@ -7,6 +18,11 @@
  * 推演/工作表判定共用同一常量）：入库时已拦掉 <$8 的，库内筛选默认不再更严。
  */
 import { MIN_COMMISSION_USD, estimateCommissionFigure } from "@adlinklab/shared";
+import {
+  calcRecommendationScore,
+  RECOMMEND_THRESHOLD,
+  type RecommendationBreakdown,
+} from "./recommendation-score.js";
 
 export interface ScreeningPreset {
   minReviews?: number | null;
@@ -36,26 +52,29 @@ export interface ScoreableProduct {
 
 export interface ScreeningResult {
   recommended: boolean;
-  /** 0–100 确定性评分。 */
+  /** 0–100 确定性评分（= calcRecommendationScore 质量分）。 */
   score: number;
 }
 
+export interface EvaluateResult extends ScreeningResult {
+  /** 质量分分项（佣金/评论/价格/佣金率，0–100）。 */
+  breakdown: RecommendationBreakdown;
+}
+
+const num = (v: number | null | undefined): number | null =>
+  typeof v === "number" && Number.isFinite(v) ? v : null;
+
 /**
- * 评分公式（确定性，各分项归一化到 0–100，加权求和，总分 0–100）：
- * - 佣金金额分（40）：minCommissionAmount→0 分，3 倍阈值→满分，线性；
- *   佣金口径与入库 $8 门槛完全一致（estimateCommissionFigure：固定佣金优先，
- *   否则 price×佣金率估算）——只有佣金率的商品（如 PB 百分比佣金）同样参与判定/计分。
- * - 佣金率分（25）：minCommissionRate→0 分，3 倍阈值→满分，线性；
- * - 评论分（20）：对数归一化，10000 评论→满分；
- * - 价格带分（15）：价格在 [minPrice, maxPrice] 内→满分，偏离越远越低。
- * 全部阈值通过 → recommended=true；任一阈值不通过 → recommended=false（分数照算）。
- * 缺失字段：该分项按 0 分计（不虚构数据）；佣金完全算不出（无金额、无率或无价）
- * → passAmount 不通过。
+ * 预设阈值判定（recommended 的唯一口径，有预设时）：
+ * 评论 / 有效佣金（estimateCommissionFigure：固定佣金优先，否则 price×佣金率
+ * 估算；算不出 → 不通过）/ 佣金率 / 价格带 四项全过，且质量分 >= minScore。
+ * 阈值为 0/null → 该项不卡；价格缺失 → 价格带不卡（与历史行为一致）。
  */
-export function scoreProduct(
+function presetRecommended(
   p: ScoreableProduct,
-  preset: ScreeningPreset = DEFAULT_PRESET
-): ScreeningResult {
+  preset: ScreeningPreset,
+  score: number
+): boolean {
   const eff = {
     minReviews: preset.minReviews ?? DEFAULT_PRESET.minReviews,
     minCommissionAmount:
@@ -66,23 +85,16 @@ export function scoreProduct(
     maxPrice: preset.maxPrice ?? DEFAULT_PRESET.maxPrice,
     minScore: preset.minScore ?? DEFAULT_PRESET.minScore,
   };
-  const num = (v: number | null | undefined): number | null =>
-    typeof v === "number" && Number.isFinite(v) ? v : null;
-
   const price = num(p.price);
-  const commissionAmount = num(p.commissionAmount);
   const commissionRate = num(p.commissionRate);
   const reviewCount = num(p.reviewCount);
 
-  // 有效佣金口径与入库第一道门槛（catalog-sync 第 5 步）完全一致：
-  // 固定佣金优先，否则 price×佣金率估算；算不出 → null（passAmount 不通过）。
   const { figure: effectiveCommission } = estimateCommissionFigure({
-    amount: commissionAmount,
+    amount: num(p.commissionAmount),
     ratePct: commissionRate,
     price,
   });
 
-  // 阈值判定（阈值为 0/null → 该项不卡）。
   const passReviews =
     !(eff.minReviews > 0) || (reviewCount !== null && reviewCount >= eff.minReviews);
   const passAmount =
@@ -93,41 +105,43 @@ export function scoreProduct(
     !(eff.minCommissionRate > 0) ||
     (commissionRate !== null && commissionRate >= eff.minCommissionRate);
   const passPrice =
-    (price === null ||
-      (!(eff.minPrice > 0) || price >= eff.minPrice) &&
-        (!(eff.maxPrice > 0) || price <= eff.maxPrice));
-  const recommended = passReviews && passAmount && passRate && passPrice;
+    price === null ||
+    ((!(eff.minPrice > 0) || price >= eff.minPrice) &&
+      (!(eff.maxPrice > 0) || price <= eff.maxPrice));
+  if (!(passReviews && passAmount && passRate && passPrice)) return false;
+  if (eff.minScore > 0 && score < eff.minScore) return false;
+  return true;
+}
 
-  // 分项评分。
-  const clamp = (v: number) => Math.max(0, Math.min(100, v));
-  const linearTo3x = (v: number | null, threshold: number): number => {
-    if (v === null || threshold <= 0) return 0;
-    if (v <= threshold) return 0;
-    return clamp(((v - threshold) / (2 * threshold)) * 100);
-  };
-  const amountScore = linearTo3x(effectiveCommission, eff.minCommissionAmount); // 0–100
-  const rateScore = linearTo3x(commissionRate, eff.minCommissionRate); // 0–100
-  const reviewScore =
-    reviewCount === null ? 0 : clamp((Math.log10(reviewCount + 1) / 4) * 100); // 10^4→100
-  let priceScore = 0;
-  if (price !== null && eff.minPrice > 0 && eff.maxPrice > eff.minPrice) {
-    if (price >= eff.minPrice && price <= eff.maxPrice) {
-      priceScore = 100;
-    } else {
-      const width = eff.maxPrice - eff.minPrice;
-      const dist =
-        price < eff.minPrice ? eff.minPrice - price : price - eff.maxPrice;
-      priceScore = clamp(100 - (dist / width) * 100);
-    }
-  }
+/**
+ * 统一评估入口：score 恒为 calcRecommendationScore 质量分；
+ * recommended 有预设走预设阈值，无预设（null）走 score >= 60。
+ */
+export function evaluateProduct(
+  p: ScoreableProduct,
+  preset: ScreeningPreset | null
+): EvaluateResult {
+  const r = calcRecommendationScore({
+    commissionAmount: p.commissionAmount,
+    commissionRate: p.commissionRate,
+    reviewCount: p.reviewCount,
+    price: p.price,
+  });
+  const recommended =
+    preset === null
+      ? r.score >= RECOMMEND_THRESHOLD
+      : presetRecommended(p, preset, r.score);
+  return { score: r.score, recommended, breakdown: r.breakdown };
+}
 
-  const score = Math.round(
-    (amountScore * 40 + rateScore * 25 + reviewScore * 20 + priceScore * 15) / 100
-  );
-  const finalScore = clamp(score);
-
-  if (eff.minScore > 0 && finalScore < eff.minScore) {
-    return { recommended: false, score: finalScore };
-  }
-  return { recommended, score: finalScore };
+/**
+ * 兼容旧签名（同步/筛选旧调用点）：等价于 evaluateProduct(p, preset) 的
+ * { recommended, score }。不再有独立权重公式。
+ */
+export function scoreProduct(
+  p: ScoreableProduct,
+  preset: ScreeningPreset = DEFAULT_PRESET
+): ScreeningResult {
+  const r = evaluateProduct(p, preset);
+  return { recommended: r.recommended, score: r.score };
 }

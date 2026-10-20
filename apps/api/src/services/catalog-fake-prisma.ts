@@ -191,6 +191,8 @@ export interface CatalogFakeCtx {
   catalogScreeningPreset: Row[];
   catalogMerchantPolicy: Row[];
   catalogMerchantSignal: Row[];
+  catalogSyncJob: Row[];
+  aiSetting: Row[];
   merchant: Row[];
   offer: Row[];
   click: Row[];
@@ -213,6 +215,8 @@ export function makeCatalogFakePrisma(
     catalogScreeningPreset: [],
     catalogMerchantPolicy: [],
     catalogMerchantSignal: [],
+    catalogSyncJob: [],
+    aiSetting: [],
     merchant: [],
     offer: [],
     click: [],
@@ -262,6 +266,7 @@ export function testNetwork(overrides: Partial<Row> = {}): Row {
     apiConfigured: false,
     apiKeyRef: null,
     apiBaseUrl: null,
+    apiProductsPath: null,
     syncMode: "session",
     sessionRef: null,
     sessionStatus: "NEVER",

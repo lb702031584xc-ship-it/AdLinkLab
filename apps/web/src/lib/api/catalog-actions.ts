@@ -5,8 +5,10 @@
  * Server-side only: forwards the user's session cookie to the API.
  *
  * Backend contract (per parent-orchestrated spec):
- *   GET  /api/v1/catalog/products?networkId=&recommended=&q=&page=&pageSize=
- *   POST /api/v1/catalog/sync {networkId}                (B6 grant required; 403 → apply at /admin/grants)
+ *   GET  /api/v1/catalog/products?networkId=&recommended=&q=&page=&pageSize=&minAdCount=&hasAds=
+ *   POST /api/v1/catalog/sync {networkId, brandId?}      → {jobId, status} 后台任务（B6 grant required; 403 → apply at /admin/grants）
+ *   GET  /api/v1/catalog/sync-jobs[/:id]                同步任务列表/轮询
+ *   GET  /api/v1/catalog/funnel?networkId=              可投流漏斗计数
  *   GET  /api/v1/catalog/screening-preset
  *   PUT  /api/v1/catalog/screening-preset                (autoCreate* fields admin-only; 403 otherwise)
  *   POST /api/v1/catalog/screen {networkId?}
@@ -115,16 +117,42 @@ export interface SyncResult {
   autoCreatedOffers: number;
   /** $8 佣金门槛（第一道）跳过的商品数：不入库，只计数。 */
   skippedLowCommission?: number;
-  /** Blacklisted accounts skipped by the sync (no request wasted). Optional until the backend batch lands. */
-  skipped?: Array<{
-    networkId: string;
-    networkName?: string | null;
-    reason?: string | null;
-  }>;
+  /** 业务跳过（黑名单账号 / 登录态过期等）：true 时原因看 skipReason。 */
+  skipped?: boolean;
+  skipReason?: string;
   /** 同步范围：full（全量）/ brand（按商家）。 */
   scope?: "full" | "brand";
   /** 按商家同步时的 brand_id。 */
   brandId?: string;
+  /** 消失判定被守卫跳过的原因（brand_scope / circuit_breaker）。 */
+  disappearedSkipped?: string;
+}
+
+/** 后台同步任务（POST /catalog/sync 建行，后端异步执行，前端轮询）。 */
+export interface CatalogSyncJob {
+  id: string;
+  networkId: string;
+  scope: "full" | "brand";
+  brandId: string | null;
+  status: "queued" | "running" | "succeeded" | "failed" | "skipped";
+  /** 最近阶段：pulled / upserted / scored / offers / done；未开始为 null。 */
+  stage: string | null;
+  /** 终态时为完整 SyncResult；执行中为最近阶段的 partial（勿当完整结果用）。 */
+  result: SyncResult | null;
+  error: string | null;
+  createdAt: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+/** 可投流漏斗计数（GET /catalog/funnel）。 */
+export interface CatalogFunnel {
+  total: number;
+  passedGate: number;
+  recommended: number;
+  launchable: number;
+  /** 算不出时后端给 null → UI 显示 "—"。 */
+  offersCreated: number | null;
 }
 
 /**
@@ -460,10 +488,14 @@ export async function listCatalogNetworksAction() {
   );
 }
 
+/**
+ * 发起同步：后端只建后台任务并立即返回 {jobId, status}，
+ * 真正结果经 getSyncJobAction 轮询拿（job.result）。
+ */
 export async function syncCatalogAction(networkId: string, brandId?: string) {
   return attempt(
     () =>
-      apiFetch<SyncResult>("/api/v1/catalog/sync", {
+      apiFetch<{ jobId: string; status: string }>("/api/v1/catalog/sync", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -471,7 +503,40 @@ export async function syncCatalogAction(networkId: string, brandId?: string) {
           ...(brandId?.trim() ? { brandId: brandId.trim() } : {}),
         }),
       }),
-    ["/catalog"]
+    []
+  );
+}
+
+export async function getSyncJobAction(jobId: string) {
+  return attempt(
+    () =>
+      apiFetch<{ job: CatalogSyncJob }>(
+        `/api/v1/catalog/sync-jobs/${encodeURIComponent(jobId)}`
+      ).then((r) => r.job),
+    []
+  );
+}
+
+export async function listSyncJobsAction(networkId?: string) {
+  const qs = networkId
+    ? `?networkId=${encodeURIComponent(networkId)}`
+    : "";
+  return attempt(
+    () =>
+      apiFetch<{ jobs: CatalogSyncJob[] }>(
+        `/api/v1/catalog/sync-jobs${qs}`
+      ).then((r) => r.jobs),
+    []
+  );
+}
+
+export async function getCatalogFunnelAction(networkId?: string) {
+  const qs = networkId
+    ? `?networkId=${encodeURIComponent(networkId)}`
+    : "";
+  return attempt(
+    () => apiFetch<CatalogFunnel>(`/api/v1/catalog/funnel${qs}`),
+    []
   );
 }
 
@@ -608,6 +673,10 @@ export async function listCatalogProductsAction(params: {
   preset?: boolean;
   /** 排序：id_desc（默认）/id_asc/price_desc/price_asc/reviews_desc/reviews_asc/score_desc/score_asc/created_desc/created_asc/recommended */
   sort?: string;
+  /** 广告投放数量下限（adCount >= 值；未计算的不命中）。 */
+  minAdCount?: number;
+  /** true → 只看有广告在投的（adCount > 0）。 */
+  hasAds?: boolean;
 }) {
   const qs = new URLSearchParams();
   if (params.networkId) qs.set("networkId", params.networkId);
@@ -616,6 +685,9 @@ export async function listCatalogProductsAction(params: {
   if (params.q) qs.set("q", params.q);
   if (params.preset === false) qs.set("preset", "0");
   if (params.sort) qs.set("sort", params.sort);
+  if (params.minAdCount != null && params.minAdCount > 0)
+    qs.set("minAdCount", String(Math.floor(params.minAdCount)));
+  if (params.hasAds) qs.set("hasAds", "1");
   qs.set("page", String(params.page ?? 1));
   qs.set("pageSize", String(params.pageSize ?? 20));
   return attempt(

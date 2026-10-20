@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildAdCountWhere,
   buildPresetWhere,
   buildProductOrderBy,
   extractProductId,
@@ -50,6 +51,41 @@ describe("buildPresetWhere（筛选预设自动过滤）", () => {
     expect(w.AND).toEqual([
       { OR: [{ recommendationScore: { gte: 60 } }, { recommendationScore: null }] },
     ]);
+  });
+});
+
+describe("buildAdCountWhere（广告投放数量过滤）", () => {
+  it("无参数 → 不过滤", () => {
+    expect(buildAdCountWhere({})).toEqual({});
+    expect(buildAdCountWhere({ minAdCount: 0, hasAds: "0" })).toEqual({});
+    expect(buildAdCountWhere({ minAdCount: "abc" })).toEqual({});
+  });
+
+  it("minAdCount → adCount gte（小数向下取整）", () => {
+    expect(buildAdCountWhere({ minAdCount: "5" })).toEqual({
+      adCount: { gte: 5 },
+    });
+    expect(buildAdCountWhere({ minAdCount: 3.9 })).toEqual({
+      adCount: { gte: 3 },
+    });
+  });
+
+  it("hasAds=1/true → adCount >= 1", () => {
+    expect(buildAdCountWhere({ hasAds: "1" })).toEqual({
+      adCount: { gte: 1 },
+    });
+    expect(buildAdCountWhere({ hasAds: "true" })).toEqual({
+      adCount: { gte: 1 },
+    });
+  });
+
+  it("两者同时给 → 取更严的一个", () => {
+    expect(buildAdCountWhere({ minAdCount: 10, hasAds: "1" })).toEqual({
+      adCount: { gte: 10 },
+    });
+    expect(buildAdCountWhere({ minAdCount: 0, hasAds: "1" })).toEqual({
+      adCount: { gte: 1 },
+    });
   });
 });
 

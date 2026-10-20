@@ -1,13 +1,19 @@
 /**
- * 商品库筛选评分测试：阈值通过/不通过、score 范围 0–100、默认值。
- * 确定性公式，无 LLM。
+ * 商品库筛选评估测试（2026-10-20 统一评分后）：
+ * score 恒为 calcRecommendationScore 质量分；recommended 有预设走预设阈值、
+ * 无预设走 score>=60。确定性公式，无 LLM。
  */
 import { describe, expect, it } from "vitest";
 import { MIN_COMMISSION_USD } from "@adlinklab/shared";
 import {
   DEFAULT_PRESET,
+  evaluateProduct,
   scoreProduct,
 } from "./catalog-screening.js";
+import {
+  calcRecommendationScore,
+  RECOMMEND_THRESHOLD,
+} from "./recommendation-score.js";
 
 describe("scoreProduct", () => {
   it("全部阈值通过 → recommended=true，score 在 0–100", () => {
@@ -42,10 +48,12 @@ describe("scoreProduct", () => {
     expect(high.recommended).toBe(false);
   });
 
-  it("缺失字段 → 该分项 0 分，不虚构（recommended=false）", () => {
+  it("缺失字段 → 质量分按中性 50 处理（不虚构），recommended=false", () => {
+    // 统一口径：score 来自 calcRecommendationScore（缺数据中性 50）；
+    // recommended 走预设阈值：有效佣金算不出 → passAmount 不通过 → false。
     const r = scoreProduct({}, DEFAULT_PRESET);
     expect(r.recommended).toBe(false);
-    expect(r.score).toBe(0);
+    expect(r.score).toBe(50);
   });
 
   it("minScore 卡分：分数不够 → recommended=false", () => {
@@ -117,5 +125,55 @@ describe("scoreProduct", () => {
     );
     // estimateCommissionFigure 口径：amount 优先 → figure=5 < $8
     expect(r.recommended).toBe(false);
+  });
+});
+
+describe("evaluateProduct（统一评分入口）", () => {
+  const cases = [
+    { price: 100, commissionAmount: 30, commissionRate: 20, reviewCount: 5000 },
+    { price: 100, commissionAmount: null, commissionRate: 12, reviewCount: 5000 },
+    { price: 10, commissionAmount: 5, commissionRate: 5, reviewCount: 3 },
+    {},
+    { price: 2000, commissionAmount: null, commissionRate: null, reviewCount: null },
+    { price: 120, commissionAmount: 45, commissionRate: 30, reviewCount: 20000 },
+  ];
+
+  it("score 恒等于 calcRecommendationScore 质量分（三条路径同分）", () => {
+    for (const p of cases) {
+      const expected = calcRecommendationScore(p).score;
+      expect(evaluateProduct(p, DEFAULT_PRESET).score).toBe(expected);
+      expect(evaluateProduct(p, null).score).toBe(expected);
+      expect(scoreProduct(p, DEFAULT_PRESET).score).toBe(expected);
+    }
+  });
+
+  it("无预设（null）→ recommended = score >= 60", () => {
+    for (const p of cases) {
+      const r = evaluateProduct(p, null);
+      expect(r.recommended).toBe(r.score >= RECOMMEND_THRESHOLD);
+    }
+  });
+
+  it("scoreProduct 与 evaluateProduct(同预设) recommended 一致", () => {
+    for (const p of cases) {
+      expect(scoreProduct(p, DEFAULT_PRESET).recommended).toBe(
+        evaluateProduct(p, DEFAULT_PRESET).recommended
+      );
+    }
+  });
+
+  it("预设与质量分口径可不同：质量分高但价格带外 → recommended=false", () => {
+    // price=300：质量分价格段仍有分，但 DEFAULT_PRESET 价格带 [80,150] 不通过。
+    const p = { price: 300, commissionAmount: 60, commissionRate: 25, reviewCount: 9000 };
+    const r = evaluateProduct(p, DEFAULT_PRESET);
+    expect(r.score).toBeGreaterThanOrEqual(RECOMMEND_THRESHOLD);
+    expect(r.recommended).toBe(false);
+  });
+
+  it("breakdown 透传质量分分项", () => {
+    const p = { price: 100, commissionAmount: 30, commissionRate: 20, reviewCount: 5000 };
+    expect(evaluateProduct(p, DEFAULT_PRESET).breakdown).toEqual(
+      calcRecommendationScore(p).breakdown
+    );
   });
 });

@@ -13,7 +13,7 @@
  *     守卫：按商家（brandId）同步整步跳过；全量同步熔断（upsert=0 或消失占比 >50%）跳过
  *     并在 summary.disappearedSkipped 记警告；第 5 步被 $8 门槛跳过的商品不算消失。
  *     商品重新出现（被 upsert）时，其 sync_disappeared 自动黑名单自动解除（第 5.5 步）。
- *  7. 评分：排除黑名单商品/黑名单商家的商品后跑 scoreProduct，写回 recommended/score。
+ *  7. 评分：排除黑名单商品/黑名单商家的商品后跑 evaluateProduct（统一评分入口），写回 recommended/score。
  *  8. 白名单建议：syncStreak 达到 3 → suggested（只建议，不自动加入）。
  *  9. 自动建 Offer（preset.autoCreateOffer）：白名单优先（观察期商家不置顶），
  *     跳过黑名单，Top-N（1–50），idempotencyKey 幂等，逐个审计。
@@ -67,7 +67,7 @@ import type {
 import { isSyncMode } from "../networks/types.js";
 import {
   DEFAULT_PRESET,
-  scoreProduct,
+  evaluateProduct,
   type ScreeningPreset,
 } from "./catalog-screening.js";
 import {
@@ -102,6 +102,15 @@ export interface CatalogSyncDeps {
   createOfferImpl?: (
     input: CreateOfferInput
   ) => Promise<{ offer: { id: string }; created: boolean; replayed: boolean }>;
+  /**
+   * 进度回调（可选，后台任务模式用）：在拉取后/入库后/评分后/建 Offer 后
+   * 各阶段边界调用。缺省 → 无副作用，既有同步调用与测试行为不变。
+   * 回调抛错不中断同步（内部吞掉，进度只是观测信号）。
+   */
+  onProgress?: (
+    stage: string,
+    partial?: Record<string, unknown>
+  ) => Promise<void> | void;
 }
 
 export interface CatalogSyncInput {
@@ -151,6 +160,8 @@ interface NetworkRow {
   name: string;
   apiKeyRef: string | null;
   apiBaseUrl: string | null;
+  /** 官方 API 商品接口路径覆盖（YeahPromos Get Products；null → 适配器默认路径）。 */
+  apiProductsPath: string | null;
   syncMode: string;
   sessionRef: string | null;
   sessionListPath: string | null;
@@ -357,6 +368,18 @@ export async function syncCatalog(
   const { tenantId, userId, userRole, networkId } = input;
   const getAdapterImpl = deps.getAdapterImpl ?? getAdapter;
   const getSessionAdapterImpl = deps.getSessionAdapterImpl ?? getSessionAdapter;
+  // 进度回调：仅观测，抛错吞掉，绝不影响同步主流程。
+  const reportProgress = async (
+    stage: string,
+    partial?: Record<string, unknown>
+  ): Promise<void> => {
+    if (!deps.onProgress) return;
+    try {
+      await deps.onProgress(stage, partial);
+    } catch {
+      /* 进度上报失败不中断同步 */
+    }
+  };
 
   const network = (await prisma.affiliateNetwork.findFirst({
     where: { id: networkId, tenantId, deletedAt: null },
@@ -507,6 +530,7 @@ export async function syncCatalog(
         apiBaseUrl: net.apiBaseUrl ?? "",
         tenantId,
         fetchImpl: input.fetchImpl,
+        apiProductsPath: net.apiProductsPath ?? null,
       };
       try {
         // PB 按商家同步：brandId 只传给 PartnerBoostAdapter，其他网络忽略。
@@ -723,6 +747,7 @@ export async function syncCatalog(
     // unreachable（handlePullError 永不返回）：仅为满足 TS 明确赋值分析。
     throw error;
   }
+  await reportProgress("pulled", { fetched: products.length });
 
   /* ── 5. upsert ── */
   // $8 佣金门槛（第一道，与推演/工作表共用同一常量 + 同一 AI 设置覆盖项）：
@@ -881,6 +906,12 @@ export async function syncCatalog(
       },
     });
   }
+  await reportProgress("upserted", {
+    created,
+    updated,
+    skippedLowCommission,
+    disappearedBlacklisted: disappeared.length,
+  });
 
   /* ── 黑名单集合（商品 + 商家），用于评分/建 Offer 过滤 ── */
   const blackRows = (await prisma.catalogBlacklist.findMany({
@@ -915,7 +946,7 @@ export async function syncCatalog(
     for (const row of upserted) {
       if (blacklistedProducts.has(row.id)) continue;
       if (row.merchantId && blacklistedMerchants.has(row.merchantId)) continue;
-      const r = scoreProduct(
+      const r = evaluateProduct(
         {
           price: toNum(row.price),
           commissionAmount: toNum(row.commissionAmount),
@@ -932,6 +963,7 @@ export async function syncCatalog(
       scored.push({ ...row, score: r.score, isRecommended: r.recommended });
     }
   }
+  await reportProgress("scored", { recommended, scoreCalcPaused });
 
   /* ── 8. 白名单建议：syncStreak 达到 3 → suggested（只建议，不自动加入） ── */
   for (const row of upserted) {
@@ -1037,6 +1069,8 @@ export async function syncCatalog(
       }
     }
   }
+
+  await reportProgress("offers", { autoCreatedOffers });
 
   /* ── 10. 成功收尾 ── */
   const now = new Date();

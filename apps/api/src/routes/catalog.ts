@@ -5,7 +5,10 @@
  * （capability catalog-sync）在 syncCatalog / session 保存 / sync-mode 切换 /
  * screen 接口内强制执行，无授权 403。绝不返回 session 明文。
  *
- *   POST   /api/v1/catalog/sync                    {networkId} → 同步商品库
+ *   POST   /api/v1/catalog/sync                    {networkId, brandId?} → 建后台同步任务，立即返回 {jobId, status}
+ *   GET    /api/v1/catalog/sync-jobs               最近 20 条同步任务（?networkId）
+ *   GET    /api/v1/catalog/sync-jobs/:id           单条同步任务（轮询进度/结果）
+ *   GET    /api/v1/catalog/funnel                  ?networkId → 可投流漏斗计数
  *   GET    /api/v1/catalog/products                商品分页（白名单置顶标记；sort=id_desc 默认主键倒序）
  *   GET    /api/v1/catalog/screening-preset        当前预设（无则默认 + saved:false）
  *   PUT    /api/v1/catalog/screening-preset        改预设（auto* 仅管理员）
@@ -45,9 +48,9 @@ import {
 } from "../services/catalog-sync.js";
 import {
   DEFAULT_PRESET,
-  scoreProduct,
+  evaluateProduct,
+  type ScreeningPreset,
 } from "../services/catalog-screening.js";
-import { calcRecommendationScore } from "../services/recommendation-score.js";
 import { calcBrandAdCounts } from "../services/brand-ad-count.js";
 import {
   addToBlacklist,
@@ -205,6 +208,29 @@ async function findNetwork(prisma: PrismaClient, tenantId: string, id: string) {
 }
 
 /**
+ * 租户筛选预设解析（三处评分调用点共用，保证结果一致）：
+ * 已保存 → 行值；未保存 → DEFAULT_PRESET（与 GET /screening-preset 的
+ * saved:false 返回口径一致，即"默认预设"就是该租户的有效预设）。
+ */
+async function resolveScreeningPreset(
+  prisma: PrismaClient,
+  tenantId: string
+): Promise<ScreeningPreset> {
+  const row = (await prisma.catalogScreeningPreset.findUnique({
+    where: { tenantId },
+  })) as Record<string, unknown> | null;
+  if (!row) return { ...DEFAULT_PRESET };
+  return {
+    minReviews: (row.minReviews as number | null) ?? null,
+    minCommissionAmount: numOrNull(row.minCommissionAmount),
+    minCommissionRate: numOrNull(row.minCommissionRate),
+    minPrice: numOrNull(row.minPrice),
+    maxPrice: numOrNull(row.maxPrice),
+    minScore: (row.minScore as number | null) ?? null,
+  };
+}
+
+/**
  * 商品列表排序（autoads 式：默认按数字主键 ID 倒序，最新商品在前）。
  * externalId 归一化后是数字串；同长度数字串的字典序 = 数字序。
  */
@@ -288,15 +314,134 @@ export function buildPresetWhere(preset: {
   return and.length > 0 ? { AND: and } : {};
 }
 
+/**
+ * 广告投放数量过滤（列表查询参数，与预设过滤可组合）：
+ * minAdCount=N → adCount >= N；hasAds=1（或 true）→ adCount > 0（即 >= 1）。
+ * 两者同时给取更严的一个；都无效 → 不过滤。
+ * 注意：adCount 为 null（未计算）不命中——无数据不能当"有广告"，
+ * 与预设过滤"null 不拦"的口径不同，这里是用户主动按广告数筛选。
+ */
+export function buildAdCountWhere(query: {
+  minAdCount?: unknown;
+  hasAds?: unknown;
+}): Record<string, unknown> {
+  let floor = 0;
+  const min = asNumber(query.minAdCount);
+  if (min != null && min > 0) floor = Math.max(floor, Math.floor(min));
+  if (query.hasAds === "1" || query.hasAds === "true")
+    floor = Math.max(floor, 1);
+  return floor > 0 ? { adCount: { gte: floor } } : {};
+}
+
 export async function registerCatalogRoutes(
   app: FastifyInstance,
   deps: CatalogRouteDeps
 ): Promise<void> {
   const { prisma } = deps;
 
-  /* ── 同步 ── */
+  /* ── 同步（后台任务） ──
+   * POST 只做参数/B6 校验 + 建 CatalogSyncJob 行，立即返回 {jobId, status}；
+   * 真正的同步在后台执行（runCatalogSyncJob），进度/结果写回 job 行，
+   * 前端轮询 GET /sync-jobs/:id。B6 授权在建 job 前先校验一次（失败直接
+   * 报错、不建 job）；syncCatalog 内部还会再校验一次（双保险）。
+   */
 
-  /* ── 同步 ── */
+  interface SyncJobRow {
+    id: string;
+    tenantId: string;
+    networkId: string;
+    userId: string;
+    scope: string;
+    brandId: string | null;
+    status: string;
+    stage: string | null;
+    result: unknown;
+    error: string | null;
+    createdAt: Date | string;
+    startedAt: Date | string | null;
+    finishedAt: Date | string | null;
+  }
+
+  function serializeSyncJob(r: SyncJobRow) {
+    const iso = (v: Date | string | null | undefined): string | null =>
+      v == null
+        ? null
+        : v instanceof Date
+          ? v.toISOString()
+          : typeof v === "string"
+            ? v
+            : null;
+    return {
+      id: r.id,
+      networkId: r.networkId,
+      scope: r.scope,
+      brandId: r.brandId ?? null,
+      status: r.status,
+      stage: r.stage ?? null,
+      result: r.result ?? null,
+      error: r.error ?? null,
+      createdAt: iso(r.createdAt),
+      startedAt: iso(r.startedAt),
+      finishedAt: iso(r.finishedAt),
+    };
+  }
+
+  async function runCatalogSyncJob(
+    jobId: string,
+    args: {
+      tenantId: string;
+      userId: string;
+      userRole: string;
+      networkId: string;
+      brandId?: string;
+    }
+  ): Promise<void> {
+    const updateJob = async (data: Record<string, unknown>): Promise<void> => {
+      try {
+        await prisma.catalogSyncJob.update({ where: { id: jobId }, data });
+      } catch {
+        /* job 行更新失败不影响同步本身（观测信号） */
+      }
+    };
+    try {
+      await updateJob({ status: "running", startedAt: new Date() });
+      const summary = await syncCatalog(
+        {
+          prisma,
+          createOfferImpl: (input) => deps.offers.create(input),
+          onProgress: async (stage, partial) => {
+            await updateJob({
+              stage,
+              ...(partial ? { result: partial as never } : {}),
+            });
+          },
+        },
+        {
+          tenantId: args.tenantId,
+          userId: args.userId,
+          userRole: args.userRole,
+          networkId: args.networkId,
+          ...(args.brandId ? { brandId: args.brandId } : {}),
+        }
+      );
+      await updateJob({
+        status: summary.skipped ? "skipped" : "succeeded",
+        stage: "done",
+        result: summary as never,
+        error: null,
+        finishedAt: new Date(),
+      });
+    } catch (error) {
+      await updateJob({
+        status: "failed",
+        error: (error instanceof Error ? error.message : String(error)).slice(
+          0,
+          2000
+        ),
+        finishedAt: new Date(),
+      });
+    }
+  }
 
   app.post<{ Body: { networkId?: unknown; brandId?: unknown } }>(
     "/api/v1/catalog/sync",
@@ -311,22 +456,63 @@ export async function registerCatalogRoutes(
           : typeof rawBrandId === "number" && Number.isFinite(rawBrandId)
             ? String(rawBrandId)
             : undefined;
-      const summary = await syncCatalog(
-        {
-          prisma,
-          createOfferImpl: (input) => deps.offers.create(input),
-        },
-        {
+      // B6 授权在建 job 前校验：失败直接报错，不建 job、不浪费执行。
+      const network = await findNetwork(prisma, info.tenantId, networkId);
+      await requireActiveGrant(prisma, {
+        tenantId: info.tenantId,
+        userId: info.id,
+        userRole: info.role,
+        capability: "catalog-sync",
+        whitelistValue: network.kind,
+      });
+      const jobId = randomUUID();
+      await prisma.catalogSyncJob.create({
+        data: {
+          id: jobId,
           tenantId: info.tenantId,
-          userId: info.id,
-          userRole: info.role,
           networkId,
-          ...(brandId ? { brandId } : {}),
-        }
-      );
-      return { sync: summary };
+          userId: info.id,
+          scope: brandId ? "brand" : "full",
+          brandId: brandId ?? null,
+          status: "queued",
+        },
+      });
+      // 后台执行：不 await，请求立即返回；runCatalogSyncJob 内部全捕获。
+      void runCatalogSyncJob(jobId, {
+        tenantId: info.tenantId,
+        userId: info.id,
+        userRole: info.role,
+        networkId,
+        ...(brandId ? { brandId } : {}),
+      });
+      return { jobId, status: "running" };
     }
   );
+
+  app.get("/api/v1/catalog/sync-jobs", async (request) => {
+    const info = await requireSession(deps, request);
+    const query = request.query as Record<string, unknown>;
+    const where: Record<string, unknown> = { tenantId: info.tenantId };
+    if (query.networkId)
+      where.networkId = assertId(query.networkId, "networkId");
+    const rows = (await prisma.catalogSyncJob.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: 20,
+    })) as unknown as SyncJobRow[];
+    return { jobs: rows.map(serializeSyncJob) };
+  });
+
+  app.get("/api/v1/catalog/sync-jobs/:id", async (request) => {
+    const info = await requireSession(deps, request);
+    const { id } = request.params as { id: string };
+    const jobId = assertId(id, "jobId");
+    const row = (await prisma.catalogSyncJob.findFirst({
+      where: { id: jobId, tenantId: info.tenantId },
+    })) as unknown as SyncJobRow | null;
+    if (!row) throw new NotFoundError("Sync job not found");
+    return { job: serializeSyncJob(row) };
+  });
 
   /**
    * 历史投放次数（批量）：商品 → 由它建的 Offer（idempotencyKey=catalog:<networkId>:<externalId>）
@@ -503,6 +689,8 @@ export async function registerCatalogRoutes(
         }
       }
     }
+    // 广告投放数量过滤（minAdCount / hasAds=1）：与预设过滤叠加生效。
+    Object.assign(where, buildAdCountWhere(query));
     const [total, rows] = await Promise.all([
       prisma.networkProduct.count({ where }),
       prisma.networkProduct.findMany({
@@ -619,6 +807,112 @@ export async function registerCatalogRoutes(
       presetApplied,
       presetExcluded,
     };
+  });
+
+  /* ── 可投流漏斗计数 ──
+   * 口径（用现有字段能算的最合理近似，逐项注明）：
+   * - total：范围内 NetworkProduct 总数（status 不限）。
+   * - passedGate：status='active' 的数量。入库时单次佣金明确 <$8 的商品
+   *   根本不落库（catalog-sync 第 5 步门槛），存量里只有手动下线会变
+   *   inactive，故"active 在库数"近似"过门槛且未下线"的量。
+   * - recommended：recommended=true 且未命中黑名单（商品/商家，判定口径
+   *   与商品列表的 blacklisted 标记一致：status='active' 的黑名单行）。
+   * - launchable：recommended 基础上 promoUrl 非空且 status='active'。
+   * - offersCreated：launchable 中已建过 Offer 的商品数；Offer 关联方式 =
+   *   idempotencyKey `catalog:{networkId}:{externalId}`（与 launch-counts 同口径）。
+   */
+  app.get("/api/v1/catalog/funnel", async (request) => {
+    const info = await requireSession(deps, request);
+    const query = request.query as Record<string, unknown>;
+    const networkId = query.networkId
+      ? assertId(query.networkId, "networkId")
+      : null;
+    const base: Record<string, unknown> = { tenantId: info.tenantId };
+    if (networkId) base.networkId = networkId;
+    const [total, passedGate] = await Promise.all([
+      prisma.networkProduct.count({ where: base }),
+      prisma.networkProduct.count({ where: { ...base, status: "active" } }),
+    ]);
+    const candidates = (await prisma.networkProduct.findMany({
+      where: { ...base, recommended: true },
+      select: {
+        id: true,
+        networkId: true,
+        externalId: true,
+        merchantId: true,
+        promoUrl: true,
+        status: true,
+      },
+    })) as Array<{
+      id: string;
+      networkId: string;
+      externalId: string;
+      merchantId: string | null;
+      promoUrl: string | null;
+      status: string;
+    }>;
+    const candIds = candidates.map((c) => c.id);
+    const blackProductIds = new Set(
+      candIds.length === 0
+        ? []
+        : (
+            (await prisma.catalogBlacklist.findMany({
+              where: {
+                tenantId: info.tenantId,
+                status: "active",
+                entityType: "product",
+                entityId: { in: candIds },
+              },
+              select: { entityId: true },
+            })) as Array<{ entityId: string }>
+          ).map((r) => r.entityId)
+    );
+    const blackMerchantIds = new Set(
+      (
+        (await prisma.catalogBlacklist.findMany({
+          where: {
+            tenantId: info.tenantId,
+            status: "active",
+            entityType: "merchant",
+          },
+          select: { entityId: true },
+        })) as Array<{ entityId: string }>
+      ).map((r) => r.entityId)
+    );
+    const clean = candidates.filter(
+      (c) =>
+        !blackProductIds.has(c.id) &&
+        !(c.merchantId && blackMerchantIds.has(c.merchantId))
+    );
+    const recommended = clean.length;
+    const launchableRows = clean.filter(
+      (c) =>
+        c.status === "active" &&
+        typeof c.promoUrl === "string" &&
+        c.promoUrl.trim() !== ""
+    );
+    const launchable = launchableRows.length;
+    let offersCreated = 0;
+    if (launchableRows.length > 0) {
+      const offers = (await prisma.offer.findMany({
+        where: {
+          tenantId: info.tenantId,
+          idempotencyKey: {
+            in: launchableRows.map(
+              (c) => `catalog:${c.networkId}:${c.externalId}`
+            ),
+          },
+        },
+        select: { idempotencyKey: true },
+      })) as Array<{ idempotencyKey: string | null }>;
+      const hitKeys = new Set(
+        offers.map((o) => o.idempotencyKey).filter(Boolean)
+      );
+      offersCreated = launchableRows.filter((c) =>
+        hitKeys.has(`catalog:${c.networkId}:${c.externalId}`)
+      ).length;
+    }
+    return { total, passedGate, recommended, launchable, offersCreated };
   });
 
   /* ── 回填：从 rawData 补缺失字段（老数据同步时适配器没映射） ──
@@ -798,8 +1092,10 @@ export async function registerCatalogRoutes(
       if (await isScoreCalcPaused()) {
         throw new ValidationError("全局推荐指数计算已暂停");
       }
-      // 推荐指数用固定权重公式（services/recommendation-score.ts），不绑定
-      // 用户筛选预设；缺数据的项按中性处理，$8 门槛直接限分。
+      // 统一评分入口 evaluateProduct：score = 质量分（固定权重，缺数据中性），
+      // recommended = 租户预设阈值判定。与同步评分、/screen 同一口径，
+      // 同一商品三条路径结果一致（消除历史上两套公式互相覆盖）。
+      const preset = await resolveScreeningPreset(prisma, info.tenantId);
       let updated = 0;
       const scored: Array<{ productId: string; score: number; recommended: boolean }> = [];
       for (const id of ids) {
@@ -807,15 +1103,18 @@ export async function registerCatalogRoutes(
           where: { id, tenantId: info.tenantId },
         })) as Record<string, unknown> | null;
         if (!p) continue;
-        const r = calcRecommendationScore({
-          price: numOrNull(p.price),
-          commissionAmount: numOrNull(p.commissionAmount),
-          commissionRate: numOrNull(p.commissionRate),
-          reviewCount:
-            typeof p.reviewCount === "number" && Number.isFinite(p.reviewCount)
-              ? p.reviewCount
-              : null,
-        });
+        const r = evaluateProduct(
+          {
+            price: numOrNull(p.price),
+            commissionAmount: numOrNull(p.commissionAmount),
+            commissionRate: numOrNull(p.commissionRate),
+            reviewCount:
+              typeof p.reviewCount === "number" && Number.isFinite(p.reviewCount)
+                ? p.reviewCount
+                : null,
+          },
+          preset
+        );
         await prisma.networkProduct.update({
           where: { id },
           data: { recommended: r.recommended, recommendationScore: r.score },
@@ -1043,23 +1342,7 @@ export async function registerCatalogRoutes(
           );
         }
       }
-      const presetRow = await prisma.catalogScreeningPreset.findUnique({
-        where: { tenantId: info.tenantId },
-      });
-      const preset = presetRow
-        ? {
-            minReviews: (presetRow as { minReviews: number | null }).minReviews,
-            minCommissionAmount: numOrNull(
-              (presetRow as Record<string, unknown>).minCommissionAmount
-            ),
-            minCommissionRate: numOrNull(
-              (presetRow as Record<string, unknown>).minCommissionRate
-            ),
-            minPrice: numOrNull((presetRow as Record<string, unknown>).minPrice),
-            maxPrice: numOrNull((presetRow as Record<string, unknown>).maxPrice),
-            minScore: (presetRow as { minScore: number | null }).minScore,
-          }
-        : { ...DEFAULT_PRESET };
+      const preset = await resolveScreeningPreset(prisma, info.tenantId);
       const where: Record<string, unknown> = { tenantId: info.tenantId };
       if (networkId) where.networkId = networkId;
       const products = (await prisma.networkProduct.findMany({
@@ -1090,7 +1373,7 @@ export async function registerCatalogRoutes(
           });
           continue;
         }
-        const r = scoreProduct(
+        const r = evaluateProduct(
           {
             price: numOrNull(p.price),
             commissionAmount: numOrNull(p.commissionAmount),

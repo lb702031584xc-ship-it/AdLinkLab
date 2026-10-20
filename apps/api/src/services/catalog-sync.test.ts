@@ -258,6 +258,33 @@ describe("syncCatalog 商品处理", () => {
     expect(ctx.adminGrant[0].usageCount).toBe(1);
   });
 
+  it("onProgress 在四阶段边界按序调用；回调抛错不中断同步", async () => {
+    const { deps, adapter } = setup();
+    adapter.products = [sessionProduct()];
+    const stages: string[] = [];
+    const partials: Array<Record<string, unknown> | undefined> = [];
+    deps.onProgress = (stage, partial) => {
+      stages.push(stage);
+      partials.push(partial);
+    };
+    const summary = await syncCatalog(deps, input);
+    expect(summary.synced).toBe(1);
+    expect(stages).toEqual(["pulled", "upserted", "scored", "offers"]);
+    expect(partials[0]).toMatchObject({ fetched: 1 });
+    expect(partials[1]).toMatchObject({ created: 1 });
+    expect(partials[2]).toMatchObject({ recommended: 1 });
+    expect(partials[3]).toMatchObject({ autoCreatedOffers: 0 });
+
+    // 回调抛错 → 同步仍成功
+    const second = setup();
+    second.adapter.products = [sessionProduct()];
+    second.deps.onProgress = () => {
+      throw new Error("progress boom");
+    };
+    const summary2 = await syncCatalog(second.deps, input);
+    expect(summary2.synced).toBe(1);
+  });
+
   it("消失商品 → 自动进黑名单（sync_disappeared）", async () => {
     const { deps, ctx, adapter } = setup();
     ctx.networkProduct.push({
