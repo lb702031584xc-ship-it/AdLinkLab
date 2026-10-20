@@ -105,6 +105,16 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
             },
             { href: "/ads/auto-create", label: ni.launchAds, phase: ph.traffic },
             { href: "/ai/traffic-planner", label: t.ai.nav.trafficPlanner, phase: ph.traffic },
+            {
+              href: "/ai/bv-checklist",
+              label: lang === "en" ? "BV Verification Checklist" : "BV 验证准备清单",
+              phase: ph.traffic,
+            },
+            {
+              href: "/ai/investigation-guide",
+              label: lang === "en" ? "Investigation Guide" : "平台调查应对",
+              phase: ph.monitor,
+            },
             { href: "/campaigns", label: t.common.nav.campaigns, phase: ph.traffic },
             { href: "/monitoring", label: ni.trafficMonitoring, phase: ph.monitor },
             {

@@ -551,6 +551,9 @@ export async function registerRoutes(
       applicationStatus?: string;
       appliedAt?: string | null;
       applicationNote?: string | null;
+      payoutCycleDays?: number | null;
+      skuCommissionNote?: string | null;
+      conversionFlow?: string | null;
     };
   }>("/api/v1/offers", async (request) => {
     const tenantId = tenantOf(request, request.body?.tenantId);
@@ -585,6 +588,9 @@ export async function registerRoutes(
             ? new Date(request.body.appliedAt)
             : undefined,
       applicationNote: request.body.applicationNote,
+      payoutCycleDays: request.body.payoutCycleDays,
+      skuCommissionNote: request.body.skuCommissionNote,
+      conversionFlow: request.body.conversionFlow,
     });
   });
 
@@ -608,6 +614,9 @@ export async function registerRoutes(
       applicationStatus?: string;
       appliedAt?: string | null;
       applicationNote?: string | null;
+      payoutCycleDays?: number | null;
+      skuCommissionNote?: string | null;
+      conversionFlow?: string | null;
     };
   }>("/api/v1/offers/:id", async (request) => {
     const tenantId = tenantOf(request, request.body?.tenantId);
@@ -632,6 +641,9 @@ export async function registerRoutes(
               ? new Date(request.body.appliedAt)
               : undefined,
         applicationNote: request.body.applicationNote,
+        payoutCycleDays: request.body.payoutCycleDays,
+        skuCommissionNote: request.body.skuCommissionNote,
+        conversionFlow: request.body.conversionFlow,
         startsAt:
           request.body.startsAt === null
             ? null

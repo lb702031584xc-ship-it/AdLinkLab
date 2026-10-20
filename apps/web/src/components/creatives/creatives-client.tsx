@@ -31,6 +31,30 @@ interface FormState {
   angle: string;
 }
 
+/* #12 RSA 文案规格：标题每条 20–30 字符、描述每条 70–90 字符。只提示不拦截。 */
+const HEADLINE_MIN = 20;
+const HEADLINE_MAX = 30;
+const DESC_MIN = 70;
+const DESC_MAX = 90;
+const MIN_VERSIONS = 10;
+
+type AnglePresetKey = "socialProof" | "painPoint" | "scarcity" | "benefit";
+const ANGLE_PRESET_KEYS: AnglePresetKey[] = ["socialProof", "painPoint", "scarcity", "benefit"];
+
+function charStatus(len: number, min: number, max: number): "ok" | "short" | "long" | "empty" {
+  if (len === 0) return "empty";
+  if (len < min) return "short";
+  if (len > max) return "long";
+  return "ok";
+}
+
+const CHAR_STATUS_CLS: Record<string, string> = {
+  ok: "text-emerald-600",
+  short: "text-amber-600",
+  long: "text-red-600",
+  empty: "text-ink/40",
+};
+
 const EMPTY_FORM: FormState = { title: "", description: "", finalUrl: "", angle: "" };
 
 export function CreativesClient({
@@ -48,6 +72,7 @@ export function CreativesClient({
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Creative | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  const [anglePreset, setAnglePreset] = useState<AnglePresetKey | "">("");
   const [busy, setBusy] = useState(false);
   const [importing, setImporting] = useState(false);
 
@@ -60,6 +85,19 @@ export function CreativesClient({
     }),
     [items]
   );
+
+  /* #12 实时字符计数提示（超限/不足只变色提示，不拦截保存） */
+  const charHint = (len: number, min: number, max: number) => {
+    const st = charStatus(len, min, max);
+    const label =
+      st === "ok" ? t.spec.inRange : st === "short" ? t.spec.tooShort : st === "long" ? t.spec.tooLong : "";
+    return (
+      <span className={`mt-1 block text-[11px] ${CHAR_STATUS_CLS[st]}`}>
+        {t.spec.charCount.replace("{n}", String(len))}
+        {label ? ` · ${label} · ${t.spec.hintOnly}` : ""}
+      </span>
+    );
+  };
 
   const visible = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -108,6 +146,7 @@ export function CreativesClient({
     setMsgOk(true);
     setMsg(t.form.saved);
     setForm(EMPTY_FORM);
+    setAnglePreset("");
     setEditing(null);
     setFormOpen(false);
     await reload();
@@ -175,6 +214,13 @@ export function CreativesClient({
         ))}
       </div>
 
+      {/* #12 创意版本数提醒：真实库存 <10 版时提醒（只提醒不拦截） */}
+      {counts.total > 0 && counts.total < MIN_VERSIONS ? (
+        <p className="mb-4 rounded-xl border border-amber-300/60 bg-amber-50 px-4 py-2.5 text-xs text-amber-800">
+          ⚠️ {t.spec.versionReminder.replace("{n}", String(counts.total))}
+        </p>
+      ) : null}
+
       {/* 工具栏 */}
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <input
@@ -205,6 +251,7 @@ export function CreativesClient({
           onClick={() => {
             setEditing(null);
             setForm(EMPTY_FORM);
+            setAnglePreset("");
             setFormOpen((v) => !v);
           }}
         >
@@ -227,6 +274,11 @@ export function CreativesClient({
           <h2 className="mb-4 text-sm font-semibold text-ink">
             {editing ? t.form.edit : t.form.create}
           </h2>
+          {/* #12 RSA 规格面板 */}
+          <div className="mb-4 rounded-lg bg-ink/[0.03] px-3 py-2 text-[11px] leading-relaxed text-ink/60">
+            <span className="font-semibold text-ink/75">{t.spec.panelTitle}：</span>{" "}
+            {t.spec.headlineTarget}；{t.spec.descriptionTarget}
+          </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="block sm:col-span-2">
               <span className="mb-1 block text-xs font-medium text-ink/70">{t.form.title}</span>
@@ -236,6 +288,7 @@ export function CreativesClient({
                 placeholder={t.form.titlePlaceholder}
                 onChange={(e) => setForm({ ...form, title: e.target.value })}
               />
+              {charHint(form.title.length, HEADLINE_MIN, HEADLINE_MAX)}
             </label>
             <label className="block sm:col-span-2">
               <span className="mb-1 block text-xs font-medium text-ink/70">
@@ -247,6 +300,7 @@ export function CreativesClient({
                 placeholder={t.form.descriptionPlaceholder}
                 onChange={(e) => setForm({ ...form, description: e.target.value })}
               />
+              {charHint(form.description.length, DESC_MIN, DESC_MAX)}
             </label>
             <label className="block">
               <span className="mb-1 block text-xs font-medium text-ink/70">{t.form.finalUrl}</span>
@@ -259,6 +313,23 @@ export function CreativesClient({
             </label>
             <label className="block">
               <span className="mb-1 block text-xs font-medium text-ink/70">{t.form.angle}</span>
+              {/* #12 角度预设：选中后写入角度字段（随创意保存/带入后续生成），也可自定义 */}
+              <select
+                className={`${inputCls} mb-2`}
+                value={anglePreset}
+                onChange={(e) => {
+                  const key = e.target.value as AnglePresetKey | "";
+                  setAnglePreset(key);
+                  if (key) setForm({ ...form, angle: t.spec.anglePresets[key] });
+                }}
+              >
+                <option value="">{t.spec.anglePreset}：{t.spec.anglePresetNone}</option>
+                {ANGLE_PRESET_KEYS.map((k) => (
+                  <option key={k} value={k}>
+                    {t.spec.anglePresets[k]}
+                  </option>
+                ))}
+              </select>
               <input
                 className={inputCls}
                 value={form.angle}
@@ -277,6 +348,7 @@ export function CreativesClient({
                 setFormOpen(false);
                 setEditing(null);
                 setForm(EMPTY_FORM);
+                setAnglePreset("");
               }}
             >
               {t.form.cancel}
@@ -330,6 +402,7 @@ export function CreativesClient({
                   className="text-signal hover:underline"
                   onClick={() => {
                     setEditing(c);
+                    setAnglePreset("");
                     setForm({
                       title: c.title,
                       description: c.description,

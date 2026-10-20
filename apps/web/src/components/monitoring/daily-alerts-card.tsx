@@ -5,6 +5,7 @@ import { getDailyAlertsAction } from "@/lib/api/daily-alerts-actions";
 import {
   classifyDailyAlerts,
   DAILY_ALERT_GROUP_LABELS,
+  DAILY_ALERT_KIND_ICONS,
   DAILY_ALERT_LEVEL_LABELS,
   type DailyAlertGroup,
   type DailyAlertLevel,
@@ -67,7 +68,12 @@ export function DailyAlertsCard({
     );
   }
   const classified = classifyDailyAlerts(data);
-  const groups: DailyAlertGroup[] = ["立即止损", "投放受限", "数据与归因"];
+  const groups: DailyAlertGroup[] = [
+    "立即止损",
+    "投放受限",
+    "数据与归因",
+    "佣金与上下线",
+  ];
   const levels: DailyAlertLevel[] = ["P0", "P1", "P2"];
   const levelClass: Record<DailyAlertLevel, string> = {
     P0: "bg-red-100 text-red-800",
@@ -114,7 +120,12 @@ export function DailyAlertsCard({
                     >
                       {it.level}
                     </span>
-                    <span className="text-ink/80">{it.title}</span>
+                    <span className="text-ink/80">
+                      {it.kind
+                        ? `${DAILY_ALERT_KIND_ICONS[it.kind]} `
+                        : ""}
+                      {it.title}
+                    </span>
                   </li>
                 ))}
               </ul>

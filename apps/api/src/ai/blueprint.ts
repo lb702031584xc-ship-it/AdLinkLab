@@ -83,6 +83,11 @@ export interface BlueprintInput {
   festivalTheme?: string;
   /** P1-15：用户填写的真实最大折扣百分比；未提供时不编造。 */
   discountPct?: number;
+  /**
+   * #7 预计到账率（0–1，默认 0.7）：与 web profit-calc / profitability
+   * 同口径，只影响 §2 的到账口径保本 CPC（breakEvenNet），账面口径不变。
+   */
+  settlementRateF?: number;
 }
 
 export interface BlueprintDeps {
@@ -117,6 +122,10 @@ export interface BlueprintProfit {
   payoutCurrency: string;
   /** Break-even CPC = payout × CVR, computed in code. */
   breakEven: Array<{ cvrPct: number; breakEvenCpc: number | null }>;
+  /** 实际生效的预计到账率（0–1）。 */
+  settlementRateF: number;
+  /** 到账口径保本 CPC = payout × settlementRateF × CVR（账面口径见 breakEven）。 */
+  breakEvenNet: Array<{ cvrPct: number; breakEvenCpc: number | null }>;
   note: string;
 }
 
@@ -313,12 +322,22 @@ export async function generateBlueprint(
 
   // 2. 盈利测算（纯代码）
   const cvrGrid = [2, 5];
+  const settleF =
+    input.settlementRateF == null || !Number.isFinite(input.settlementRateF)
+      ? 0.7
+      : Math.min(Math.max(input.settlementRateF, 0), 1);
   const profit: BlueprintProfit = {
     payout,
     payoutCurrency: input.currency,
     breakEven: cvrGrid.map((cvrPct) => ({
       cvrPct,
       breakEvenCpc: payout == null ? null : round2(payout * (cvrPct / 100)),
+    })),
+    settlementRateF: settleF,
+    breakEvenNet: cvrGrid.map((cvrPct) => ({
+      cvrPct,
+      breakEvenCpc:
+        payout == null ? null : round2(payout * settleF * (cvrPct / 100)),
     })),
     note:
       language === "en"

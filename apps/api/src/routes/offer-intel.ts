@@ -67,6 +67,28 @@ function asOptionalNumber(v: unknown): number | undefined {
   return typeof n === "number" && Number.isFinite(n) ? n : undefined;
 }
 
+/**
+ * 补强 #1：商家结算率解析。undefined = 未提供（不改）；null = 明确清空；
+ * 数值/数字字符串必须在 0–100 内，否则 400。存储走 Decimal(5,2) 列，
+ * 这里只传 number（与 commissionValue 的既有写法一致），绝不编造默认値。
+ */
+function parseSettlementRatePct(v: unknown): { present: boolean; value: number | null } {
+  if (v === undefined) return { present: false, value: null };
+  if (v === null) return { present: true, value: null };
+  const n = typeof v === "string" ? Number(v) : v;
+  if (typeof n !== "number" || !Number.isFinite(n) || n < 0 || n > 100) {
+    throw new ValidationError("settlementRatePct must be a number between 0 and 100");
+  }
+  return { present: true, value: n };
+}
+
+/** Decimal/number/string → number|null（API 序列化用；算不出 → null）。 */
+function decimalToNumberOrNull(v: unknown): number | null {
+  if (v === null || v === undefined) return null;
+  const n = typeof v === "number" ? v : Number(String(v));
+  return Number.isFinite(n) ? n : null;
+}
+
 function asTrafficMode(v: unknown): TrafficMode {
   const s = typeof v === "string" ? v.trim().toUpperCase() : "";
   if (s === "DIRECT_LINK" || s === "DIRECT-LINK") return "DIRECT_LINK";
@@ -726,6 +748,10 @@ export async function registerOfferIntelRoutes(
         domain: m.domain ?? null,
         riskScore: m.riskScore ?? null,
         riskLevel: m.riskLevel ?? null,
+        // 补强 #1：商家结算率（Decimal → number；未验证 → null）。
+        settlementRatePct: decimalToNumberOrNull(
+          (m as { settlementRatePct?: unknown }).settlementRatePct
+        ),
         offerCount: await prisma.offer.count({
           where: { tenantId: info.tenantId, merchantId: m.id, deletedAt: null },
         }),
@@ -735,14 +761,21 @@ export async function registerOfferIntelRoutes(
   });
 
   app.post<{
-    Body: { name?: unknown; domain?: unknown; networkId?: unknown };
+    Body: {
+      name?: unknown;
+      domain?: unknown;
+      networkId?: unknown;
+      settlementRatePct?: unknown;
+    };
   }>("/api/v1/merchants", async (request) => {
     const info = await requireSession(deps, request);
     const body = (request.body ?? {}) as {
       name?: unknown;
       domain?: unknown;
       networkId?: unknown;
+      settlementRatePct?: unknown;
     };
+    const settlement = parseSettlementRatePct(body.settlementRatePct);
     const name = asTrimmedString(body.name);
     if (!name) throw new ValidationError("name is required");
     const networkId = asTrimmedString(body.networkId);
@@ -764,6 +797,7 @@ export async function registerOfferIntelRoutes(
         name,
         domain: asTrimmedString(body.domain) ?? null,
         networkId: networkId ?? null,
+        settlementRatePct: settlement.present ? settlement.value : null,
       },
     });
     return {
@@ -775,6 +809,92 @@ export async function registerOfferIntelRoutes(
         riskScore: merchant.riskScore,
         riskLevel: merchant.riskLevel,
         status: merchant.status,
+        settlementRatePct: decimalToNumberOrNull(
+          (merchant as { settlementRatePct?: unknown }).settlementRatePct
+        ),
+      },
+    };
+  });
+
+  /**
+   * Merchant update（补强 #1）：支持 settlementRatePct（0–100 校验，
+   * null = 清空为未验证）及 name/domain/networkId/notes 的局部更新。
+   */
+  app.patch<{
+    Params: { id: string };
+    Body: {
+      name?: unknown;
+      domain?: unknown;
+      networkId?: unknown;
+      notes?: unknown;
+      settlementRatePct?: unknown;
+    };
+  }>("/api/v1/merchants/:id", async (request) => {
+    const info = await requireSession(deps, request);
+    const merchantId = request.params.id;
+    if (!UUID_RE.test(merchantId)) {
+      throw new ValidationError("merchant id must be a valid UUID");
+    }
+    const existing = await prisma.merchant.findFirst({
+      where: { id: merchantId, tenantId: info.tenantId, deletedAt: null },
+    });
+    if (!existing) throw new NotFoundError("Merchant", merchantId);
+    const body = (request.body ?? {}) as {
+      name?: unknown;
+      domain?: unknown;
+      networkId?: unknown;
+      notes?: unknown;
+      settlementRatePct?: unknown;
+    };
+    const data: Record<string, unknown> = {};
+    if (body.name !== undefined) {
+      const name = asTrimmedString(body.name);
+      if (!name) throw new ValidationError("name must be a non-empty string");
+      data.name = name;
+    }
+    if (body.domain !== undefined) {
+      data.domain = asTrimmedString(body.domain) ?? null;
+    }
+    if (body.notes !== undefined) {
+      data.notes = asTrimmedString(body.notes) ?? null;
+    }
+    if (body.networkId !== undefined) {
+      const networkId = asTrimmedString(body.networkId);
+      if (networkId) {
+        if (!UUID_RE.test(networkId)) {
+          throw new ValidationError("networkId must be a valid UUID");
+        }
+        const network = await prisma.affiliateNetwork.findFirst({
+          where: { id: networkId, tenantId: info.tenantId, deletedAt: null },
+          select: { id: true },
+        });
+        if (!network) throw new NotFoundError("AffiliateNetwork", networkId);
+        data.networkId = networkId;
+      } else {
+        data.networkId = null;
+      }
+    }
+    const settlement = parseSettlementRatePct(body.settlementRatePct);
+    if (settlement.present) data.settlementRatePct = settlement.value;
+    if (Object.keys(data).length === 0) {
+      throw new ValidationError("no updatable fields provided");
+    }
+    const merchant = await prisma.merchant.update({
+      where: { id: merchantId },
+      data: data as never,
+    });
+    return {
+      merchant: {
+        id: merchant.id,
+        name: merchant.name,
+        domain: merchant.domain,
+        networkId: merchant.networkId,
+        riskScore: merchant.riskScore,
+        riskLevel: merchant.riskLevel,
+        status: merchant.status,
+        settlementRatePct: decimalToNumberOrNull(
+          (merchant as { settlementRatePct?: unknown }).settlementRatePct
+        ),
       },
     };
   });

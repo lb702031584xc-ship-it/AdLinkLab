@@ -481,6 +481,12 @@ model Offer {
   appliedAt        DateTime?   @map("applied_at")
   /// 申请备注（拒绝原因、审核进展等，≤500 字）
   applicationNote  String?     @map("application_note")
+  /// 补强 #4：结算/返款周期天数（null = 未知；>90 天在选品评分里扣分）。
+  payoutCycleDays  Int?        @map("payout_cycle_days")
+  /// 补强 #4：SKU 佣金差异备注（如热门 SKU 低佣/无佣、全站 vs 单品佣金区别；null = 未记录）。
+  skuCommissionNote String?    @map("sku_commission_note")
+  /// 补强 #9：转化流类型 soi_simple | one_click | pin_submit | cc_submit | free_trial | pay_per_call | ftd | cps_sale | mixed（null = 未标注，止损按现有倍数）。
+  conversionFlow   String?     @map("conversion_flow")
   createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt        DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
   archivedAt       DateTime?   @map("archived_at") @db.Timestamptz(3)
@@ -1059,6 +1065,8 @@ model Merchant {
   networkId String?   @map("network_id") @db.Uuid
   riskScore Float?    @map("risk_score")
   riskLevel String?   @map("risk_level")
+  /// 补强 #1：商家级历史结算率（百分比数值，如 70 表示 70%；null = 未验证，不编造）。
+  settlementRatePct Decimal? @map("settlement_rate_pct") @db.Decimal(5, 2)
   status    String    @default("ACTIVE")
   notes     String?
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -1172,6 +1180,12 @@ model NetworkProduct {
   syncStreak        Int      @default(0) @map("sync_streak")
   /// 同步时按 brand + networkId 匹配到的 Merchant.id（匹配不上为 null）。
   merchantId        String?  @map("merchant_id") @db.Uuid
+  /// 补强 #3：备选池阶段 inbox（同步入库）| pool（备选池）| testing（在测）| live（在投）。存量默认 inbox，不改变现有推荐/建 Offer 行为。
+  poolStage         String   @default("inbox") @map("pool_stage")
+  /// 补强 #4：offer 通过率（百分比数值；null = 未知，同步能拿到才写）。
+  approvalRatePct   Decimal? @map("approval_rate_pct") @db.Decimal(5, 2)
+  /// 补强 #4：返款/结算周期天数（null = 未知）。
+  payoutCycleDays   Int?     @map("payout_cycle_days")
   createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
   tenant  Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)

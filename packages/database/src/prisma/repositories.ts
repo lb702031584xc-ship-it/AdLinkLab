@@ -349,11 +349,17 @@ function toAdGroupCriterion(row: {
   };
 }
 
-/** Offer + 申请状态三字段（domain Offer 未包含，database 层本地扩展类型）。 */
+/** Offer + 申请状态三字段 + 补强三字段（domain Offer 未包含，database 层本地扩展类型）。 */
 export type OfferWithApplication = Offer & {
   applicationStatus?: string;
   appliedAt?: Date | null;
   applicationNote?: string | null;
+  /** 补强 #4：结算/返款周期天数（null = 未知）。 */
+  payoutCycleDays?: number | null;
+  /** 补强 #4：SKU 佣金差异备注（null = 未记录）。 */
+  skuCommissionNote?: string | null;
+  /** 补强 #9：转化流类型（null = 未标注）。 */
+  conversionFlow?: string | null;
 };
 
 function toOffer(row: {
@@ -379,6 +385,9 @@ function toOffer(row: {
   applicationStatus?: string | null;
   appliedAt?: Date | null;
   applicationNote?: string | null;
+  payoutCycleDays?: number | null;
+  skuCommissionNote?: string | null;
+  conversionFlow?: string | null;
   idempotencyScope: string | null;
   idempotencyKey: string | null;
   createdAt: Date;
@@ -409,6 +418,9 @@ function toOffer(row: {
     applicationStatus: row.applicationStatus ?? "not_applied",
     appliedAt: row.appliedAt ?? undefined,
     applicationNote: row.applicationNote ?? undefined,
+    payoutCycleDays: row.payoutCycleDays ?? undefined,
+    skuCommissionNote: row.skuCommissionNote ?? undefined,
+    conversionFlow: row.conversionFlow ?? undefined,
     idempotencyScope: row.idempotencyScope ?? undefined,
     idempotencyKey: row.idempotencyKey ?? undefined,
     createdAt: row.createdAt,
@@ -1258,6 +1270,9 @@ export class PrismaOfferRepository implements OfferRepository {
             applicationStatus: data.applicationStatus ?? "not_applied",
             appliedAt: data.appliedAt ?? null,
             applicationNote: data.applicationNote ?? null,
+            payoutCycleDays: data.payoutCycleDays ?? null,
+            skuCommissionNote: data.skuCommissionNote ?? null,
+            conversionFlow: data.conversionFlow ?? null,
             idempotencyScope: data.idempotencyScope ?? null,
             idempotencyKey: data.idempotencyKey ?? null,
             archivedAt: data.archivedAt ?? null,

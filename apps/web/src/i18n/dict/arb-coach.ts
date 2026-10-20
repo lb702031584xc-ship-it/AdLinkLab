@@ -81,6 +81,16 @@ export interface ArbCoachDict {
     reasonNoSpend: string;
     reasonNoPayout: string;
     newComboDefault: string;
+    /** #15 测试节奏阶梯：按 clicks 派生阶段（纯前端，不改 verdict 判定）。 */
+    pace: string;
+    paceStageVerify: string;
+    paceActionVerify: string;
+    paceStageWait: string;
+    paceActionWait: string;
+    paceStageSustain: string;
+    paceActionSustain: string;
+    paceStageJudge: string;
+    paceActionJudge: string;
   };
   nav: {
     overview: string;
@@ -274,6 +284,15 @@ export const zh: ArbCoachDict = {
     reasonNoSpend: "还没花钱",
     reasonNoPayout: "payout 未知，无法判定",
     newComboDefault: "新组合",
+    pace: "节奏阶段",
+    paceStageVerify: "验证期",
+    paceActionVerify: "先跑满 30 个点击看是否出单",
+    paceStageWait: "等延迟",
+    paceActionWait: "已满 30 点击，先暂停等约 2 天（转化有延迟），不出单就放弃",
+    paceStageSustain: "看持续",
+    paceActionSustain: "跑到 60 点击，看能否持续出单",
+    paceStageJudge: "综合判定",
+    paceActionJudge: "结合延迟转化与 ROI 做去留（参考砍/留/加量判定）",
   },
   nav: {
     overview: "总览闯关",
@@ -633,6 +652,15 @@ export const en: ArbCoachDict = {
     reasonNoSpend: "No spend yet",
     reasonNoPayout: "Payout unknown, can't judge",
     newComboDefault: "New combo",
+    pace: "Pace stage",
+    paceStageVerify: "Verify",
+    paceActionVerify: "Run to 30 clicks first and see if it converts",
+    paceStageWait: "Wait for delay",
+    paceActionWait: "30 clicks reached — pause and wait ~2 days (conversions are delayed); drop it if nothing comes in",
+    paceStageSustain: "Watch sustainability",
+    paceActionSustain: "At 60 clicks — check whether conversions keep coming",
+    paceStageJudge: "Full verdict",
+    paceActionJudge: "Decide keep/kill with delayed conversions and ROI together (see the kill/keep/scale verdict)",
   },
   nav: {
     overview: "Walkthrough",

@@ -6,7 +6,17 @@
  * 纯前端，无后端依赖。
  */
 import { useEffect, useRef, useState } from "react";
-import { UNIVERSAL_NEGATIVES } from "@/lib/keywords/negatives";
+import {
+  UNIVERSAL_NEGATIVES,
+  baseNegativesForLanding,
+  type LandingPageKind,
+} from "@/lib/keywords/negatives";
+import {
+  INTENT_GROUP_META,
+  INTENT_GROUP_ORDER,
+  classifyKeywordIntent,
+  type KeywordIntentGroup,
+} from "@/lib/keywords/intent-groups";
 import { useWorkState } from "@/lib/use-work-state";
 import { loadWorkStateAction } from "@/lib/api/work-state-actions";
 import type { KeywordStarterDict } from "@/i18n/dict/keyword-starter";
@@ -82,6 +92,9 @@ export function LaunchEditorClient({
   const [copied, setCopied] = useState(false);
 
   const [negatives, setNegatives] = useState<string[]>([]);
+  /* #13 意图分组人工改组（key = 小写关键词）与 #14 承接页类型 */
+  const [intentOverrides, setIntentOverrides] = useState<Record<string, KeywordIntentGroup>>({});
+  const [landingKind, setLandingKind] = useState<LandingPageKind | "">("");
   const [negInput, setNegInput] = useState("");
   const [negBulkOpen, setNegBulkOpen] = useState(false);
   const [negBulkText, setNegBulkText] = useState("");
@@ -275,6 +288,33 @@ export function LaunchEditorClient({
     UNIVERSAL_NEGATIVES.forEach((c) => c.words.forEach((w) => all.add(w)));
     setNegatives([...all]);
   };
+  /* #14 一键预置基础否定词（去重合并；评测页承接时自动排除 review 类词） */
+  const addBasePreset = () => {
+    const words = baseNegativesForLanding(landingKind || null);
+    setNegatives((ns) => [...new Set([...ns, ...words])]);
+  };
+
+  /* #13 意图分组：启发式建议 + 人工改组覆盖（品牌名取所选 offer 名） */
+  const intentGrouped = (() => {
+    const seen = new Set<string>();
+    const byGroup = new Map<KeywordIntentGroup, string[]>();
+    for (const r of rows) {
+      const kw = r.keyword.trim();
+      if (!kw) continue;
+      const key = kw.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const g =
+        intentOverrides[key] ?? classifyKeywordIntent(kw, { brand: offerName });
+      const arr = byGroup.get(g) ?? [];
+      arr.push(kw);
+      byGroup.set(g, arr);
+    }
+    return INTENT_GROUP_ORDER.filter((g) => byGroup.has(g)).map((g) => ({
+      group: g,
+      keywords: byGroup.get(g) ?? [],
+    }));
+  })();
   const doNegBulkImport = () => {
     const words = negBulkText.split(/[\n,，、]/).map((s) => s.trim()).filter(Boolean);
     setNegatives((ns) => [...new Set([...ns, ...words])]);
@@ -452,6 +492,57 @@ export function LaunchEditorClient({
           ))}
         </div>
 
+        {/* #13 意图分组建议：按词文本启发式分组 + 承接页提示，可人工改组 */}
+        <div className="rounded-xl border border-ink/10 bg-white p-4">
+          <h3 className="text-sm font-bold text-ink">🧭 {d.intentGroupsTitle}</h3>
+          <p className="mt-1 text-xs text-ink/55">{d.intentGroupsRule}</p>
+          {intentGrouped.length === 0 ? (
+            <p className="mt-2 text-sm text-ink/50">{d.intentGroupsEmpty}</p>
+          ) : (
+            <div className="mt-3 space-y-3">
+              {intentGrouped.map(({ group, keywords }) => (
+                <div key={group}>
+                  <p className="text-xs font-semibold text-ink/70">
+                    {lang === "en" ? INTENT_GROUP_META[group].nameEn : INTENT_GROUP_META[group].nameZh}
+                    <span className="ml-2 rounded-full bg-signal/10 px-2 py-0.5 font-medium text-signal">
+                      {d.intentGroupLanding}：
+                      {lang === "en" ? INTENT_GROUP_META[group].landingEn : INTENT_GROUP_META[group].landingZh}
+                    </span>
+                  </p>
+                  <ul className="mt-1.5 flex flex-wrap gap-2">
+                    {keywords.map((kw) => (
+                      <li
+                        key={kw.toLowerCase()}
+                        className="flex items-center gap-1.5 rounded-full bg-ink/[0.04] px-3 py-1 text-sm text-ink/80"
+                      >
+                        {kw}
+                        <select
+                          aria-label={d.intentGroupChange}
+                          title={d.intentGroupChange}
+                          value={group}
+                          onChange={(e) =>
+                            setIntentOverrides((o) => ({
+                              ...o,
+                              [kw.toLowerCase()]: e.target.value as KeywordIntentGroup,
+                            }))
+                          }
+                          className="rounded border border-ink/15 bg-white px-1 py-0.5 text-xs text-ink/60"
+                        >
+                          {INTENT_GROUP_ORDER.map((g) => (
+                            <option key={g} value={g}>
+                              {lang === "en" ? INTENT_GROUP_META[g].nameEn : INTENT_GROUP_META[g].nameZh}
+                            </option>
+                          ))}
+                        </select>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         {/* 下一步：计划定稿后去投放 */}
         {rows.some((r) => r.keyword.trim()) && (
           <div className="rounded-xl border border-signal/30 bg-signal/[0.04] p-4">
@@ -511,6 +602,33 @@ export function LaunchEditorClient({
             >
               ⚡ {d.addAllNegatives}
             </button>
+          </div>
+
+          {/* #14 基础否定词预置：先选承接页类型，评测页自动排除 review 类词 */}
+          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-ink/8 pt-3">
+            <label className="text-xs font-medium text-ink/60">
+              {d.landingKindLabel}
+              <select
+                value={landingKind}
+                onChange={(e) => setLandingKind(e.target.value as LandingPageKind | "")}
+                className="ml-2 rounded-lg border border-ink/15 bg-white px-2 py-1 text-xs text-ink"
+              >
+                <option value="">{d.landingKindUnset}</option>
+                {(Object.keys(d.landingKinds) as LandingPageKind[]).map((k) => (
+                  <option key={k} value={k}>{d.landingKinds[k]}</option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              onClick={addBasePreset}
+              className="rounded-full bg-signal px-3 py-1 text-xs font-medium text-white hover:opacity-90"
+            >
+              ⚡ {d.presetBaseNegatives}
+            </button>
+            {landingKind === "review" && (
+              <span className="text-xs text-amber-700">ℹ️ {d.reviewLandingNote}</span>
+            )}
           </div>
         </div>
 

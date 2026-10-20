@@ -19,6 +19,19 @@ import {
   readDataForSeoErrorDetail,
 } from "./dataforseo-error.js";
 
+/**
+ * 补强 #24：品牌竞价检查默认执行（默认开，用户可取消）。
+ * 调用方未显式传 enabled 时按 true 处理；显式传 false 才跳过检查。
+ * 只改默认值，不改判定逻辑（checkBrandBidding 本身不变）。
+ */
+export const BRAND_BIDDING_CHECK_DEFAULT_ENABLED = true;
+
+export function resolveBrandBiddingCheckEnabled(
+  enabled?: boolean | null,
+): boolean {
+  return enabled ?? BRAND_BIDDING_CHECK_DEFAULT_ENABLED;
+}
+
 export class BrandBiddingError extends AppError {
   constructor(message: string) {
     super(message, { code: "BRAND_BIDDING_FAILED", statusCode: 422 });

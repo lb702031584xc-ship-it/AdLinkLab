@@ -50,3 +50,62 @@ export const UNIVERSAL_NEGATIVES: NegativeCategory[] = [
     words: ["附近", "门店", "near me", "store location"],
   },
 ];
+
+/**
+ * 基础否定词预置（#14）：与 UNIVERSAL_NEGATIVES 分开的一份「意图排除」词表，
+ * 在投放选词阶段一键预置。逐词注释（中英）：
+ * - free 免费：只找免费资源、无购买意图
+ * - login 登录 / sign in 登录：已有账号找入口，不是新客
+ * - download 下载：找软件/资料下载
+ * - manual 说明书：已购用户查手册
+ * - setup 安装设置：已购用户找安装帮助
+ * - repair 维修 / support 支持：售后意图
+ * - price 价格 / deal 优惠 / coupon 优惠券：只比价找券、转化意图弱（按老师词表预置）
+ * - jobs 招聘 / salary 薪资：求职意图
+ * - what is 是什么 / how to 怎么做：纯信息意图
+ * - review 评测 / reviews 评测（复数）/ rating 评分：评测意图——
+ *   承接页本身是评测页时这类词是核心词，必须排除出预置（见下方函数）。
+ */
+export const BASE_NEGATIVE_PRESET: string[] = [
+  "free", // 免费
+  "login", // 登录
+  "sign in", // 登录
+  "download", // 下载
+  "manual", // 说明书
+  "setup", // 安装设置
+  "repair", // 维修
+  "support", // 支持/售后
+  "price", // 价格
+  "deal", // 优惠
+  "coupon", // 优惠券
+  "jobs", // 招聘
+  "salary", // 薪资
+  "what is", // 是什么（纯信息）
+  "how to", // 怎么做（纯信息）
+  "review", // 评测
+  "reviews", // 评测（复数）
+  "rating", // 评分
+];
+
+/** 评测类词：承接页为评测页时是核心词，不能当否定词。 */
+export const REVIEW_CLASS_NEGATIVES: string[] = ["review", "reviews", "rating", "ratings"];
+
+/** 承接页类型（与意图分组的承接页提示对应）。 */
+export type LandingPageKind =
+  | "homepage"
+  | "product"
+  | "review"
+  | "compare"
+  | "guide"
+  | "landing";
+
+/**
+ * 按承接页类型取基础预置词表：评测页承接时自动排除 review 类词，其余原样。
+ * 纯函数；不改动 BASE_NEGATIVE_PRESET 本身。
+ */
+export function baseNegativesForLanding(kind: LandingPageKind | null | undefined): string[] {
+  if (kind !== "review") return [...BASE_NEGATIVE_PRESET];
+  const drop = new Set(REVIEW_CLASS_NEGATIVES);
+  return BASE_NEGATIVE_PRESET.filter((w) => !drop.has(w));
+}
+

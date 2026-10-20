@@ -350,6 +350,7 @@ export async function registerMonitoringRoutes(
         take: 500,
         select: {
           id: true,
+          offerId: true,
           offerName: true,
           impressions: true,
           clicks: true,
@@ -376,9 +377,59 @@ export async function registerMonitoringRoutes(
         },
       }),
     ]);
+    // 补强 #21：offers 快照段 —— 在投（有投放档案）或被 PayoutWatch 监测的 offer，
+    // 当前值取 Offer 本行，上次值取 PayoutWatch.lastPayout（监测服务维护的上次已知值）。
+    // 没有监测历史 → previous* 为 null，Web 端按"拿不到历史值不报"处理，绝不编造变动。
+    const decToNum = (v: unknown): number | null => {
+      if (v === null || v === undefined) return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+    const watched = (await prisma.payoutWatch.findMany({
+      where: { tenantId: info.tenantId },
+      select: { offerId: true, lastPayout: true },
+    })) as Array<{ offerId: string; lastPayout: number | null }>;
+    const lastPayoutByOffer = new Map(
+      watched.map((w) => [w.offerId, w.lastPayout])
+    );
+    const segmentOfferIds = [
+      ...new Set([
+        ...archives
+          .map((a) => a.offerId)
+          .filter((x): x is string => typeof x === "string" && !!x),
+        ...watched.map((w) => w.offerId),
+      ]),
+    ];
+    const segmentOffers =
+      segmentOfferIds.length > 0
+        ? ((await prisma.offer.findMany({
+            where: { tenantId: info.tenantId, id: { in: segmentOfferIds } },
+            select: {
+              id: true,
+              name: true,
+              status: true,
+              commissionValue: true,
+            },
+          })) as Array<{
+            id: string;
+            name: string;
+            status: string;
+            commissionValue: unknown;
+          }>)
+        : [];
+    const offers = segmentOffers.map((o) => ({
+      id: o.id,
+      name: o.name,
+      status: o.status,
+      productStatus: null,
+      commissionRate: null,
+      previousCommissionRate: null,
+      commissionAmount: decToNum(o.commissionValue),
+      previousCommissionAmount: lastPayoutByOffer.get(o.id) ?? null,
+    }));
     return {
       generatedAt: new Date().toISOString(),
-      hasData: archives.length > 0 || alerts.length > 0,
+      hasData: archives.length > 0 || alerts.length > 0 || offers.length > 0,
       archives: archives.map((a) => ({
         id: a.id,
         offerName: a.offerName,
@@ -400,6 +451,7 @@ export async function registerMonitoringRoutes(
         status: a.status,
         createdAt: a.createdAt.toISOString(),
       })),
+      offers,
     };
   });
 

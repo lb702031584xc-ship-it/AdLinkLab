@@ -3,6 +3,7 @@ import { getLang } from "@/i18n/lang";
 import { zh as launchZh, en as launchEn } from "@/i18n/dict/launch-archive";
 import { zh as weeklyZh, en as weeklyEn } from "@/i18n/dict/weekly-report";
 import { LaunchArchiveClient } from "@/components/reports/launch-archive-client";
+import { CpaDiagnosisCard } from "@/components/reports/cpa-diagnosis-card";
 import { WeeklyReportListClient } from "@/components/weekly-report/weekly-report-list-client";
 import { listWeeklyReportsAction } from "@/lib/api/weekly-report-actions";
 
@@ -54,6 +55,13 @@ export default async function ReportsPage({
           </Link>
         ))}
       </nav>
+      {tab === "launch" && (
+        <div className="mb-4">
+          {/* 补强 #22：CPA 诊断卡。页面暂无现成的双周期 CPC/转化率数据源，
+              先以空 props 接入 → 显示数据不足空状态，绝不编造结论。 */}
+          <CpaDiagnosisCard lang={lang === "en" ? "en" : "zh"} />
+        </div>
+      )}
       {tab === "launch" && (
         <LaunchArchiveClient dict={launchDict} initialOfferId={offerId} />
       )}

@@ -29,6 +29,8 @@ import {
 } from "@/lib/api/traffic-actions";
 import {
   mergeLongtailCandidates,
+  LONGTAIL_DEFAULT_MAX_CPC_RATIO,
+  LONGTAIL_DEFAULT_MIN_VOLUME,
   type LongtailCandidate,
 } from "@/lib/longtail";
 import { loadWorkStateAction } from "@/lib/api/work-state-actions";
@@ -185,6 +187,10 @@ export interface PlannerOffer {
   commissionValue?: string | number | null;
   commissionType?: string | null;
   avgPrice?: string | number | null;
+  /** #10：offer 创建时间（ISO 字符串）；页面层未带入时为空。 */
+  createdAt?: string | null;
+  /** #10：已知转化样本量；拿不到时为空（不编造），角标只按 offer 年龄判断。 */
+  sampleConversions?: number | null;
 }
 
 /** 从 offer 库参数推导 payout（美元）：固定佣金直接用；百分比佣金按均价折算。 */
@@ -413,6 +419,23 @@ export function TrafficPlannerClient({
   }, [payout, networkCvr, shavePct, targetReturnRatio]);
   /** 当前模式的出价参考（渠道对比等共用逻辑沿用）。 */
   const bidCalc = profitMode === "ecommerce" ? bidCalcEcom : bidCalcAff;
+
+  /* #10：EPC 可信度 — 当前 offer 创建 <14 天，或已知转化样本 <30 时，
+     EPC 数值旁标「样本小·仅供参考」。只用已有数据判断：样本量拿不到就
+     只看 offer 年龄；两者都拿不到就不标（绝不编造样本数）。 */
+  const epcOffer = selectedOfferId
+    ? (offers?.find((o) => o.id === selectedOfferId) ??
+      (initialOffer?.id === selectedOfferId ? initialOffer : null))
+    : null;
+  const epcOfferAgeDays = (() => {
+    if (!epcOffer?.createdAt) return null;
+    const ts = new Date(epcOffer.createdAt).getTime();
+    if (!Number.isFinite(ts)) return null;
+    return (Date.now() - ts) / 86_400_000;
+  })();
+  const epcSmallSample =
+    (epcOfferAgeDays !== null && epcOfferAgeDays >= 0 && epcOfferAgeDays < 14) ||
+    (epcOffer?.sampleConversions != null && epcOffer.sampleConversions < 30);
 
   /* Google 参考 CPC：自动 = 关键词表 Planner 低位均值（无低位时用关键词表 CPC 均值）；手动覆盖优先。 */
   const googleCpcAuto = useMemo(() => {
@@ -940,6 +963,48 @@ export function TrafficPlannerClient({
   const [longtailLoading, setLongtailLoading] = useState(false);
   const [longtailError, setLongtailError] = useState<string | null>(null);
   const [longtailSnapshotEmpty, setLongtailSnapshotEmpty] = useState(false);
+  /* #17 长尾过滤参数（可调，默认值与 lib 默认一致）+ 未过滤的原始合并入参（改参数时本地重过滤，不重新请求） */
+  const [ltMinVolume, setLtMinVolume] = useState(String(LONGTAIL_DEFAULT_MIN_VOLUME));
+  const [ltMaxRatio, setLtMaxRatio] = useState(String(LONGTAIL_DEFAULT_MAX_CPC_RATIO));
+  const [ltBrandCpc, setLtBrandCpc] = useState("");
+  const [ltCompetitionOnly, setLtCompetitionOnly] = useState(false);
+  const [longtailRaw, setLongtailRaw] = useState<{
+    seed: string;
+    snapshotRows: Array<{ keyword?: string; volume?: string | number; competition?: string | null }>;
+    serverCandidates: Array<{
+      keyword: string;
+      volume: number | null;
+      source: "autocomplete" | "dataforseo";
+    }>;
+    planKeywords: string[];
+  } | null>(null);
+  const longtailFreshRef = useRef(false);
+
+  useEffect(() => {
+    if (!longtailRaw) return;
+    const minVolume = Number(ltMinVolume);
+    const maxRatio = Number(ltMaxRatio);
+    const brandCpc = Number(ltBrandCpc);
+    const merged = mergeLongtailCandidates({
+      ...longtailRaw,
+      filters: {
+        minVolume: Number.isFinite(minVolume) && minVolume >= 0 ? minVolume : LONGTAIL_DEFAULT_MIN_VOLUME,
+        maxCpcRatioToBrand:
+          Number.isFinite(maxRatio) && maxRatio > 0 ? maxRatio : LONGTAIL_DEFAULT_MAX_CPC_RATIO,
+        brandCpc: ltBrandCpc.trim() !== "" && Number.isFinite(brandCpc) && brandCpc > 0 ? brandCpc : null,
+        competitionFilter: ltCompetitionOnly,
+      },
+    });
+    setLongtailCandidates(merged);
+    if (longtailFreshRef.current) {
+      longtailFreshRef.current = false;
+      // 首次生成默认选中带搜索量的（已验证）；联想（无搜索量）需用户手动勾选。
+      setLongtailSelected(merged.filter((c) => c.volume != null).map((c) => c.keyword));
+    } else {
+      const keys = new Set(merged.map((c) => c.keyword));
+      setLongtailSelected((prev) => prev.filter((k) => keys.has(k)));
+    }
+  }, [longtailRaw, ltMinVolume, ltMaxRatio, ltBrandCpc, ltCompetitionOnly]);
 
   const generateLongtail = async (row: KwRow) => {
     const seed = row.keyword.trim();
@@ -961,15 +1026,17 @@ export function TrafficPlannerClient({
         getLongtailSuggestionsAction(seed),
       ]);
       const researchRows = (researchRes.ok && researchRes.data.state
-        ? (researchRes.data.state.rows as Array<{ keyword?: string; volume?: string }>)
-        : []) as Array<{ keyword?: string; volume?: string }>;
+        ? (researchRes.data.state.rows as Array<{ keyword?: string; volume?: string; competition?: string }>)
+        : []) as Array<{ keyword?: string; volume?: string; competition?: string }>;
       const launchRows = (launchRes.ok && launchRes.data.state
         ? (launchRes.data.state.rows as Array<{ keyword?: string }>)
         : []) as Array<{ keyword?: string }>;
       setLongtailSnapshotEmpty(researchRows.length === 0);
       const serverCandidates = serverRes.ok ? serverRes.data.candidates : [];
       if (!serverRes.ok) setLongtailError(serverRes.error);
-      const merged = mergeLongtailCandidates({
+      // 合并+过滤在上方 useEffect 里按当前过滤参数统一做（改参数本地重过滤）。
+      longtailFreshRef.current = true;
+      setLongtailRaw({
         seed,
         snapshotRows: researchRows,
         serverCandidates,
@@ -978,9 +1045,6 @@ export function TrafficPlannerClient({
           ...launchRows.map((r) => r.keyword ?? ""),
         ],
       });
-      setLongtailCandidates(merged);
-      // 默认选中带搜索量的（已验证）；联想（无搜索量）需用户手动勾选。
-      setLongtailSelected(merged.filter((c) => c.volume != null).map((c) => c.keyword));
     } catch {
       setLongtailError(d.longtailEmpty);
     } finally {
@@ -1782,6 +1846,12 @@ export function TrafficPlannerClient({
             <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
               <label className="block">
                 <span className={labelCls}>{d.epc}</span>
+                {/* #10：小样本角标（offer 太新或转化样本 <30 时显示在 EPC 数值旁） */}
+                {epcSmallSample && epc.trim() ? (
+                  <span className="mb-1 ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">
+                    {d.epcSmallSampleBadge}
+                  </span>
+                ) : null}
                 <input className={inputCls} type="number" min="0" step="0.01" value={epc} onChange={(e) => setEpc(e.target.value)} placeholder="0.50" />
                 {/* 防呆：EPC（按点击）不可能大于单次转化的 payout */}
                 {(() => {
@@ -2122,6 +2192,52 @@ export function TrafficPlannerClient({
                 </button>
               </div>
               <p className="mt-1 text-xs text-ink/50">{d.longtailHint}</p>
+              {/* #17 长尾过滤参数（可调；改动后本地自动重新过滤） */}
+              <div className="mt-2 flex flex-wrap items-end gap-3 text-xs text-ink/70">
+                <label className="block">
+                  <span className="mb-1 block">{d.longtailFilterMinVolume}</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={ltMinVolume}
+                    onChange={(e) => setLtMinVolume(e.target.value)}
+                    className="w-24 rounded-lg border border-ink/15 bg-white px-2 py-1 text-sm text-ink"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block">{d.longtailFilterBrandCpc}</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.01}
+                    value={ltBrandCpc}
+                    onChange={(e) => setLtBrandCpc(e.target.value)}
+                    placeholder="—"
+                    className="w-28 rounded-lg border border-ink/15 bg-white px-2 py-1 text-sm text-ink"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block">{d.longtailFilterMaxRatio}</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.05}
+                    value={ltMaxRatio}
+                    onChange={(e) => setLtMaxRatio(e.target.value)}
+                    className="w-24 rounded-lg border border-ink/15 bg-white px-2 py-1 text-sm text-ink"
+                  />
+                </label>
+                <label className="flex items-center gap-1.5 pb-1.5">
+                  <input
+                    type="checkbox"
+                    checked={ltCompetitionOnly}
+                    onChange={(e) => setLtCompetitionOnly(e.target.checked)}
+                  />
+                  {d.longtailFilterCompetition}
+                </label>
+              </div>
+              <p className="mt-1 text-[11px] text-ink/45">{d.longtailFilterNote}</p>
               {longtailLoading && <p className="mt-2 text-xs text-ink/60">{d.longtailLoading}</p>}
               {longtailError && <p className="mt-2 text-xs text-red-700">{longtailError}</p>}
               {!longtailLoading && longtailCandidates.length === 0 && (

@@ -96,7 +96,19 @@ export interface CatalogProduct {
   pinned?: boolean;
   /** 商家维度：后端新契约正在落地，可无，防御性读取。 */
   merchantName?: string | null;
+  merchantId?: string | null;
+  /** 补强 #1：所属商家结算率（百分比；null = 未验证，不编造）。 */
+  settlementRatePct?: number | null;
+  /** 补强 #3：备选池阶段 inbox | pool | testing | live。 */
+  poolStage?: PoolStage | string | null;
+  /** 补强 #4：offer 通过率（百分比；null = 未知，显示「—」）。 */
+  approvalRatePct?: number | null;
+  /** 补强 #4：返款/结算周期天数（null = 未知）。 */
+  payoutCycleDays?: number | null;
 }
+
+/** 补强 #3：备选池阶段。 */
+export type PoolStage = "inbox" | "pool" | "testing" | "live"; // 阶段值域（"use server" 文件禁止导出常量，需要列表时在客户端本地定义）
 
 export interface ScreeningPreset {
   minReviews: number | null;
@@ -677,6 +689,8 @@ export async function listCatalogProductsAction(params: {
   minAdCount?: number;
   /** true → 只看有广告在投的（adCount > 0）。 */
   hasAds?: boolean;
+  /** 补强 #3：备选池阶段过滤（不传 = 全部阶段）。 */
+  poolStage?: PoolStage;
 }) {
   const qs = new URLSearchParams();
   if (params.networkId) qs.set("networkId", params.networkId);
@@ -688,6 +702,7 @@ export async function listCatalogProductsAction(params: {
   if (params.minAdCount != null && params.minAdCount > 0)
     qs.set("minAdCount", String(Math.floor(params.minAdCount)));
   if (params.hasAds) qs.set("hasAds", "1");
+  if (params.poolStage) qs.set("poolStage", params.poolStage);
   qs.set("page", String(params.page ?? 1));
   qs.set("pageSize", String(params.pageSize ?? 20));
   return attempt(
@@ -834,4 +849,47 @@ export async function getProductLaunchHistoryAction(productId: string) {
       `/api/v1/catalog/products/${encodeURIComponent(productId)}/launch-history`
     )
   , []);
+}
+
+/* ── 备选池阶段移动（补强 #3；后端走 B6 catalog-sync 门禁 + 审计） ── */
+
+/** 单条移动备选池阶段。 */
+export async function moveProductPoolStageAction(
+  productId: string,
+  poolStage: PoolStage
+) {
+  return attempt(
+    () =>
+      apiFetch<{ updated: number; productId: string; poolStage: PoolStage }>(
+        `/api/v1/catalog/products/${encodeURIComponent(productId)}/pool-stage`,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ poolStage }),
+        }
+      ),
+    ["/catalog"]
+  );
+}
+
+/** 批量移动备选池阶段（单次上限 500，与后端 asIdArray 一致）。 */
+export async function moveProductsPoolStageAction(
+  productIds: string[],
+  poolStage: PoolStage
+) {
+  if (productIds.length === 0) {
+    return { ok: false as const, error: "No products selected" };
+  }
+  return attempt(
+    () =>
+      apiFetch<{ updated: number; requested: number; poolStage: PoolStage }>(
+        "/api/v1/catalog/products/pool-stage",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ids: productIds.slice(0, 500), poolStage }),
+        }
+      ),
+    ["/catalog"]
+  );
 }

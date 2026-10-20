@@ -117,6 +117,18 @@ export interface KeywordStarterDict {
   addAllNegatives: string;
   copyNegatives: string;
   emptyNegatives: string;
+  /* #13 意图分组 */
+  intentGroupsTitle: string;
+  intentGroupsRule: string;
+  intentGroupsEmpty: string;
+  intentGroupChange: string;
+  intentGroupLanding: string;
+  /* #14 否定词预置 + 承接页类型 */
+  landingKindLabel: string;
+  landingKindUnset: string;
+  landingKinds: Record<"homepage" | "product" | "review" | "compare" | "guide" | "landing", string>;
+  presetBaseNegatives: string;
+  reviewLandingNote: string;
 }
 
 export const zh: KeywordStarterDict = {
@@ -239,6 +251,23 @@ export const zh: KeywordStarterDict = {
   addAllNegatives: "一键全加",
   copyNegatives: "复制否定词",
   emptyNegatives: "还没有否定词。",
+  intentGroupsTitle: "关键词意图分组（建议）",
+  intentGroupsRule: "判断法：看自然搜索第一名是什么页面，就用什么页面承接。",
+  intentGroupsEmpty: "计划里还没有关键词，导入或添加后这里会按意图自动分组（可人工改组）。",
+  intentGroupChange: "改组",
+  intentGroupLanding: "承接页",
+  landingKindLabel: "承接页类型",
+  landingKindUnset: "未指定",
+  landingKinds: {
+    homepage: "官网首页",
+    product: "产品页",
+    review: "评测页",
+    compare: "对比页",
+    guide: "攻略/内容页",
+    landing: "引导页",
+  },
+  presetBaseNegatives: "一键预置基础否定词",
+  reviewLandingNote: "评测页承接时 review 类词是核心词，已自动排除",
 };
 
 export const en: KeywordStarterDict = {
@@ -361,4 +390,21 @@ export const en: KeywordStarterDict = {
   addAllNegatives: "Add all",
   copyNegatives: "Copy negatives",
   emptyNegatives: "No negatives yet.",
+  intentGroupsTitle: "Keyword intent groups (suggested)",
+  intentGroupsRule: "Rule of thumb: see what page ranks #1 organically, and use that page type to receive the click.",
+  intentGroupsEmpty: "No keywords in the plan yet. Import or add keywords and they will be grouped by intent here (you can reassign groups).",
+  intentGroupChange: "Group",
+  intentGroupLanding: "Landing",
+  landingKindLabel: "Landing page type",
+  landingKindUnset: "Not specified",
+  landingKinds: {
+    homepage: "Official homepage",
+    product: "Product page",
+    review: "Review page",
+    compare: "Comparison page",
+    guide: "Guide / content page",
+    landing: "Landing page",
+  },
+  presetBaseNegatives: "Preset base negatives",
+  reviewLandingNote: "With a review landing page, review-class words are core keywords and were excluded automatically",
 };

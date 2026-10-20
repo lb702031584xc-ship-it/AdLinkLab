@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { paceChecklist, daysActiveSince, PACE_STOP_LOSS_SOURCE, STOP_LOSS_PAYOUT_MULTIPLE } from "./pace-checklist.js";
+import { paceChecklist, daysActiveSince, PACE_STOP_LOSS_SOURCE, STOP_LOSS_PAYOUT_MULTIPLE, stopLossMultiplierForFlow, netValidOrderCount, affiliateConversionRate, roiStatusFor, roiRatioOf } from "./pace-checklist.js";
 
 describe("P1-5 pace-checklist", () => {
   it("2–3 天无展示/点击 → CPC +10%~20% 再观察 2 天", () => {
@@ -57,6 +57,53 @@ describe("P1-5 pace-checklist", () => {
     expect(out).toHaveLength(1);
     expect(out[0]?.text).toContain("立即暂停止损");
     expect(out[0]?.level).toBe("action");
+  });
+
+  it("补强 #20：stopLossMultiplierForFlow（源：arb-coach-verdict）— 浅层 2.5 / 深层 4 / 其余已知 3 / 未知 2.5", () => {
+    expect(stopLossMultiplierForFlow("soi_simple")).toBe(2.5);
+    expect(stopLossMultiplierForFlow("one_click")).toBe(2.5);
+    expect(stopLossMultiplierForFlow("pin_submit")).toBe(3); // 其余已知流（arb 口径）
+    expect(stopLossMultiplierForFlow("cc_submit")).toBe(4);
+    expect(stopLossMultiplierForFlow("ftd")).toBe(4);
+    expect(stopLossMultiplierForFlow("free_trial")).toBe(3);
+    expect(stopLossMultiplierForFlow("cps_sale")).toBe(3);
+    expect(stopLossMultiplierForFlow(null)).toBe(2.5);
+    expect(stopLossMultiplierForFlow("unknown_flow")).toBe(2.5);
+    expect(stopLossMultiplierForFlow(undefined)).toBe(STOP_LOSS_PAYOUT_MULTIPLE);
+  });
+
+  it("补强 #20：深层流（cc_submit）止损线为 4 倍 — 3 倍 payout 不触发、4 倍触发", () => {
+    const below = paceChecklist({ impressions: 2000, clicks: 80, conversions: 0, spend: 30, revenue: 0, payout: 10, conversionFlow: "cc_submit", daysActive: null });
+    expect(below.some((s) => s.text.includes("止损"))).toBe(false);
+    const at = paceChecklist({ impressions: 2000, clicks: 80, conversions: 0, spend: 40, revenue: 0, payout: 10, conversionFlow: "cc_submit", daysActive: null });
+    const stop = at.find((s) => s.text.includes("立即暂停止损"));
+    expect(stop).toBeDefined();
+    expect(stop?.text).toContain("止损线 4.0 倍");
+  });
+
+  it("补强 #20：ROI 口径 — 有效订单净值合并、转化率、ROI 阈值（≥100 点击才判定）", () => {
+    expect(netValidOrderCount([
+      { orderId: "a", value: 100, status: "CONFIRMED" },
+      { orderId: "a", value: 100, status: "REFUNDED" },
+      { orderId: "b", value: 20, status: "CONFIRMED" },
+    ])).toBe(1);
+    expect(affiliateConversionRate(4, 200)).toBeCloseTo(0.02);
+    expect(affiliateConversionRate(4, 0)).toBeNull();
+    expect(roiRatioOf(50, 100)).toBeCloseTo(0.5);
+    expect(roiRatioOf(50, null)).toBeNull();
+    expect(roiStatusFor(99, 0.1)).toBe("insufficient");
+    expect(roiStatusFor(100, 0.9)).toBe("loss");
+    expect(roiStatusFor(100, 1.5)).toBe("neutral");
+    expect(roiStatusFor(100, 2)).toBe("profitable");
+  });
+
+  it("补强 #20：pace ROI 建议 — 点击 ≥100 且 ROI<1 出亏损提示；点击 <100 不判定", () => {
+    const loss = paceChecklist({ impressions: 5000, clicks: 200, conversions: 2, spend: 100, revenue: 50, daysActive: null });
+    expect(loss.some((s) => s.text.includes("ROI 0.50 < 1"))).toBe(true);
+    const small = paceChecklist({ impressions: 500, clicks: 99, conversions: 2, spend: 100, revenue: 50, daysActive: null });
+    expect(small.some((s) => s.text.includes("ROI"))).toBe(false);
+    const win = paceChecklist({ impressions: 5000, clicks: 200, conversions: 10, spend: 100, revenue: 250, daysActive: null });
+    expect(win.some((s) => s.text.includes("ROI 2.50 ≥ 2"))).toBe(true);
   });
 
   it("金额型止损：未达倍数 / 已有转化 / payout 未知或为 0 → 均不触发", () => {

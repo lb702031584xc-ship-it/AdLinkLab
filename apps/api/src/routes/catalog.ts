@@ -9,7 +9,9 @@
  *   GET    /api/v1/catalog/sync-jobs               最近 20 条同步任务（?networkId）
  *   GET    /api/v1/catalog/sync-jobs/:id           单条同步任务（轮询进度/结果）
  *   GET    /api/v1/catalog/funnel                  ?networkId → 可投流漏斗计数
- *   GET    /api/v1/catalog/products                商品分页（白名单置顶标记；sort=id_desc 默认主键倒序）
+ *   GET    /api/v1/catalog/products                商品分页（白名单置顶标记；sort=id_desc 默认主键倒序；?poolStage=inbox|pool|testing|live 过滤）
+ *   PATCH  /api/v1/catalog/products/:id/pool-stage {poolStage} 单条移动备选池阶段（B6 catalog-sync 门禁+审计）
+ *   POST   /api/v1/catalog/products/pool-stage     {ids[], poolStage} 批量移动阶段（B6 catalog-sync 门禁+审计）
  *   GET    /api/v1/catalog/screening-preset        当前预设（无则默认 + saved:false）
  *   PUT    /api/v1/catalog/screening-preset        改预设（auto* 仅管理员）
  *   POST   /api/v1/catalog/screen                  {networkId?} 重跑筛选
@@ -177,6 +179,17 @@ function serializeProduct(r: Record<string, unknown>, whitelisted: boolean) {
     recommendationScore: numOrNull(r.recommendationScore),
     promoUrl: r.promoUrl,
     merchantId: r.merchantId ?? null,
+    /** 补强 #1：所属商家结算率（百分比；列表接口按 merchantId 查 merchants 组装注入，查不到/无商家 → null，显示「未验证」）。 */
+    settlementRatePct: numOrNull(r.settlementRatePct),
+    /** 补强 #3：备选池阶段 inbox | pool | testing | live（存量默认 inbox）。 */
+    poolStage: (r.poolStage as string) ?? "inbox",
+    /** 补强 #4：offer 通过率（百分比；未知 → null，绝不编造）。 */
+    approvalRatePct: numOrNull(r.approvalRatePct),
+    /** 补强 #4：返款/结算周期天数（未知 → null）。 */
+    payoutCycleDays:
+      numOrNull(r.payoutCycleDays) === null
+        ? null
+        : Math.trunc(numOrNull(r.payoutCycleDays) as number),
     mid,
     landingPageType: (r.landingPageType as string) ?? null,
     countryCode: (r.countryCode as string) ?? null,
@@ -331,6 +344,28 @@ export function buildAdCountWhere(query: {
   if (query.hasAds === "1" || query.hasAds === "true")
     floor = Math.max(floor, 1);
   return floor > 0 ? { adCount: { gte: floor } } : {};
+}
+
+/** 补强 #3：备选池阶段（与 schema NetworkProduct.poolStage 口径一致）。 */
+export const POOL_STAGES = ["inbox", "pool", "testing", "live"] as const;
+export type PoolStage = (typeof POOL_STAGES)[number];
+
+export function isPoolStage(v: unknown): v is PoolStage {
+  return (
+    typeof v === "string" &&
+    (POOL_STAGES as readonly string[]).includes(v)
+  );
+}
+
+/**
+ * 备选池阶段过滤（列表查询参数 poolStage）：
+ * 合法阶段 → 等值过滤；缺省/"all" → 不过滤；非法值由调用方先行 400。
+ */
+export function buildPoolStageWhere(query: {
+  poolStage?: unknown;
+}): Record<string, unknown> {
+  const v = typeof query.poolStage === "string" ? query.poolStage.trim() : "";
+  return isPoolStage(v) ? { poolStage: v } : {};
 }
 
 export async function registerCatalogRoutes(
@@ -638,6 +673,13 @@ export async function registerCatalogRoutes(
     } else if (query.recommended === "false" || query.recommended === "0") {
       where.recommended = false;
     }
+    // 备选池阶段过滤（补强 #3）：非法阶段值直接 400，不静默忽略。
+    const poolStageRaw =
+      typeof query.poolStage === "string" ? query.poolStage.trim() : "";
+    if (poolStageRaw && poolStageRaw !== "all" && !isPoolStage(poolStageRaw)) {
+      throw new ValidationError("poolStage 非法（inbox/pool/testing/live）");
+    }
+    Object.assign(where, buildPoolStageWhere(query));
     const q = asTrimmed(query.q);
     if (q)
       where.OR = [
@@ -758,13 +800,20 @@ export async function registerCatalogRoutes(
         })) as Array<{ entityId: string }>
       ).map((r) => r.entityId)
     );
-    const merchantNameById = new Map<string, string>();
+    const merchantById = new Map<
+      string,
+      { name: string; settlementRatePct: number | null }
+    >();
     if (merchantIds.length > 0) {
       const merchants = (await prisma.merchant.findMany({
         where: { tenantId: info.tenantId, id: { in: merchantIds } },
-        select: { id: true, name: true },
-      })) as Array<{ id: string; name: string }>;
-      for (const m of merchants) merchantNameById.set(m.id, m.name);
+        select: { id: true, name: true, settlementRatePct: true },
+      })) as Array<{ id: string; name: string; settlementRatePct: unknown }>;
+      for (const m of merchants)
+        merchantById.set(m.id, {
+          name: m.name,
+          settlementRatePct: numOrNull(m.settlementRatePct),
+        });
     }
     // 联盟平台/账号列：一次查出本页涉及的网络（kind + name）。
     const networkIds = [
@@ -792,7 +841,11 @@ export async function registerCatalogRoutes(
         ...serializeProduct(r, whiteSet.has(r.id as string)),
         pinned,
         blacklisted,
-        merchantName: mid ? (merchantNameById.get(mid) ?? null) : null,
+        merchantName: mid ? (merchantById.get(mid)?.name ?? null) : null,
+        // 补强 #1：所属商家结算率（查不到商家/未验证 → null，前端显示「未验证」）。
+        settlementRatePct: mid
+          ? (merchantById.get(mid)?.settlementRatePct ?? null)
+          : null,
         networkKind: net?.kind ?? null,
         networkName: net?.name ?? null,
       };
@@ -1098,6 +1151,22 @@ export async function registerCatalogRoutes(
       const preset = await resolveScreeningPreset(prisma, info.tenantId);
       let updated = 0;
       const scored: Array<{ productId: string; score: number; recommended: boolean }> = [];
+      // 补强 #1：商家结算率按 merchantId 懒加载缓存（同商家只查一次）；查不到 → null（未验证，评分中性）。
+      const settlementByMerchant = new Map<string, number | null>();
+      const settlementFor = async (
+        merchantId: unknown
+      ): Promise<number | null> => {
+        if (typeof merchantId !== "string" || !merchantId) return null;
+        const cached = settlementByMerchant.get(merchantId);
+        if (cached !== undefined) return cached;
+        const m = (await prisma.merchant.findFirst({
+          where: { id: merchantId, tenantId: info.tenantId },
+          select: { settlementRatePct: true },
+        })) as { settlementRatePct: unknown } | null;
+        const v = m ? numOrNull(m.settlementRatePct) : null;
+        settlementByMerchant.set(merchantId, v);
+        return v;
+      };
       for (const id of ids) {
         const p = (await prisma.networkProduct.findFirst({
           where: { id, tenantId: info.tenantId },
@@ -1111,6 +1180,12 @@ export async function registerCatalogRoutes(
             reviewCount:
               typeof p.reviewCount === "number" && Number.isFinite(p.reviewCount)
                 ? p.reviewCount
+                : null,
+            settlementRatePct: await settlementFor(p.merchantId),
+            payoutCycleDays:
+              typeof p.payoutCycleDays === "number" &&
+              Number.isFinite(p.payoutCycleDays)
+                ? p.payoutCycleDays
                 : null,
           },
           preset
@@ -1148,6 +1223,96 @@ export async function registerCatalogRoutes(
         detail: { requested: ids.length, updated: res.count },
       });
       return { updated: res.count, requested: ids.length };
+    }
+  );
+
+  /* ── 备选池阶段移动（补强 #3）──
+   * B6 门禁（与 session/screen 同风格）：按商品所属网络的 kind 逐个
+   * requireActiveGrant（owner/admin 豁免返回 null，审计标 exempt）；
+   * 成功后 writeCatalogAudit + incrementGrantUsage。逐条 update
+   * （与 calc-score 同风格），已在目标阶段的商品不重复写。
+   */
+  async function moveProductsToPoolStage(
+    info: { tenantId: string; id: string; role: string },
+    products: Array<{ id: string; poolStage?: string | null; networkId: string }>,
+    poolStage: PoolStage
+  ): Promise<number> {
+    const networkIds = [
+      ...new Set(products.map((pr) => pr.networkId).filter(Boolean)),
+    ];
+    const grants: Array<{ id: string } | null> = [];
+    for (const nid of networkIds) {
+      const network = await findNetwork(prisma, info.tenantId, nid);
+      const grant = await requireActiveGrant(prisma, {
+        tenantId: info.tenantId,
+        userId: info.id,
+        userRole: info.role,
+        capability: "catalog-sync",
+        whitelistValue: network.kind,
+      });
+      grants.push(grant as { id: string } | null);
+    }
+    let updated = 0;
+    for (const pr of products) {
+      if ((pr.poolStage ?? "inbox") === poolStage) continue;
+      await prisma.networkProduct.update({
+        where: { id: pr.id },
+        data: { poolStage },
+      });
+      updated += 1;
+    }
+    const firstGrant = grants.find((g) => g !== null) ?? null;
+    await writeCatalogAudit(prisma, {
+      tenantId: info.tenantId,
+      grantId: firstGrant?.id ?? null,
+      actorId: info.id,
+      action: "CATALOG_PRODUCT_POOL_STAGE_MOVED",
+      detail: {
+        poolStage,
+        requested: products.length,
+        updated,
+        productIds: products.map((pr) => pr.id),
+        ...(firstGrant ? {} : { exempt: "owner-admin" }),
+      },
+    });
+    for (const g of grants) {
+      if (g) await incrementGrantUsage(prisma, g as never);
+    }
+    return updated;
+  }
+
+  app.patch<{
+    Params: { id: string };
+    Body: { poolStage?: unknown };
+  }>("/api/v1/catalog/products/:id/pool-stage", async (request) => {
+    const info = await requireSession(deps, request);
+    const id = assertId(request.params.id, "productId");
+    if (!isPoolStage(request.body?.poolStage)) {
+      throw new ValidationError("poolStage 非法（inbox/pool/testing/live）");
+    }
+    const poolStage = request.body.poolStage;
+    const product = (await prisma.networkProduct.findFirst({
+      where: { id, tenantId: info.tenantId },
+    })) as { id: string; poolStage?: string | null; networkId: string } | null;
+    if (!product) throw new NotFoundError("Product not found");
+    const updated = await moveProductsToPoolStage(info, [product], poolStage);
+    return { updated, productId: id, poolStage };
+  });
+
+  app.post<{ Body: { ids?: unknown; poolStage?: unknown } }>(
+    "/api/v1/catalog/products/pool-stage",
+    async (request) => {
+      const info = await requireSession(deps, request);
+      const ids = asIdArray(request.body?.ids, "ids");
+      if (!isPoolStage(request.body?.poolStage)) {
+        throw new ValidationError("poolStage 非法（inbox/pool/testing/live）");
+      }
+      const poolStage = request.body.poolStage;
+      const products = (await prisma.networkProduct.findMany({
+        where: { id: { in: ids }, tenantId: info.tenantId },
+      })) as Array<{ id: string; poolStage?: string | null; networkId: string }>;
+      const updated = await moveProductsToPoolStage(info, products, poolStage);
+      return { updated, requested: ids.length, poolStage };
     }
   );
 
@@ -1361,6 +1526,24 @@ export async function registerCatalogRoutes(
       );
       let screened = 0;
       let recommended = 0;
+      // 补强 #1：本批商品涉及商家的结算率一次批量查（查不到 → null，未验证中性）。
+      const screenMerchantIds = [
+        ...new Set(
+          products
+            .map((p) => p.merchantId)
+            .filter((x): x is string => typeof x === "string" && !!x)
+        ),
+      ];
+      const settlementByMerchant = new Map<string, number | null>();
+      if (screenMerchantIds.length > 0) {
+        const merchants = (await prisma.merchant.findMany({
+          where: { id: { in: screenMerchantIds }, tenantId: info.tenantId },
+          select: { id: true, settlementRatePct: true },
+        })) as Array<{ id: string; settlementRatePct: unknown }>;
+        for (const m of merchants) {
+          settlementByMerchant.set(m.id, numOrNull(m.settlementRatePct));
+        }
+      }
       for (const p of products) {
         const mid = p.merchantId as string | null;
         if (
@@ -1379,6 +1562,14 @@ export async function registerCatalogRoutes(
             commissionAmount: numOrNull(p.commissionAmount),
             commissionRate: numOrNull(p.commissionRate),
             reviewCount: (p.reviewCount as number) ?? null,
+            settlementRatePct: mid
+              ? (settlementByMerchant.get(mid) ?? null)
+              : null,
+            payoutCycleDays:
+              typeof p.payoutCycleDays === "number" &&
+              Number.isFinite(p.payoutCycleDays)
+                ? p.payoutCycleDays
+                : null,
           },
           preset
         );

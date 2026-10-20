@@ -48,6 +48,10 @@ export interface ScoreableProduct {
   commissionAmount?: number | null;
   commissionRate?: number | null;
   reviewCount?: number | null;
+  /** 补强 #1：所属商家历史结算率（%，0–100）；null/缺失 = 未验证，评分中性。 */
+  settlementRatePct?: number | null;
+  /** 补强 #4：返款周期天数；null/缺失 = 未知，评分中性；>90 天扣分。 */
+  payoutCycleDays?: number | null;
 }
 
 export interface ScreeningResult {
@@ -57,7 +61,7 @@ export interface ScreeningResult {
 }
 
 export interface EvaluateResult extends ScreeningResult {
-  /** 质量分分项（佣金/评论/价格/佣金率，0–100）。 */
+  /** 质量分分项（佣金/评论/价格/佣金率/结算率/返款周期，0–100）。 */
   breakdown: RecommendationBreakdown;
 }
 
@@ -126,6 +130,8 @@ export function evaluateProduct(
     commissionRate: p.commissionRate,
     reviewCount: p.reviewCount,
     price: p.price,
+    settlementRatePct: p.settlementRatePct,
+    payoutCycleDays: p.payoutCycleDays,
   });
   const recommended =
     preset === null

@@ -1,6 +1,10 @@
 /**
  * Phase 8.4.6 — Safe Google Ads Script source generation.
  * Target runtime: Google Ads Scripts (UrlFetchApp / AdsApp), NOT Node.js.
+ *
+ * 补强 #20 口径核对（已核对一致）：本生成器只做 URL 配置同步，
+ * 不计算 ROI/转化率、不引用 Ads 后台转化数，无口径冲突。
+ * 转化率统一口径见 weekly-report-service.ts（有效唯一订单 ÷ 广告点击）。
  */
 export const SCRIPT_GENERATOR_VERSION = "8.4.6";
 export const SCRIPT_API_VERSION = "v1";

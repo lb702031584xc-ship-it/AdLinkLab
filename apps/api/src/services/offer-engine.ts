@@ -80,12 +80,67 @@ export const APPLICATION_STATUSES = [
   "rejected",
 ] as const;
 
-/** Offer + 申请状态三字段（domain Offer 未包含，API 层本地扩展类型）。 */
+/** Offer + 申请状态三字段 + 补强三字段（domain Offer 未包含，API 层本地扩展类型）。 */
 export type OfferWithApplication = Offer & {
   applicationStatus?: string;
   appliedAt?: Date | null;
   applicationNote?: string | null;
+  /** 补强 #4：结算/返款周期天数（null = 未知）。 */
+  payoutCycleDays?: number | null;
+  /** 补强 #4：SKU 佣金差异备注（null = 未记录）。 */
+  skuCommissionNote?: string | null;
+  /** 补强 #9：转化流类型（null = 未标注）。 */
+  conversionFlow?: string | null;
 };
+
+/** 补强 #9：转化流取值域（与 schema Offer.conversionFlow 注释一致）。 */
+export const CONVERSION_FLOWS = [
+  "soi_simple",
+  "one_click",
+  "pin_submit",
+  "cc_submit",
+  "free_trial",
+  "pay_per_call",
+  "ftd",
+  "cps_sale",
+  "mixed",
+] as const;
+
+function validateStrengthenFields(input: {
+  payoutCycleDays?: number | null;
+  skuCommissionNote?: string | null;
+  conversionFlow?: string | null;
+}): void {
+  if (
+    input.conversionFlow !== undefined &&
+    input.conversionFlow !== null &&
+    input.conversionFlow !== "" &&
+    !(CONVERSION_FLOWS as readonly string[]).includes(input.conversionFlow)
+  ) {
+    throw new ValidationError(
+      `conversionFlow must be one of ${CONVERSION_FLOWS.join(", ")}`
+    );
+  }
+  if (
+    input.payoutCycleDays !== undefined &&
+    input.payoutCycleDays !== null &&
+    (!Number.isInteger(input.payoutCycleDays) ||
+      input.payoutCycleDays < 0 ||
+      input.payoutCycleDays > 3650)
+  ) {
+    throw new ValidationError(
+      "payoutCycleDays must be an integer between 0 and 3650"
+    );
+  }
+  if (
+    input.skuCommissionNote !== undefined &&
+    input.skuCommissionNote !== null &&
+    (typeof input.skuCommissionNote !== "string" ||
+      input.skuCommissionNote.length > 500)
+  ) {
+    throw new ValidationError("skuCommissionNote must be at most 500 characters");
+  }
+}
 
 function validateApplicationFields(input: {
   applicationStatus?: string;
@@ -170,12 +225,19 @@ export class OfferService {
     appliedAt?: Date | null;
     /** 申请备注（≤500 字；空串按 null 处理） */
     applicationNote?: string | null;
+    /** 补强 #4：结算/返款周期天数（null = 未知） */
+    payoutCycleDays?: number | null;
+    /** 补强 #4：SKU 佣金差异备注（≤500 字；空串按 null 处理） */
+    skuCommissionNote?: string | null;
+    /** 补强 #9：转化流类型（CONVERSION_FLOWS 之一；空串按 null 处理） */
+    conversionFlow?: string | null;
   }): Promise<{ offer: OfferWithApplication; created: boolean; replayed: boolean }> {
     if (!input.tenantId) throw new ValidationError("tenantId is required");
     if (!input.name?.trim()) throw new ValidationError("name is required");
     if (!input.network?.trim()) throw new ValidationError("network is required");
     validateBrandFields(input);
     validateApplicationFields(input);
+    validateStrengthenFields(input);
     if (
       input.source !== undefined &&
       !["affiliate", "amazon", "cashback"].includes(input.source)
@@ -241,6 +303,9 @@ export class OfferService {
           applicationStatus: input.applicationStatus ?? "not_applied",
           appliedAt: input.appliedAt ?? null,
           applicationNote: input.applicationNote?.trim() || null,
+          payoutCycleDays: input.payoutCycleDays ?? null,
+          skuCommissionNote: input.skuCommissionNote?.trim() || null,
+          conversionFlow: input.conversionFlow?.trim() || null,
           idempotencyScope: input.idempotencyKey
             ? OFFER_CREATE_SCOPE
             : undefined,
@@ -307,6 +372,12 @@ export class OfferService {
       appliedAt?: Date | null;
       /** 申请备注（≤500 字）；空串/null = 清空 */
       applicationNote?: string | null;
+      /** 补强 #4：结算/返款周期天数；undefined = 不动，null = 清空（未知） */
+      payoutCycleDays?: number | null;
+      /** 补强 #4：SKU 佣金差异备注（≤500 字）；空串/null = 清空 */
+      skuCommissionNote?: string | null;
+      /** 补强 #9：转化流类型；undefined = 不动，空串/null = 清空 */
+      conversionFlow?: string | null;
     },
     requestId?: string
   ): Promise<OfferWithApplication> {
@@ -323,6 +394,7 @@ export class OfferService {
     }
     validateBrandFields(data);
     validateApplicationFields(data);
+    validateStrengthenFields(data);
 
     return this.unitOfWork.transaction(async (ctx) => {
       // 扩展类型变量承载申请状态三字段（domain Offer 未包含），再传 repository 避 excess property 检查。
@@ -350,6 +422,18 @@ export class OfferService {
           data.applicationNote === undefined
             ? existing.applicationNote
             : data.applicationNote?.trim() || null,
+        payoutCycleDays:
+          data.payoutCycleDays === undefined
+            ? existing.payoutCycleDays
+            : data.payoutCycleDays,
+        skuCommissionNote:
+          data.skuCommissionNote === undefined
+            ? existing.skuCommissionNote
+            : data.skuCommissionNote?.trim() || null,
+        conversionFlow:
+          data.conversionFlow === undefined
+            ? existing.conversionFlow
+            : data.conversionFlow?.trim() || null,
         startsAt:
           data.startsAt === null
             ? undefined

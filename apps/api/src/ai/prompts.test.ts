@@ -3,7 +3,11 @@
  * Other traffic types keep the conservative silence = unknown rule (prompt-side).
  */
 import { describe, expect, it } from "vitest";
-import { buildTermsPrompt, validateTermsShape } from "./prompts.js";
+import {
+  buildTermsPrompt,
+  TERMS_BRAND_BIDDING_LEXICON,
+  validateTermsShape,
+} from "./prompts.js";
 
 function baseTerms(overrides: Record<string, unknown> = {}) {
   return {
@@ -38,6 +42,32 @@ describe("buildTermsPrompt brand/direct silence rule", () => {
     expect(system).toContain("does NOT block \"go\"");
     // The conservative rule still applies to the other traffic types.
     expect(system).toContain("NEVER invent \"allowed\"");
+  });
+});
+
+describe("#11 TERMS_BRAND_BIDDING_LEXICON（品牌竞价条款词库）", () => {
+  it("包含 CJ / SAS / 通用标题措辞", () => {
+    for (const phrase of [
+      "Protected SEM Bidding Keywords",
+      "SEM Bidding",
+      "Trademark Bidding",
+      "PPC Keyword Rules",
+      "Pay Per Click (PPC) Policy",
+      "Brand Bidding",
+      "Trademark Terms",
+      "Search Marketing Policy",
+      "Paid Search Restrictions",
+    ]) {
+      expect(TERMS_BRAND_BIDDING_LEXICON).toContain(phrase);
+    }
+  });
+
+  it("词库进入 system prompt，且明示命中标题不等于禁止（unknown-on-ambiguity 不变）", () => {
+    const { system } = buildTermsPrompt("Some terms.", "zh");
+    expect(system).toContain("Protected SEM Bidding Keywords");
+    expect(system).toContain("PPC Keyword Rules");
+    expect(system).toContain("NEVER means forbidden");
+    expect(system).toContain('use "unknown", not "forbidden"');
   });
 });
 

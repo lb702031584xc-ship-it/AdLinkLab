@@ -91,3 +91,34 @@ describe("computeClickProfit（第十一批）", () => {
     expect(r.breakEvenCpc).toBe(0.04); // 2 × 0.02
   });
 });
+
+describe("#7 到账率双口径（settlementRateF，默认 0.7）", () => {
+  it("analyzeProfit：默认 0.7，场景到账利润 = revenue × 0.7 − cost；账面不变", () => {
+    const r = analyzeProfit({ fixedAmount: 10, currency: "USD" }, 2);
+    expect(r.settlementRateF).toBeCloseTo(0.7, 10);
+    // assumed 2% CVR、moderate CPC 0.14：revenue 20、cost 14 → 账面 +6，到账 20×0.7−14 = 0
+    const mid = r.scenarios[1];
+    expect(mid.profitPer100Clicks).toBeCloseTo(6, 6);
+    expect(mid.profitPer100ClicksNet).toBeCloseTo(0, 6);
+  });
+
+  it("analyzeProfit：自定义到账率 1 → 到账口径与账面一致；未知佣金时到账利润为 null", () => {
+    const r = analyzeProfit({ fixedAmount: 10, currency: "USD" }, 2, 1);
+    expect(r.settlementRateF).toBe(1);
+    expect(r.scenarios[1].profitPer100ClicksNet).toBeCloseTo(
+      r.scenarios[1].profitPer100Clicks as number,
+      6
+    );
+    const unknown = analyzeProfit({}, 2);
+    expect(unknown.scenarios.every((s) => s.profitPer100ClicksNet === null)).toBe(true);
+  });
+
+  it("computeClickProfit：到账口径 = 佣金 × cvr × 到账率 − cpc；缺 cpc 为 null", () => {
+    const r = computeClickProfit({ price: 100, commissionRate: 0.04, cvr: 0.02, cpc: 0.05 });
+    expect(r.settlementRateF).toBeCloseTo(0.7, 10);
+    // 4 × 0.02 × 0.7 − 0.05 = 0.006 → round2 = 0.01
+    expect(r.expectedProfitPerClickNetAtCpc).toBe(0.01);
+    const noCpc = computeClickProfit({ price: 100, commissionRate: 0.04, cvr: 0.02 });
+    expect(noCpc.expectedProfitPerClickNetAtCpc).toBeNull();
+  });
+});

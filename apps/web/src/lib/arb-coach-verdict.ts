@@ -79,6 +79,46 @@ export function judgeArbCombo(raw: ArbComboInput): ArbComboResult {
   return { cpc, epc, roi, verdict: "watch", reason: "watch" };
 }
 
+/* ------------------------------------------------------------------ */
+/* #9 — 转化流止损分级：止损倍数按转化流深度分档。                        */
+/* 浅层流（SOI/一键）信号弱、噪声大 → 沿用现有 2.5×payout 砍线；         */
+/* 深层流（信用卡提交/FTD）转化路径长、样本贵 → 放宽到 4×；              */
+/* 其余已知流居中 3×。未知/null → 2.5（现有值，不放宽）。                 */
+/* 注意：judgeArbCombo 的 1×payout 规则是速测看板既有行为，不受本表影响； */
+/* pace-checklist 的 2.5× 规则接线时请引用 stopLossMultiplierForFlow。   */
+/* ------------------------------------------------------------------ */
+
+/** 转化流 → 止损倍数（花费达到 payout × 倍数 且 0 转化 → 砍）。 */
+export const STOPLOSS_FLOW_MULTIPLIER: Readonly<Record<string, number>> = {
+  soi_simple: 2.5,
+  one_click: 2.5,
+  pin_submit: 3,
+  free_trial: 3,
+  pay_per_call: 3,
+  cps_sale: 3,
+  mixed: 3,
+  cc_submit: 4,
+  ftd: 4,
+};
+
+/** 未知转化流的止损倍数（= 现有 2.5× 规则，不放宽）。 */
+export const DEFAULT_STOPLOSS_MULTIPLIER = 2.5;
+
+/**
+ * 按 Offer 的 conversionFlow 取止损倍数。
+ * flow 取值域：soi_simple|one_click|pin_submit|cc_submit|free_trial|
+ * pay_per_call|ftd|cps_sale|mixed；未知/null/空 → 默认 2.5。
+ */
+export function stopLossMultiplierForFlow(
+  flow: string | null | undefined
+): number {
+  if (!flow) return DEFAULT_STOPLOSS_MULTIPLIER;
+  return (
+    STOPLOSS_FLOW_MULTIPLIER[flow.trim().toLowerCase()] ??
+    DEFAULT_STOPLOSS_MULTIPLIER
+  );
+}
+
 /** verdict → dict 文案 key 映射（组件层用 dict.board.verdictKill 等渲染）。 */
 export function verdictLabelKey(
   verdict: ArbComboVerdict

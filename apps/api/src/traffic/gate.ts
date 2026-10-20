@@ -222,6 +222,63 @@ function evaluatePaidZeroRule(
   };
 }
 
+/** 红海检查的信号标签（reason 组装时识别用；该信号只提示、不判定）。 */
+const RED_OCEAN_SIGNAL_LABEL =
+  "付费竞争红海检查（SEMrush 域名概览，用户手动输入）";
+
+/** 红海判定：付费绝对量下限（低于此量级谈不上红海竞争）。 */
+export const PAID_RED_OCEAN_MIN_PAID = 1000;
+/** 红海判定：付费流量超过自然流量的比例（严格大于）。 */
+export const PAID_RED_OCEAN_RATIO = 0.5;
+
+/**
+ * 竞争红海规则（补强 #2，与付费为零规则同一数据口径的镜像警告）：
+ * 付费流量 > 自然流量 × 50% 且 付费绝对量 >= PAID_RED_OCEAN_MIN_PAID
+ * → warn 级提示（慎入），永不 fail、永不 kill（信号 passed 恒 true、
+ * threshold=null 不参与综合判定，警告走 caution 通道）。
+ * 数据不足（自然/付费未知，或付费量未达下限）→ 返回 null，不触发。
+ * 与付费为零规则独立：不要求自然流量达到 organicTrafficMin——
+ * 付费量本身够大且占比过半，就足以说明同行付费竞争激烈。
+ */
+function evaluateRedOceanRule(
+  organicTraffic: unknown,
+  paidTraffic: unknown
+): { signal: TrafficSignal; caution: string } | null {
+  const organic = normPositiveInt(organicTraffic);
+  const paid = normNonNegInt(paidTraffic);
+  if (organic === null || paid === null) return null;
+  if (paid < PAID_RED_OCEAN_MIN_PAID) return null;
+  if (!(paid > organic * PAID_RED_OCEAN_RATIO)) return null;
+  const caution = redOceanReason(organic, paid);
+  return {
+    caution,
+    signal: {
+      source: "manual",
+      label: RED_OCEAN_SIGNAL_LABEL,
+      value: paid,
+      threshold: null,
+      passed: true,
+      note:
+        `${caution} ` +
+        `数据来源：SEMrush 域名概览（用户手动输入，非系统实测）。`,
+    },
+  };
+}
+
+/** 红海警告文案（中英，附判定依据）。X% = 付费/自然的实际占比。 */
+function redOceanReason(organic: number, paid: number): string {
+  const pct = Math.round((paid / organic) * 100);
+  return (
+    `竞争红海：付费流量已达自然流量的 ${pct}%` +
+    `（自然流量 ${fmtInt(organic)}，付费流量 ${fmtInt(paid)}），` +
+    `同行付费竞争激烈，慎入` +
+    ` (Red ocean: paid traffic is ${pct}% of organic ` +
+    `(organic ${fmtInt(organic)}, paid ${fmtInt(paid)}) — ` +
+    `competitors are spending heavily on paid; enter with caution.)` +
+    ` ${BASIS_NOTE}`
+  );
+}
+
 /** 付费为零规则 kill 档命中时的专用 fail 文案（中英，附判定依据）。 */
 function paidZeroFailReason(
   organic: number,
@@ -286,6 +343,13 @@ async function evaluate(
   );
   if (paidZero) {
     signals.push(paidZero.signal);
+  }
+
+  // ---- 竞争红海规则（补强 #2）：付费占比过半且绝对量够大 → warn（caution），
+  // 永不 fail/kill。数据不足不触发。 ----
+  const redOcean = evaluateRedOceanRule(input.organicTraffic, input.paidTraffic);
+  if (redOcean) {
+    signals.push(redOcean.signal);
   }
 
   // ---- 官网判定 ----
@@ -489,7 +553,16 @@ async function evaluate(
         : "");
   }
 
-  return { passed, reason, officialSite, signals, caution: paidZero?.caution ?? null };
+  const cautions = [paidZero?.caution ?? null, redOcean?.caution ?? null].filter(
+    (c): c is string => c !== null
+  );
+  return {
+    passed,
+    reason,
+    officialSite,
+    signals,
+    caution: cautions.length > 0 ? cautions.join(" ") : null,
+  };
 }
 
 /**

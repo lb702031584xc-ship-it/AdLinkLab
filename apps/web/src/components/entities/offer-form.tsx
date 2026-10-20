@@ -28,6 +28,19 @@ const OFFER_STATUSES = ["ACTIVE", "PAUSED", "ARCHIVED"] as const;
 
 const OFFER_SOURCES = ["affiliate", "amazon", "cashback"] as const;
 
+/** #9/#4：转化流取值域（与 Offer.conversionFlow 注释一致；空 = 未设置）。 */
+const CONVERSION_FLOWS = [
+  "soi_simple",
+  "one_click",
+  "pin_submit",
+  "cc_submit",
+  "free_trial",
+  "pay_per_call",
+  "ftd",
+  "cps_sale",
+  "mixed",
+] as const;
+
 /** P1-15：节日主题选项（value = slug；label 为英文节日名，中英通用）。 */
 const FESTIVAL_THEME_OPTIONS = [
   { value: "none", label: "无节日主题" },
@@ -96,6 +109,10 @@ export function OfferForm({
   const [brandExtractNote, setBrandExtractNote] = useState<string | null>(null);
   /* P1-15：节日主题（只影响 RSA 文案，不改变盈利/条款判定）。 */
   const [festivalTheme, setFestivalTheme] = useState("none");
+  /* #9/#4：转化流 / 结算周期 / SKU 佣金备注（offer 侧新字段，可空）。 */
+  const [conversionFlow, setConversionFlow] = useState("");
+  const [payoutCycleDays, setPayoutCycleDays] = useState("");
+  const [skuCommissionNote, setSkuCommissionNote] = useState("");
   /* 申请状态（与 status 生命周期独立的维度）：offer 入库 ≠ 能推，记录向网络申请 program 的状态。 */
   const [applicationStatus, setApplicationStatus] = useState("not_applied");
   const [appliedAt, setAppliedAt] = useState("");
@@ -220,7 +237,15 @@ export function OfferForm({
     start(async () => {
       const cv = Number(commissionValue);
       const ap = Number(avgPrice);
-      const result = await createOfferAction({
+      /* #9/#4：三个新字段走现有 createOfferAction 提交路径（运行时随
+         payload 一起 POST）。注意：entity-actions / entities 的 input 类型
+         与 API 路由（routes/index.ts）+ offer-engine 尚未接受这三个字段，
+         后端补齐前服务端会忽略它们（见补强清单接线说明）。 */
+      const payload: Parameters<typeof createOfferAction>[0] & {
+        conversionFlow?: string;
+        payoutCycleDays?: number;
+        skuCommissionNote?: string;
+      } = {
         name: name.trim(),
         network: network.trim(),
         source,
@@ -245,7 +270,20 @@ export function OfferForm({
         applicationStatus,
         appliedAt: toIsoInput(appliedAt),
         applicationNote: applicationNote.trim() || undefined,
-      });
+      };
+      if (conversionFlow) payload.conversionFlow = conversionFlow;
+      const cycleNum = Number(payoutCycleDays);
+      if (
+        payoutCycleDays.trim() !== "" &&
+        Number.isFinite(cycleNum) &&
+        cycleNum > 0
+      ) {
+        payload.payoutCycleDays = Math.floor(cycleNum);
+      }
+      if (skuCommissionNote.trim()) {
+        payload.skuCommissionNote = skuCommissionNote.trim();
+      }
+      const result = await createOfferAction(payload);
       if (!result.ok) {
         setError(result.error);
         return;
@@ -624,6 +662,55 @@ export function OfferForm({
             placeholder="如 49.99"
           />
         </div>
+      </div>
+      {/* #9/#4：转化流 / 结算周期 / SKU 佣金备注（可空；转化流决定止损分级）。 */}
+      <div className="grid gap-5 sm:grid-cols-2">
+        <div>
+          <label htmlFor="offer-conversion-flow" className={labelClassName}>
+            {f.conversionFlow}
+          </label>
+          <select
+            id="offer-conversion-flow"
+            className={inputClassName}
+            value={conversionFlow}
+            onChange={(e) => setConversionFlow(e.target.value)}
+          >
+            <option value="">{f.conversionFlowNone}</option>
+            {CONVERSION_FLOWS.map((flow) => (
+              <option key={flow} value={flow}>
+                {f.flowOptions[flow]}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="offer-payout-cycle" className={labelClassName}>
+            {f.payoutCycleDays}
+          </label>
+          <input
+            id="offer-payout-cycle"
+            type="number"
+            step="1"
+            min="1"
+            className={inputClassName}
+            value={payoutCycleDays}
+            onChange={(e) => setPayoutCycleDays(e.target.value)}
+            placeholder={f.payoutCycleDaysPlaceholder}
+          />
+        </div>
+      </div>
+      <div>
+        <label htmlFor="offer-sku-note" className={labelClassName}>
+          {f.skuCommissionNote}
+        </label>
+        <input
+          id="offer-sku-note"
+          className={inputClassName}
+          value={skuCommissionNote}
+          onChange={(e) => setSkuCommissionNote(e.target.value)}
+          maxLength={500}
+          placeholder={f.skuCommissionNotePlaceholder}
+        />
       </div>
       <div className="grid gap-5 sm:grid-cols-2">
         <div>

@@ -42,12 +42,118 @@ export interface WeeklyTopOffer {
   revenue: number;
   /** Revenue in the previous 7 days (for rise/fall commentary). */
   prevRevenue: number;
+  /**
+   * 补强 #20：联盟有效唯一订单数（同一订单下单+退货先合并净值再计数）。
+   * 无 Order 明细时每条 Conversion 各计一单（见 netValidOrderCount）。
+   */
+  validOrders: number;
+  /** 补强 #20：转化率 = 有效唯一订单数 ÷ 广告点击；点击为 0 时 null。 */
+  conversionRate: number | null;
+  /** 补强 #20：ROI 状态（花费缺失或点击 < 100 时为 insufficient，不判定）。 */
+  roiStatus: RoiStatus;
+}
+
+// ---------------------------------------------------------------------------
+// 补强 #20：ROI / 转化率统一口径（Web 端 pace-checklist.ts 同口径实现）
+// - 转化率 = 联盟有效唯一订单数 ÷ 广告总点击（不用 Ads 后台转化率冒充）。
+// - 有效唯一订单：同一订单下单 + 退货先按 orderId 合并净值，净值 > 0 才计 1 单。
+// - ROI 比值 = 收入 ÷ 花费；判定门槛：点击 < 100 不给判定；
+//   ROI < 1 亏损（红）、≥ 2 盈利（绿）、中间中性。
+// ---------------------------------------------------------------------------
+
+/** ROI 给判定所需的最小样本点击数。 */
+export const ROI_MIN_CLICKS = 100;
+
+export type RoiStatus = "insufficient" | "loss" | "neutral" | "profitable";
+
+export const ROI_STATUS_LABELS: Record<RoiStatus, string> = {
+  insufficient: "样本不足（点击 < 100 或缺花费/收入），不判定",
+  loss: "亏损（ROI < 1）",
+  neutral: "中性（1 ≤ ROI < 2）",
+  profitable: "盈利（ROI ≥ 2）",
+};
+
+export interface OrderLike {
+  orderId?: string | null;
+  value?: unknown;
+  status?: string | null;
+}
+
+/**
+ * 联盟有效唯一订单数：按 orderId 分组，先合并净值再计数。
+ * 退货/取消行（REFUNDED / CANCELLED / RETURNED 且金额为正）按负值合并；
+ * 净值 > 0 的订单计 1。无 orderId 的行各自独立成单。
+ */
+export function netValidOrderCount(orders: readonly OrderLike[]): number {
+  const net = new Map<string, number>();
+  orders.forEach((o, i) => {
+    const key = o.orderId ?? `__row_${i}`;
+    const raw = toNumber(o.value);
+    const st = (o.status ?? "").trim().toUpperCase();
+    const signed =
+      (st === "REFUNDED" || st === "CANCELLED" || st === "RETURNED") &&
+      raw > 0
+        ? -raw
+        : raw;
+    net.set(key, (net.get(key) ?? 0) + signed);
+  });
+  let count = 0;
+  for (const v of net.values()) {
+    if (v > 1e-9) count += 1;
+  }
+  return count;
+}
+
+/** 转化率 = 有效唯一订单数 ÷ 广告总点击；点击为 0/未知 → null。 */
+export function affiliateConversionRate(
+  validOrders: number | null | undefined,
+  clicks: number | null | undefined,
+): number | null {
+  if (validOrders == null || clicks == null) return null;
+  if (!Number.isFinite(validOrders) || !Number.isFinite(clicks) || clicks <= 0) {
+    return null;
+  }
+  return validOrders / clicks;
+}
+
+/** 收入 ÷ 花费；花费缺失/为 0 或收入缺失 → null（不编造）。 */
+export function roiRatioOf(
+  revenue: number | null | undefined,
+  spend: number | null | undefined,
+): number | null {
+  if (revenue == null || spend == null) return null;
+  if (!Number.isFinite(revenue) || !Number.isFinite(spend) || spend <= 0) {
+    return null;
+  }
+  return revenue / spend;
+}
+
+/** ROI 状态判定：样本点击 ≥ 100 才给判定。 */
+export function roiStatusFor(
+  clicks: number | null | undefined,
+  roiRatio: number | null | undefined,
+): RoiStatus {
+  if (clicks == null || !Number.isFinite(clicks) || clicks < ROI_MIN_CLICKS) {
+    return "insufficient";
+  }
+  if (roiRatio == null || !Number.isFinite(roiRatio)) return "insufficient";
+  if (roiRatio < 1) return "loss";
+  if (roiRatio >= 2) return "profitable";
+  return "neutral";
 }
 
 export interface WeeklyReportData {
   spend: number | null;
   revenue: number;
   conversions: number;
+  /** 补强 #20：联盟有效唯一订单数（净值合并后计数）。 */
+  validOrders: number;
+  /** 补强 #20：转化率 = 有效唯一订单数 ÷ 广告总点击（不含测试点击）。 */
+  conversionRate: number | null;
+  /** 补强 #20：ROI 比值（收入 ÷ 花费）；花费缺失时 null。 */
+  roiRatio: number | null;
+  /** 补强 #20：ROI 状态；花费缺失或点击 < 100 时 insufficient。 */
+  roiStatus: RoiStatus;
   clicks: number;
   topOffers: WeeklyTopOffer[];
   deadLinks: number;
@@ -220,6 +326,13 @@ function buildWeeklyReportPrompt(
     `统计区间：${data.weekStart} ~ ${data.weekEnd}（America/New_York）`,
     `点击（不含测试点击）：${data.clicks}`,
     `转化：${data.conversions}`,
+    `联盟有效唯一订单数（同订单下单+退货合并净值后计数）：${data.validOrders}`,
+    data.conversionRate == null
+      ? "转化率（有效唯一订单 ÷ 广告点击）：无点击，无法计算"
+      : `转化率（有效唯一订单 ÷ 广告点击）：${(data.conversionRate * 100).toFixed(2)}%`,
+    data.roiRatio == null
+      ? `ROI 状态：${ROI_STATUS_LABELS[data.roiStatus]}（ROI 比值无法计算）`
+      : `ROI 比值（收入 ÷ 花费）：${data.roiRatio.toFixed(2)}，ROI 状态：${ROI_STATUS_LABELS[data.roiStatus]}`,
     `收入：${data.revenue.toFixed(2)}`,
     data.spend == null
       ? "花费：数据缺失（库中无真实花费字段）"
@@ -284,7 +397,7 @@ function buildTemplateSummary(data: WeeklyReportData): string {
   const rows = data.topOffers
     .map(
       (o, i) =>
-        `${i + 1}. ${o.offerName}：点击 ${o.clicks}，转化 ${o.conversions}，收入 ${o.revenue.toFixed(2)}`,
+        `${i + 1}. ${o.offerName}：点击 ${o.clicks}，转化 ${o.conversions}，有效唯一订单 ${o.validOrders}，转化率 ${o.conversionRate == null ? "—" : `${(o.conversionRate * 100).toFixed(2)}%`}，收入 ${o.revenue.toFixed(2)}`,
     )
     .join("\n");
   return [
@@ -292,8 +405,13 @@ function buildTemplateSummary(data: WeeklyReportData): string {
     "",
     `- 点击（不含测试）：${data.clicks}`,
     `- 转化：${data.conversions}`,
+    `- 联盟有效唯一订单：${data.validOrders}`,
+    data.conversionRate == null
+      ? "- 转化率（有效唯一订单 ÷ 广告点击）：无点击，无法计算"
+      : `- 转化率（有效唯一订单 ÷ 广告点击）：${(data.conversionRate * 100).toFixed(2)}%`,
     `- 收入：${data.revenue.toFixed(2)}`,
     `- 花费：花费数据缺失，无法计算 ROI`,
+    `- ROI 状态：${ROI_STATUS_LABELS[data.roiStatus]}`,
     `- 告警：${data.alerts}；死链：${data.deadLinks}；新增应用否词：${data.newNegatives}；新建落地页优化任务：${data.newTasks}`,
     "",
     "### Top Offers",
@@ -417,7 +535,16 @@ export async function generateWeeklyReport(
       }),
       prisma.conversion.findMany({
         where: { tenantId, conversionTime: range },
-        select: { value: true, click: { select: { offerId: true } } },
+        select: {
+          id: true,
+          status: true,
+          value: true,
+          click: { select: { offerId: true } },
+          // 补强 #20：带出关联订单，按 orderId 合并净值算有效唯一订单数。
+          orders: {
+            select: { orderId: true, value: true, status: true },
+          },
+        },
       }),
       prisma.conversion.findMany({
         where: { tenantId, conversionTime: prevRange },
@@ -451,16 +578,36 @@ export async function generateWeeklyReport(
     ]);
 
   // Per-offer revenue/conversions for this week + previous week.
-  const aggByOffer = new Map<string, { conversions: number; revenue: number }>();
+  // 补强 #20：同时收集订单明细（有 Order 时用 Order 行；没有时该 Conversion
+  // 本身计为一单），后续按 orderId 合并净值算有效唯一订单数。
+  const aggByOffer = new Map<
+    string,
+    { conversions: number; revenue: number; orders: OrderLike[] }
+  >();
+  const allOrders: OrderLike[] = [];
   for (const c of convRows as Array<{
+    id?: string;
+    status?: string;
     value: unknown;
     click: { offerId: string | null } | null;
+    orders?: Array<{ orderId: string; value: unknown; status: string }>;
   }>) {
     const offerId = c.click?.offerId ?? null;
     if (!offerId) continue;
-    const agg = aggByOffer.get(offerId) ?? { conversions: 0, revenue: 0 };
+    const agg =
+      aggByOffer.get(offerId) ?? { conversions: 0, revenue: 0, orders: [] };
     agg.conversions += 1;
     agg.revenue += toNumber(c.value);
+    const orderLikes: OrderLike[] =
+      c.orders && c.orders.length > 0
+        ? c.orders.map((o) => ({
+            orderId: o.orderId,
+            value: o.value,
+            status: o.status,
+          }))
+        : [{ orderId: c.id ?? null, value: c.value, status: c.status ?? null }];
+    agg.orders.push(...orderLikes);
+    allOrders.push(...orderLikes);
     aggByOffer.set(offerId, agg);
   }
   const prevRevenueByOffer = new Map<string, number>();
@@ -498,14 +645,23 @@ export async function generateWeeklyReport(
     .map((offerId) => {
       const agg = aggByOffer.get(offerId);
       const meta = offerMeta.get(offerId);
+      const offerClicks = clickCountByOffer.get(offerId) ?? 0;
+      const offerValidOrders = agg ? netValidOrderCount(agg.orders) : 0;
       return {
         offerId,
         offerName: meta?.name ?? offerId,
         network: meta?.network ?? null,
-        clicks: clickCountByOffer.get(offerId) ?? 0,
+        clicks: offerClicks,
         conversions: agg?.conversions ?? 0,
         revenue: agg?.revenue ?? 0,
         prevRevenue: prevRevenueByOffer.get(offerId) ?? 0,
+        validOrders: offerValidOrders,
+        conversionRate: affiliateConversionRate(
+          offerValidOrders,
+          offerClicks,
+        ),
+        // 周报无 per-offer 花费数据源 → roiRatio 为 null → 状态 insufficient。
+        roiStatus: roiStatusFor(offerClicks, null),
       };
     })
     .sort((a, b) => b.revenue - a.revenue || b.conversions - a.conversions)
@@ -516,6 +672,10 @@ export async function generateWeeklyReport(
     (s, a) => s + a.conversions,
     0,
   );
+  const validOrders = netValidOrderCount(allOrders);
+  const conversionRate = affiliateConversionRate(validOrders, clicks);
+  const roiRatio = roiRatioOf(revenue, null);
+  const roiStatus = roiStatusFor(clicks, roiRatio);
 
   const alertsBySeverity: Record<string, number> = {};
   for (const g of alertGroups as Array<{
@@ -529,6 +689,10 @@ export async function generateWeeklyReport(
     spend: null,
     revenue,
     conversions,
+    validOrders,
+    conversionRate,
+    roiRatio,
+    roiStatus,
     clicks,
     topOffers,
     deadLinks,

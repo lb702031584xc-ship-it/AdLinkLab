@@ -5,6 +5,7 @@ import type { DailyAlertsPageDict } from "@/i18n/dict/daily-alerts-page";
 import {
   classifyDailyAlerts,
   DAILY_ALERT_GROUP_LABELS,
+  DAILY_ALERT_KIND_ICONS,
   DAILY_ALERT_LEVEL_LABELS,
   type DailyAlertGroup,
   type DailyAlertLevel,
@@ -70,6 +71,8 @@ export function DailyAlertsPageClient({
     return classifyDailyAlerts({
       ...input,
       archives: [],
+      // 佣金/上下线是当前快照比对，只在「今天」视图展示，历史日期不重复计。
+      offers: [],
       alerts: input.alerts.filter((a) => isoDate(a.createdAt) === date),
     });
   }, [input, date, isToday]);
@@ -88,7 +91,12 @@ export function DailyAlertsPageClient({
       ? input.alerts.reduce((max, a) => (a.createdAt > max ? a.createdAt : max), input.alerts[0].createdAt)
       : null;
 
-  const groups: DailyAlertGroup[] = ["立即止损", "投放受限", "数据与归因"];
+  const groups: DailyAlertGroup[] = [
+    "立即止损",
+    "投放受限",
+    "数据与归因",
+    "佣金与上下线",
+  ];
 
   return (
     <div className="space-y-5">
@@ -196,7 +204,12 @@ export function DailyAlertsPageClient({
                               {item.level}
                             </span>
                             <div className="min-w-0 flex-1">
-                              <p className="text-sm text-ink">{item.title}</p>
+                              <p className="text-sm text-ink">
+                                {item.kind
+                                  ? `${DAILY_ALERT_KIND_ICONS[item.kind]} `
+                                  : ""}
+                                {item.title}
+                              </p>
                               <p className="mt-0.5 text-[11px] text-ink/45">
                                 {t.events.source}：{item.source}
                               </p>

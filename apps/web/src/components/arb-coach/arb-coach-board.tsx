@@ -8,6 +8,11 @@ import {
   verdictLabelKey,
   type ArbComboInput,
 } from "@/lib/arb-coach-verdict";
+import {
+  paceActionLabelKey,
+  paceStageForClicks,
+  paceStageLabelKey,
+} from "@/lib/pace-ladder";
 
 export const LS_COMBOS = "adlinklab-arb-coach-combos";
 const COMBOS_EVENT = "arb-coach-combos-changed";
@@ -165,7 +170,7 @@ export function ArbCoachBoard({ dict }: { dict: ArbCoachDict }) {
       <p className="mt-1 text-xs text-ink/60">{b.desc}</p>
 
       <div className="mt-3 overflow-x-auto">
-        <table className="w-full min-w-[760px] text-sm">
+        <table className="w-full min-w-[900px] text-sm">
           <thead>
             <tr className="border-b border-ink/10 text-left text-xs text-ink/60">
               <th className="py-2 pr-2">{b.name}</th>
@@ -173,6 +178,7 @@ export function ArbCoachBoard({ dict }: { dict: ArbCoachDict }) {
               <th className="py-2 pr-2">{b.clicks}</th>
               <th className="py-2 pr-2">{b.conversions}</th>
               <th className="py-2 pr-2">{b.payout}</th>
+              <th className="py-2 pr-2">{b.pace}</th>
               <th className="py-2 pr-2">{b.cpc}</th>
               <th className="py-2 pr-2">{b.epc}</th>
               <th className="py-2 pr-2">{b.roi}</th>
@@ -236,6 +242,22 @@ export function ArbCoachBoard({ dict }: { dict: ArbCoachDict }) {
                       )}
                     </td>
                   ))}
+                  {/* #15 节奏阶梯：按 clicks 纯前端派生阶段，与 verdict 判定相互独立。 */}
+                  <td className="py-2 pr-2 text-ink/70">
+                    {(() => {
+                      const stage = paceStageForClicks(c.clicks);
+                      return (
+                        <>
+                          <span className="font-medium text-ink">
+                            {b[paceStageLabelKey(stage)]}
+                          </span>
+                          <span className="block max-w-[180px] text-xs font-normal text-ink/50">
+                            {b[paceActionLabelKey(stage)]}
+                          </span>
+                        </>
+                      );
+                    })()}
+                  </td>
                   <td className="py-2 pr-2 text-ink/70">{fmtMoney(r.cpc)}</td>
                   <td className="py-2 pr-2 text-ink/70">{fmtMoney(r.epc)}</td>
                   <td

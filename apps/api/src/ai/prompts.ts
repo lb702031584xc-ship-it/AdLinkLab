@@ -9,7 +9,8 @@ import { AiError } from "./llm.js";
  * AiAnalysis.promptVersion 记录每次调用实际使用的版本，便于回溯成本/效果。
  */
 /** P1-9：提示词改动（新增 dimensions 可选维度）→ 版本 bump（P0-6 规则：改文案同步 bump）。 */
-export const PROMPT_VERSION = "v2";
+/** #11：条款提示词新增品牌竞价词库识别规则 → 版本 bump v3。 */
+export const PROMPT_VERSION = "v3";
 
 export type AnalysisLanguage = "zh" | "en";
 
@@ -109,6 +110,38 @@ const TERMS_JSON_SPEC = `{
 }`;
 
 /**
+ * #11 — 品牌竞价/付费搜索条款词库：各联盟网络条款页里表示「品牌词/PPC
+ * 规则存在」的常见标题与措辞。用途只有一个：提高模型对「条款里有这一节」
+ * 的识别率——命中词库只说明相关条款存在，brandBidding / traffic.search
+ * 的结论仍必须按该节原文判定（unknown-on-ambiguity 不变），禁止因为
+ * 命中标题就自动判 forbidden。
+ */
+export const TERMS_BRAND_BIDDING_LEXICON: readonly string[] = [
+  // CJ Affiliate
+  "Protected SEM Bidding Keywords",
+  "SEM Bidding",
+  "Trademark Bidding",
+  // ShareASale
+  "PPC Keyword Rules",
+  "Pay Per Click (PPC) Policy",
+  // 通用
+  "Brand Bidding",
+  "Trademark Terms",
+  "Trademark Keywords",
+  "Search Marketing Policy",
+  "Paid Search Restrictions",
+  "Paid Search Policy",
+  "PPC Bidding Rules",
+  "Keyword Bidding",
+  "Brand Keyword Policy",
+  "Search Engine Marketing (SEM) Policy",
+  "禁止品牌词竞价",
+  "品牌词竞价",
+  "商标词",
+  "付费搜索限制",
+];
+
+/**
  * Build the system/user prompt for parsing affiliate offer TERMS
  * (restrictions, not the landing page). The advertiser runs Google Ads
  * paid search and may use incentivized/cashback traffic.
@@ -137,6 +170,7 @@ export function buildTermsPrompt(
     "- caps / payoutTerms: quote the stated terms briefly, or null when not stated.",
     "- redFlags: every concrete restriction that could get an ad account or affiliate account banned gets severity \"high\"; notable unknowns get \"medium\" or \"low\".",
     "- overallVerdict calibration: \"stop\" when paid search is forbidden or a high-severity flag directly bans the advertiser's model; \"caution\" when key fields are \"unknown\"/\"restricted\" or medium flags exist; \"go\" ONLY when search is explicitly allowed and no high-severity flags exist. brandBidding / directLinking allowed on silence (basis \"silence\") does NOT count as an unknown and does NOT block \"go\".",
+    `- Section-heading lexicon: affiliate networks often put brand-bidding / paid-search rules under headings such as ${TERMS_BRAND_BIDDING_LEXICON.slice(0, 14).map((x) => `"${x}"`).join(", ")}. When the terms contain such a heading or phrase, a brand-bidding / paid-search section EXISTS — read that section's actual text and judge brandBidding / traffic.search from what it says. A heading match by itself NEVER means forbidden: if the section's wording is ambiguous or its body is missing, use "unknown", not "forbidden".`,
   ].join("\n");
 
   const user = [

@@ -47,6 +47,13 @@ export function initialPrescreenRows(): PrescreenRowState[] {
   return ids.map((id) => ({ id, status: "idle" as PrescreenRowStatus, reason: "" }));
 }
 
+/**
+ * 竞争红海（补强 #2，后端 gate.ts evaluateRedOceanRule 的客户端镜像常量）：
+ * 付费 > 自然 × 50% 且付费绝对量 ≥ 1000 → caution（慎入），永不 kill。
+ */
+export const PAID_RED_OCEAN_MIN_PAID = 1000;
+export const PAID_RED_OCEAN_RATIO = 0.5;
+
 function normPositiveInt(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) && v > 0
     ? Math.floor(v)
@@ -104,6 +111,7 @@ export function evaluateCommissionPrescreen(
  * 第 3 条：付费为零规则（客户端镜像实现，口径与后端一致）。
  * - kill：自然流量 ≥ organicTrafficMin 且付费流量 === 0
  * - caution：0 < 付费 < 自然 × warnRatio（不 kill，继续）
+ * - caution（红海，补强 #2）：付费 > 自然 × 50% 且付费 ≥ 1000（不 kill，继续）
  * - unknown：数据不足（organic 未知/低于阈值，或 paid 未知）→ 不杀
  */
 export function evaluatePaidZeroPrescreen(
@@ -118,7 +126,28 @@ export function evaluatePaidZeroPrescreen(
   const paid = normNonNegInt(paidTraffic);
   const paidKw = normNonNegInt(paidKeywords);
   const fmtInt = (n: number) => Math.round(n).toLocaleString("en-US");
-  if (organic == null || organic < organicTrafficMin || paid == null) {
+  if (organic == null || paid == null) {
+    return {
+      status: "unknown",
+      reason:
+        lang === "zh"
+          ? "SEMrush 自然/付费流量未填或不足，不做付费为零判定（不杀）"
+          : "SEMrush organic/paid traffic missing or below threshold — no paid-zero verdict (not blocking)",
+    };
+  }
+  // 竞争红海（补强 #2，镜像后端）：与付费为零规则共用 caution 档但文案可区分；
+  // 永不 kill。独立于 organicTrafficMin——付费绝对量与占比已足够说明竞争。
+  if (paid >= PAID_RED_OCEAN_MIN_PAID && paid > organic * PAID_RED_OCEAN_RATIO) {
+    const pct = Math.round((paid / organic) * 100);
+    return {
+      status: "caution",
+      reason:
+        lang === "zh"
+          ? `竞争红海：付费流量已达自然流量的 ${pct}%（自然 ${fmtInt(organic)}，付费 ${fmtInt(paid)}），同行付费竞争激烈，慎入`
+          : `Red ocean: paid traffic is ${pct}% of organic (organic ${fmtInt(organic)}, paid ${fmtInt(paid)}) — competitors are spending heavily on paid; enter with caution`,
+    };
+  }
+  if (organic < organicTrafficMin) {
     return {
       status: "unknown",
       reason:

@@ -23,6 +23,11 @@ export interface ProfitInputs {
   /** Target return ratio r = 产出 / 投入（投 1 产出 r，利润 r − 1）。如 1.5 = 投 1 产出 1.5、利润 0.5；1 = 保平。默认 2。 */
   targetReturnRatio?: number;
   /**
+   * 预计到账率（0–1）：账面佣金最终实际到账的比例（联盟结算会扣减/拒付
+   * 一部分）。默认 0.7。只影响到账口径 returnRatioNetAtCpc，账面口径不变。
+   */
+  settlementRateF?: number;
+  /**
    * Whether the inputs are estimates (AI guess / defaults) rather than
    * measured data. Default false. Never silently treat a guess as measured:
    * callers that cannot prove a measured source must pass true.
@@ -47,6 +52,13 @@ export interface ProfitResult {
   maxCpcAtTargetRatio: number | null;
   /** Actual return ratio at the current CPC: EPC / CPC (null when CPC <= 0). 1 = 保平。 */
   returnRatioAtCpc: number | null;
+  /** 实际生效的预计到账率（0–1，已做默认/钳制处理）。 */
+  settlementRateF: number;
+  /**
+   * 到账口径产出比 = returnRatioAtCpc × settlementRateF：按预计实际到账
+   * 折算后的产出比（null 与 returnRatioAtCpc 同步，CPC 无效时 null）。
+   */
+  returnRatioNetAtCpc: number | null;
   /** Suggested test budget in clicks (null when CVR unknown/invalid). */
   testBudgetClicks: number | null;
   /** Suggested test budget cost. */
@@ -59,6 +71,54 @@ export interface ProfitResult {
 
 function clamp01(n: number): number {
   return Number.isFinite(n) ? Math.min(Math.max(n, 0), 1) : 0;
+}
+
+/** 预计到账率默认值：账面佣金约七成最终到账（课程经验值，可由调用方覆盖）。 */
+export const DEFAULT_SETTLEMENT_RATE_F = 0.7;
+
+/** 结算周期默认值（天）：联盟常见的 120–150 天回款周期的中位。 */
+export const DEFAULT_SETTLEMENT_CYCLE_DAYS = 135;
+
+/** 到账率入参归一：未传/非有限数 → 默认 0.7；其余钳制到 0–1。 */
+export function normalizeSettlementRateF(v?: number | null): number {
+  if (v == null || !Number.isFinite(v)) return DEFAULT_SETTLEMENT_RATE_F;
+  return clamp01(v);
+}
+
+/**
+ * 预计回款提示（纯函数）：按结算周期天数估算「约 X 个月后回款」。
+ * cycleDays 未传/无效/≤0 时用默认 135 天（120–150 天中位）。
+ * 月数 = 天数 ÷ 30，保留一位小数（整数时不带小数点）。
+ */
+export function settlementPayoutHint(
+  cycleDays: number | null | undefined,
+  lang: "zh" | "en"
+): string {
+  const days =
+    cycleDays != null && Number.isFinite(cycleDays) && cycleDays > 0
+      ? Math.round(cycleDays)
+      : DEFAULT_SETTLEMENT_CYCLE_DAYS;
+  const months = Math.round((days / 30) * 10) / 10;
+  const m = Number.isInteger(months) ? String(months) : months.toFixed(1);
+  return lang === "en"
+    ? `Payout expected in ~${m} months (settlement cycle ~${days} days, at the estimated settlement rate)`
+    : `约 ${m} 个月后回款（按约 ${days} 天结算周期、预计到账率估算）`;
+}
+
+/**
+ * #8 — CVR 分档默认值（按客单价估算，属估算值不是实测）：
+ * 价格 <100 → 6%；100–300（含）→ 4%；>300 → 2.5%。
+ * 无效价格（null/NaN/≤0）→ null（不编造）。
+ */
+export function defaultCvrForPrice(
+  avgPrice: number | null | undefined
+): number | null {
+  if (avgPrice == null || !Number.isFinite(avgPrice) || avgPrice <= 0) {
+    return null;
+  }
+  if (avgPrice < 100) return 0.06;
+  if (avgPrice <= 300) return 0.04;
+  return 0.025;
 }
 
 /** Payout after refund and shave deductions. */
@@ -180,6 +240,8 @@ export function calcProfit(inputs: ProfitInputs): ProfitResult {
   const beCpc = breakEvenCpc(cvrF, eff);
   const clicks = testBudgetClicks(cvrF);
   const ratio = inputs.targetReturnRatio ?? 2;
+  const settleF = normalizeSettlementRateF(inputs.settlementRateF);
+  const bookRatio = returnRatioAtCpc(epc, cpc);
   return {
     effectivePayout: eff,
     epc,
@@ -189,7 +251,9 @@ export function calcProfit(inputs: ProfitInputs): ProfitResult {
     breakEvenCpc: beCpc,
     maxCpc30: recommendedMaxCpc(beCpc),
     maxCpcAtTargetRatio: maxCpcForReturnRatio(epc, ratio),
-    returnRatioAtCpc: returnRatioAtCpc(epc, cpc),
+    returnRatioAtCpc: bookRatio,
+    settlementRateF: settleF,
+    returnRatioNetAtCpc: bookRatio !== null ? bookRatio * settleF : null,
     testBudgetClicks: clicks,
     testBudgetCost:
       clicks !== null && Number.isFinite(cpc) && cpc > 0 ? clicks * cpc : null,

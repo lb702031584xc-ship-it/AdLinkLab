@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useDict } from "@/i18n/use-dict";
+import { useI18n } from "@/i18n/I18nProvider";
 import { EntityPageHeader } from "@/components/entities/ui";
 import { getOfferPerformanceAction } from "@/lib/api/p1-actions";
 import type { OfferPerformance } from "@/lib/api/p1";
@@ -9,7 +10,9 @@ import { analyzeProfitAction } from "@/lib/api/ai-actions";
 import type { ProfitAnalysisResult } from "@/lib/api/profit-types";
 import {
   ASSUMED_CLICKS_TO_ORDER,
+  calcProfit,
   clicksToOrderFromCvr,
+  settlementPayoutHint,
   suggestCpcByClicksToOrder,
 } from "@/lib/profit-calc";
 
@@ -50,6 +53,7 @@ function StatCard({
 
 export function ProfitClient({ offers }: { offers: ProfitOfferOption[] }) {
   const t = useDict();
+  const { lang } = useI18n();
   const d = t.ai.profit;
 
   const [offerId, setOfferId] = useState(offers[0]?.id ?? "");
@@ -63,6 +67,8 @@ export function ProfitClient({ offers }: { offers: ProfitOfferOption[] }) {
   const [cpc, setCpc] = useState("");
   const [refundPct, setRefundPct] = useState("");
   const [shavePct, setShavePct] = useState("");
+  /** #7：预计到账率 %（默认 70%，与 profit-calc 的 DEFAULT_SETTLEMENT_RATE_F 一致）。 */
+  const [settlementPct, setSettlementPct] = useState("70");
   const [epc, setEpc] = useState("");
   /** P0-2：默认不勾选 = 估算；勾选 = 本次测算用实测数据。 */
   const [useMeasured, setUseMeasured] = useState(false);
@@ -165,6 +171,25 @@ export function ProfitClient({ offers }: { offers: ProfitOfferOption[] }) {
       : null;
   const maxCpc30 =
     breakEvenCpc !== null ? breakEvenCpc * 0.7 : null;
+
+  /* #7：产出比双口径（走共享 profit-calc，不另写公式）：账面 = EPC ÷ CPC；
+     到账 = 账面 × 预计到账率。CVR 拿不到时两个口径都为 null（不编造）。 */
+  const settlementN = parseFloat(settlementPct);
+  const settlementF = Number.isFinite(settlementN)
+    ? Math.min(Math.max(settlementN, 0), 100) / 100
+    : 0.7;
+  const dualCalc =
+    hasPayout && hasCpc && derivedCvrF !== null && derivedCvrF > 0 && derivedCvrF < 1
+      ? calcProfit({
+          payout: payoutN,
+          cpc: cpcN,
+          cvrF: derivedCvrF,
+          refundF,
+          shaveF,
+          settlementRateF: settlementF,
+          inputsEstimated: isEstimated,
+        })
+      : null;
 
   // Test budget
   const budgetClicks =
@@ -408,6 +433,19 @@ export function ProfitClient({ offers }: { offers: ProfitOfferOption[] }) {
             className={inputClass}
           />
         </div>
+        <div>
+          <label className={labelClass} htmlFor="calc-settlement">
+            {d.settlementRateLabel}
+          </label>
+          <input
+            id="calc-settlement"
+            inputMode="decimal"
+            value={settlementPct}
+            onChange={(e) => setSettlementPct(e.target.value)}
+            placeholder="70"
+            className={inputClass}
+          />
+        </div>
       </div>
 
       <label className="mt-3 flex cursor-pointer items-center gap-2 text-sm text-ink/80">
@@ -435,6 +473,8 @@ export function ProfitClient({ offers }: { offers: ProfitOfferOption[] }) {
             [d.results.breakEvenCvr, d.formulas.breakEvenCvr, breakEvenCvrPct !== null ? `${fmt(breakEvenCvrPct)}%` : "—"],
             [d.results.breakEvenCpc, d.formulas.breakEvenCpc, breakEvenCpc !== null ? `${fmt(breakEvenCpc, 4)} ${currency}` : "—"],
             [d.results.maxCpc30, d.formulas.maxCpc30, maxCpc30 !== null ? `${fmt(maxCpc30, 4)} ${currency}` : "—"],
+            [d.results.returnRatioBook, d.formulas.returnRatioBook, dualCalc?.returnRatioAtCpc != null ? fmt(dualCalc.returnRatioAtCpc, 2) : "—"],
+            [d.results.returnRatioNet, d.formulas.returnRatioNet, dualCalc?.returnRatioNetAtCpc != null ? fmt(dualCalc.returnRatioNetAtCpc, 2) : "—"],
           ] as const
         ).map(([label, formula, value]) => (
           <div
@@ -447,6 +487,10 @@ export function ProfitClient({ offers }: { offers: ProfitOfferOption[] }) {
           </div>
         ))}
       </div>
+      {/* #7：预计回款提示（结算周期未从 offer 带入时用默认 135 天中位估算）。 */}
+      <p className="mt-3 text-sm text-ink/60">
+        💰 {settlementPayoutHint(null, lang === "en" ? "en" : "zh")}
+      </p>
 
       {/* (c) test budget */}
       <h2 className="mt-8 text-base font-semibold text-ink">{d.budgetTitle}</h2>

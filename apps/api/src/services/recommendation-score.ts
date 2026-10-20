@@ -7,11 +7,18 @@
  * 同步评分、POST /catalog/screen、POST /catalog/products/calc-score 三处
  * 都经 evaluateProduct 调用本函数，同一商品结果一致，不再互相覆盖。
  *
- * 权重（固定）：
- *   佣金金额  40% — 单次转化能赚多少是第一位的
- *   评论数    25% — 社会证明，评论越多转化越稳
- *   价格      20% — 适中最好：太便宜佣金绝对值小，太贵付费流量难转化
- *   佣金率    15% — 比例高低的辅助信号
+ * 权重（固定，合计 100%）：
+ *   佣金金额  30% — 单次转化能赚多少是第一位的
+ *   评论数    20% — 社会证明，评论越多转化越稳
+ *   价格      15% — 适中最好：太便宜佣金绝对值小，太贵付费流量难转化
+ *   佣金率    10% — 比例高低的辅助信号
+ *   结算率    15% — 补强 #1：商家历史结算率（settlementRatePct，0–100 数值，
+ *                   直接映射为 0–100 分）。未知（null/undefined/越界）→ 中性
+ *                   50 分，绝不编造一个结算率出来。
+ *   返款周期  10% — 补强 #4：payoutCycleDays。规则（分档）：
+ *                   ≤30 天 → 100 分；31–60 天 → 80 分；61–90 天 → 60 分；
+ *                   >90 天 → 20 分（长周期明显扣分：资金占用久、风险高）。
+ *                   未知 → 中性 50 分，不臆断。
  * 缺数据的项按中性（50 分）处理，绝不编造数据。
  *
  * $8 门槛（MIN_COMMISSION_USD，packages/shared/src/commission-gate.ts）：
@@ -30,6 +37,16 @@ export interface RecommendationInput {
   reviewCount?: number | null;
   /** 商品价格（USD）。 */
   price?: number | null;
+  /**
+   * 商家历史结算率（百分比数值，0–100，如 70 表示 70%）。
+   * 补强 #1：已知时按数值直接计分；未知/越界 → 中性，不编造。
+   */
+  settlementRatePct?: number | null;
+  /**
+   * 返款/结算周期（天）。补强 #4：>90 天扣分（见文件头分档规则）；
+   * 未知 → 中性，不编造。
+   */
+  payoutCycleDays?: number | null;
 }
 
 export interface RecommendationBreakdown {
@@ -37,6 +54,8 @@ export interface RecommendationBreakdown {
   reviews: number; // 0–100
   price: number; // 0–100
   rate: number; // 0–100
+  settlement: number; // 0–100（补强 #1；未知为中性 50）
+  payoutCycle: number; // 0–100（补强 #4；未知为中性 50）
 }
 
 export interface RecommendationResult {
@@ -59,6 +78,21 @@ export const RECOMMEND_GATE_CAP = 25;
 const clamp100 = (v: number): number => Math.max(0, Math.min(100, v));
 const NEUTRAL = 50;
 
+/** 返款周期超过该天数即进入最低档扣分（补强 #4）。 */
+export const PAYOUT_CYCLE_LONG_DAYS = 90;
+
+/**
+ * 返款周期分档分（补强 #4）：≤30→100，31–60→80，61–90→60，>90→20。
+ * 无效值（负数/非有限）→ null（调用方按中性处理）。
+ */
+export function payoutCycleScore(days: number | null): number {
+  if (days === null || days < 0) return NEUTRAL;
+  if (days <= 30) return 100;
+  if (days <= 60) return 80;
+  if (days <= PAYOUT_CYCLE_LONG_DAYS) return 60;
+  return 20;
+}
+
 const numOrNull = (v: number | null | undefined): number | null =>
   typeof v === "number" && Number.isFinite(v) ? v : null;
 
@@ -69,6 +103,15 @@ export function calcRecommendationScore(
   const commissionRate = numOrNull(input.commissionRate);
   const reviewCount = numOrNull(input.reviewCount);
   const price = numOrNull(input.price);
+  // 结算率：只接受 0–100 的数值；越界视为未知（不 clamp 编造）。
+  const settlementRaw = numOrNull(input.settlementRatePct);
+  const settlementRate =
+    settlementRaw !== null && settlementRaw >= 0 && settlementRaw <= 100
+      ? settlementRaw
+      : null;
+  const payoutDaysRaw = numOrNull(input.payoutCycleDays);
+  const payoutDays =
+    payoutDaysRaw !== null && payoutDaysRaw >= 0 ? payoutDaysRaw : null;
 
   // 有效佣金：优先用 commissionAmount；否则用 price × commissionRate 反推；
   // 都没有则为 null（不臆断，不限分）。
@@ -102,12 +145,25 @@ export function calcRecommendationScore(
     else priceScore = clamp100(100 - ((price - 200) / (1000 - 200)) * 100);
   }
 
-  // 4) 佣金率分（15%）：30% → 100 分，线性。缺数据 → 中性。
+  // 4) 佣金率分（10%）：30% → 100 分，线性。缺数据 → 中性。
   const rate =
     commissionRate === null ? NEUTRAL : clamp100((commissionRate / 30) * 100);
 
+  // 5) 结算率分（15%，补强 #1）：结算率数值直接映射为分数
+  //    （70% 结算率 → 70 分）。未知/越界 → 中性，绝不编造。
+  const settlement = settlementRate === null ? NEUTRAL : clamp100(settlementRate);
+
+  // 6) 返款周期分（10%，补强 #4）：分档见文件头；>90 天只给 20 分（扣分）。
+  const payoutCycle = payoutCycleScore(payoutDays);
+
   let score = Math.round(
-    (commission * 40 + reviews * 25 + priceScore * 20 + rate * 15) / 100
+    (commission * 30 +
+      reviews * 20 +
+      priceScore * 15 +
+      rate * 10 +
+      settlement * 15 +
+      payoutCycle * 10) /
+      100
   );
 
   // $8 门槛：算得出佣金且 < $8 → 直接限分（经济性判断，非政策禁止）。
@@ -129,6 +185,8 @@ export function calcRecommendationScore(
       reviews: Math.round(reviews),
       price: Math.round(priceScore),
       rate: Math.round(rate),
+      settlement: Math.round(settlement),
+      payoutCycle: Math.round(payoutCycle),
     },
     cappedByGate,
     effectiveCommission,

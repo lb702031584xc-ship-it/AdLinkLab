@@ -17,6 +17,11 @@
  *
  * 使用方式：用户在 Google Ads → 工具 → 脚本 中粘贴生成的代码，
  * 设置每小时（或自定义频率）运行一次。
+ *
+ * 补强 #20 口径核对（已核对一致）：本脚本只读 Ads 点击数作暂停阈值，
+ * 不计算转化率/ROI，也不读 Ads 后台转化数。转化率统一口径 =
+ * 联盟有效唯一订单数 ÷ 广告总点击（见 weekly-report-service.ts /
+ * pace-checklist.ts 的 netValidOrderCount），不要在本脚本里另算。
  */
 
 export const CLICK_MONITOR_SCRIPT_VERSION = "1.0.0";

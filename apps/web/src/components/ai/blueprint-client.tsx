@@ -165,8 +165,16 @@ function buildMarkdownExport(bp: BlueprintResult): string {
   } else L.push(bp.terms.skipped ? "未提供条款文本。" : `生成失败：${bp.terms.error ?? ""}`);
   L.push("");
   L.push("## 2. 盈利测算");
-  for (const b of bp.profit.breakEven)
-    L.push(`- 转化率 ${b.cvrPct}% → 保本 CPC ${b.breakEvenCpc != null ? `${bp.profit.payoutCurrency} ${b.breakEvenCpc}` : "未知"}`);
+  const bpNet = (
+    bp.profit as {
+      settlementRateF?: number;
+      breakEvenNet?: Array<{ cvrPct: number; breakEvenCpc: number | null }>;
+    }
+  ).breakEvenNet;
+  for (const b of bp.profit.breakEven) {
+    const net = bpNet?.find((n) => n.cvrPct === b.cvrPct);
+    L.push(`- 转化率 ${b.cvrPct}% → 保本 CPC ${b.breakEvenCpc != null ? `${bp.profit.payoutCurrency} ${b.breakEvenCpc}` : "未知"}${net ? `（到账口径 ${net.breakEvenCpc != null ? `${bp.profit.payoutCurrency} ${net.breakEvenCpc}` : "未知"}）` : ""}`);
+  }
   L.push(`> ${bp.profit.note}`);
   L.push("");
   L.push("## 3. 关键词计划");
@@ -738,6 +746,26 @@ export function BlueprintClient({
         ? "border-red-400 bg-red-50 text-red-800"
         : "border-amber-400 bg-amber-50 text-amber-800";
 
+  /* #7：到账口径（API BlueprintProfit 新增 settlementRateF / breakEvenNet；
+     web 侧 BlueprintResult 类型在 lib/api/ai.ts，尚未同步这两个字段，
+     这里用局部扩展类型读取；旧报告没有时为 null，整列不显示）。 */
+  const profitNet = result
+    ? ((result.profit as BlueprintResult["profit"] & {
+        settlementRateF?: number;
+        breakEvenNet?: Array<{ cvrPct: number; breakEvenCpc: number | null }>;
+      }).breakEvenNet
+        ? {
+            settlementRateF:
+              (result.profit as { settlementRateF?: number }).settlementRateF ?? 0.7,
+            breakEvenNet: (
+              result.profit as {
+                breakEvenNet?: Array<{ cvrPct: number; breakEvenCpc: number | null }>;
+              }
+            ).breakEvenNet!,
+          }
+        : null)
+    : null;
+
   return (
     <div className="space-y-4">
       <div>
@@ -1017,17 +1045,30 @@ export function BlueprintClient({
             <table className="w-full max-w-md text-sm">
               <thead><tr className="text-left text-ink/55">
                 <th className="py-1 pr-3 font-medium">{d.profit.colCvr}</th>
-                <th className="py-1 font-medium">{d.profit.colCpc}</th>
+                <th className="py-1 pr-3 font-medium">{d.profit.colCpc}</th>
+                {/* #7：到账口径保本 CPC（API 新增 breakEvenNet；旧报告无此字段时整列不显示） */}
+                {profitNet ? <th className="py-1 font-medium">{d.profit.colCpcNet}</th> : null}
               </tr></thead>
               <tbody>
-                {result.profit.breakEven.map((b) => (
-                  <tr key={b.cvrPct} className="border-t border-ink/10">
-                    <td className="py-1 pr-3">{b.cvrPct}%</td>
-                    <td className="py-1 font-medium">{b.breakEvenCpc != null ? `${result.profit.payoutCurrency} ${b.breakEvenCpc}` : "—"}</td>
-                  </tr>
-                ))}
+                {result.profit.breakEven.map((b) => {
+                  const net = profitNet?.breakEvenNet.find((n) => n.cvrPct === b.cvrPct);
+                  return (
+                    <tr key={b.cvrPct} className="border-t border-ink/10">
+                      <td className="py-1 pr-3">{b.cvrPct}%</td>
+                      <td className="py-1 pr-3 font-medium">{b.breakEvenCpc != null ? `${result.profit.payoutCurrency} ${b.breakEvenCpc}` : "—"}</td>
+                      {profitNet ? (
+                        <td className="py-1 font-medium">{net?.breakEvenCpc != null ? `${result.profit.payoutCurrency} ${net.breakEvenCpc}` : "—"}</td>
+                      ) : null}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
+            {profitNet ? (
+              <p className="mt-2 text-xs text-ink/55">
+                {d.profit.netNote.replace("{rate}", String(Math.round(profitNet.settlementRateF * 100)))}
+              </p>
+            ) : null}
             <p className="mt-2 text-xs text-ink/55">{d.profit.note}</p>
           </div>
 

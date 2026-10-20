@@ -6,11 +6,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "@adlinklab/database";
 import {
+  affiliateConversionRate,
   generateWeeklyReport,
   getLastWeekRange,
   getPrevWeekRange,
   getWeeklyReport,
   listWeeklyReports,
+  netValidOrderCount,
+  roiStatusFor,
   sendViaEmail,
   type WeeklyReportData,
 } from "./weekly-report-service.js";
@@ -75,6 +78,9 @@ function mkFakePrisma() {
           )
           .map((r) => ({
             value: r.value,
+            id: r.id,
+            status: r.status,
+            orders: r.orders,
             click: { offerId: r.offerId ?? null },
           })),
     },
@@ -346,6 +352,53 @@ describe("weekly-report-service", () => {
     ).rejects.toThrow();
     const found = await getWeeklyReport(fx.prisma, TENANT, report.id);
     expect(found.id).toBe(report.id);
+  });
+
+  it("补强 #20：validOrders/conversionRate 按有效唯一订单 ÷ 点击计算；无花费 → ROI 不判定", async () => {
+    const report = await gen();
+    // 3 条 Conversion、无 Order 明细 → 各计一单；点击 3（不含测试）。
+    expect(report.data.validOrders).toBe(3);
+    expect(report.data.conversionRate).toBeCloseTo(1);
+    expect(report.data.roiRatio).toBeNull();
+    expect(report.data.roiStatus).toBe("insufficient");
+    expect(report.aiSummary).toContain("转化率");
+    const a = report.data.topOffers.find((o) => o.offerName === "Offer A");
+    expect(a?.validOrders).toBe(2);
+    expect(a?.conversionRate).toBeCloseTo(1); // 2 有效订单 ÷ 2 点击
+  });
+
+  it("补强 #20：同订单下单+全额退货合并净值为 0 → 不计有效订单", async () => {
+    fx.seed.conversions.push({
+      tenantId: TENANT,
+      conversionTime: new Date("2026-10-02T12:00:00Z"),
+      value: 40,
+      offerId: "offer-a",
+      orders: [
+        { orderId: "ord-x", value: 40, status: "CONFIRMED" },
+        { orderId: "ord-x", value: 40, status: "REFUNDED" },
+      ],
+    });
+    const report = await gen();
+    expect(report.data.conversions).toBe(4); // 原始转化行仍计数
+    expect(report.data.validOrders).toBe(3); // 退货单净值 0，不计
+  });
+
+  it("补强 #20 helpers：netValidOrderCount 部分退款仍计 1 单；转化率与 ROI 阈值", () => {
+    expect(
+      netValidOrderCount([
+        { orderId: "a", value: 100, status: "CONFIRMED" },
+        { orderId: "a", value: 30, status: "REFUNDED" },
+        { orderId: "b", value: 50, status: "CONFIRMED" },
+        { orderId: "b", value: 50, status: "REFUNDED" },
+      ]),
+    ).toBe(1);
+    expect(affiliateConversionRate(5, 200)).toBeCloseTo(0.025);
+    expect(affiliateConversionRate(5, 0)).toBeNull();
+    expect(roiStatusFor(99, 3)).toBe("insufficient"); // 点击 < 100 不判定
+    expect(roiStatusFor(100, 0.5)).toBe("loss");
+    expect(roiStatusFor(100, 1.5)).toBe("neutral");
+    expect(roiStatusFor(100, 2)).toBe("profitable");
+    expect(roiStatusFor(500, null)).toBe("insufficient");
   });
 
   it("sendViaEmail is not implemented (501)", async () => {

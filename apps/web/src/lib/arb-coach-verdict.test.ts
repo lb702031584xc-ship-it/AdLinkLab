@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_STOPLOSS_MULTIPLIER,
   judgeArbCombo,
   reasonLabelKey,
+  STOPLOSS_FLOW_MULTIPLIER,
+  stopLossMultiplierForFlow,
   verdictLabelKey,
 } from "./arb-coach-verdict";
 
@@ -73,6 +76,32 @@ describe("judgeArbCombo", () => {
     const r = judgeArbCombo({ spend: -5, clicks: NaN, conversions: -1, payout: 2 });
     expect(r.verdict).toBe("watch");
     expect(r.reason).toBe("no_spend");
+  });
+
+  it("#9 stopLossMultiplierForFlow：浅层 2.5 / 深层 4 / 其余已知 3 / 未知 2.5", () => {
+    // 浅层
+    expect(stopLossMultiplierForFlow("soi_simple")).toBe(2.5);
+    expect(stopLossMultiplierForFlow("one_click")).toBe(2.5);
+    // 深层
+    expect(stopLossMultiplierForFlow("cc_submit")).toBe(4);
+    expect(stopLossMultiplierForFlow("ftd")).toBe(4);
+    // 其余已知
+    expect(stopLossMultiplierForFlow("pin_submit")).toBe(3);
+    expect(stopLossMultiplierForFlow("free_trial")).toBe(3);
+    expect(stopLossMultiplierForFlow("pay_per_call")).toBe(3);
+    expect(stopLossMultiplierForFlow("cps_sale")).toBe(3);
+    expect(stopLossMultiplierForFlow("mixed")).toBe(3);
+    // 未知 / 空 → 现有值 2.5
+    expect(stopLossMultiplierForFlow(null)).toBe(2.5);
+    expect(stopLossMultiplierForFlow(undefined)).toBe(2.5);
+    expect(stopLossMultiplierForFlow("")).toBe(2.5);
+    expect(stopLossMultiplierForFlow("some_unknown_flow")).toBe(2.5);
+    // 大小写/空白不敏感
+    expect(stopLossMultiplierForFlow(" CC_Submit ")).toBe(4);
+    // 常量表与默认值自洽
+    expect(DEFAULT_STOPLOSS_MULTIPLIER).toBe(2.5);
+    expect(STOPLOSS_FLOW_MULTIPLIER.soi_simple).toBe(2.5);
+    expect(Object.keys(STOPLOSS_FLOW_MULTIPLIER)).toHaveLength(9);
   });
 
   it("label key 映射正确", () => {

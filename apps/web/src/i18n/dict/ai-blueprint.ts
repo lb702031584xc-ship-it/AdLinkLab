@@ -81,6 +81,8 @@ export const zh = {
   profit: {
     colCvr: "假设转化率",
     colCpc: "保本 CPC",
+    colCpcNet: "到账保本 CPC",
+    netNote: "到账保本 CPC = payout × 预计到账率 {rate}% × 假设转化率（账面佣金实际到账打折后的保本线）。",
     note: "保本 CPC = payout × 假设转化率。转化率为假设区间、非实测数据，请以关键词规划师真实 CPC 为准。",
   },
   keywords: {
@@ -205,6 +207,8 @@ export const en: typeof zh = {
   profit: {
     colCvr: "Assumed CVR",
     colCpc: "Break-even CPC",
+    colCpcNet: "Net break-even CPC (settled)",
+    netNote: "Net break-even CPC = payout × estimated settlement rate {rate}% × assumed CVR (the break-even line after settlement shortfall).",
     note: "Break-even CPC = payout × assumed CVR. CVRs are assumptions, not measured — verify with Keyword Planner.",
   },
   keywords: {

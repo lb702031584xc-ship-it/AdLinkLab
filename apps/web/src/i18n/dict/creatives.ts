@@ -55,6 +55,25 @@ export const zh = {
     ctr: "CTR 效果统计需接通广告数据同步后开放；当前展示资产状态与使用情况。",
     goOffer: "为 Offer 写创意 →",
   },
+  spec: {
+    panelTitle: "RSA 文案规格（提示，不拦截）",
+    headlineTarget: "标题目标 15 条 · 每条 20–30 字符",
+    descriptionTarget: "描述目标 6 条 · 每条 70–90 字符",
+    charCount: "{n} 字符",
+    inRange: "长度达标",
+    tooShort: "偏短",
+    tooLong: "偏长",
+    hintOnly: "仅提示，不拦截保存",
+    versionReminder: "建议至少备 10 版文案再上线（当前 {n} 版）",
+    anglePreset: "角度预设",
+    anglePresetNone: "不选预设（下方自定义）",
+    anglePresets: {
+      socialProof: "社会认同",
+      painPoint: "痛点",
+      scarcity: "稀缺",
+      benefit: "利益承诺",
+    },
+  },
 };
 
 export type CreativesDict = typeof zh;
@@ -112,5 +131,24 @@ export const en: CreativesDict = {
   note: {
     ctr: "CTR stats will appear once ad data sync is enabled; asset status and usage are shown for now.",
     goOffer: "Write creatives for an offer →",
+  },
+  spec: {
+    panelTitle: "RSA copy specs (hints only, never blocking)",
+    headlineTarget: "Headlines: aim for 15 · 20–30 characters each",
+    descriptionTarget: "Descriptions: aim for 6 · 70–90 characters each",
+    charCount: "{n} chars",
+    inRange: "Length OK",
+    tooShort: "Too short",
+    tooLong: "Too long",
+    hintOnly: "Hint only — saving is never blocked",
+    versionReminder: "Aim for at least 10 copy versions before launch (currently {n})",
+    anglePreset: "Angle preset",
+    anglePresetNone: "No preset (custom below)",
+    anglePresets: {
+      socialProof: "Social proof",
+      painPoint: "Pain point",
+      scarcity: "Scarcity",
+      benefit: "Benefit promise",
+    },
   },
 };

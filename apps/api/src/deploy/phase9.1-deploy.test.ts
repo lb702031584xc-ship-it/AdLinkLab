@@ -207,7 +207,7 @@ describe("Phase 9.1 migration command availability", () => {
     expect(compose).not.toMatch(/prisma db push/);
   });
 
-  it("15. migration count is 57 (… + launch archives + P0 security/observability: api_keys/ip_bans/token_revocations/ai_usage_daily/error_reports + P1 batch 1 offer fields + P1/P2 batches 2–6 + catalog product library + catalog blacklist/whitelist + catalog merchant lists + offer affiliate_url + catalog session credentials + merchant_id uuid fix + network_product_enrich + tenant_settings + creatives + brand_ad_count + offer_application_status + catalog_sync_jobs + network_api_products_path)", () => {
+  it("15. migration count is 58 (… + launch archives + P0 security/observability: api_keys/ip_bans/token_revocations/ai_usage_daily/error_reports + P1 batch 1 offer fields + P1/P2 batches 2–6 + catalog product library + catalog blacklist/whitelist + catalog merchant lists + offer affiliate_url + catalog session credentials + merchant_id uuid fix + network_product_enrich + tenant_settings + creatives + brand_ad_count + offer_application_status + catalog_sync_jobs + network_api_products_path + strengthen checklist fields)", () => {
     const migrationsDir = join(
       REPO_ROOT,
       "packages/database/prisma/migrations"
@@ -216,11 +216,12 @@ describe("Phase 9.1 migration command availability", () => {
     const names = readdirSync(migrationsDir).filter((n) =>
       existsSync(join(migrationsDir, n, "migration.sql"))
     );
-    expect(names.length).toBe(57);
+    expect(names.length).toBe(58);
     expect(names).toContain("20261020120000_brand_ad_count");
     expect(names).toContain("20261020130000_offer_application_status");
     expect(names).toContain("20261020140000_catalog_sync_jobs");
     expect(names).toContain("20261020150000_network_api_products_path");
+    expect(names).toContain("20261021090000_strengthen_checklist_fields");
     expect(names).toContain("20261019090416_network_product_enrich");
     expect(names).toContain("20261019140000_tenant_settings");
     expect(names).toContain("20261019150000_creatives");

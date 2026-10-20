@@ -23,6 +23,7 @@ import { calcProfit } from "@/lib/profit-calc";
 import { listOfferCapturesAction, parseProductCaptureAiAction } from "@/lib/api/ai-actions";
 import { CapturePicker } from "@/components/ai/capture-picker";
 import { AdPreview } from "@/components/ai/ad-preview";
+import { BonusPlanTable } from "@/components/ai/bonus-plan-table";
 import {
   checkKeywordsAction,
   type KeywordCheckResult,
@@ -1256,6 +1257,12 @@ export function AdsAutoClient({
      快照字段（traffic-planner）：payout / networkCvr / targetReturnRatio，均为 USD 口径。 */
   const [plannerPayout, setPlannerPayout] = useState<string | null>(null);
   const [plannerCvrPct, setPlannerCvrPct] = useState<string | null>(null);
+  /** #16：品类判读（offer / 投流页快照的 category 字段）；判不了为 null，冷启动参考价整块不显示。 */
+  const [plannerCategory, setPlannerCategory] = useState<string | null>(null);
+  const [offerCategory, setOfferCategory] = useState<string | null>(null);
+  /** #16：品类中位 CPC（USD），来自 packages/shared/src/category-cpc（选品组提供，动态加载容错）。 */
+  const [categoryMedianCpc, setCategoryMedianCpc] = useState<number | null>(null);
+  const [categoryKeyUsed, setCategoryKeyUsed] = useState<string | null>(null);
   /** 目标产出比：只读，取自投流页快照（投流页是唯一输入地）。 */
   const [plannerTargetRatio, setPlannerTargetRatio] = useState<string | null>(null);
   useEffect(() => {
@@ -1271,6 +1278,9 @@ export function AdsAutoClient({
         const p = str(snap.payout);
         const cvr = str(snap.networkCvr);
         const ratio = str(snap.targetReturnRatio);
+        // #16：快照若带 category 字段则一并读出（旧快照没有此字段 → 保持 null，不编品类）。
+        const snapCategory = str(snap.category);
+        if (snapCategory) setPlannerCategory(snapCategory);
         if (offerId) {
           if (p) setPlannerPayout(p);
           if (cvr) setPlannerCvrPct(cvr);
@@ -1301,6 +1311,129 @@ export function AdsAutoClient({
   })();
   const recommendedBid = plannerProfit?.maxCpcAtTargetRatio ?? null;
   const plannerBreakEven = plannerProfit?.breakEvenCpc ?? null;
+
+  /* #16 冷启动参考价：品类基准表由选品组放在 packages/shared/src/category-cpc.ts。
+     该文件可能晚于本页落地，故用动态 import 容错加载：加载失败 / 表内查不到品类 →
+     categoryMedianCpc 保持 null，冷启动参考价整块不显示（绝不编数字）。
+     导出形状防御性兼容：导出名在 CATEGORY_CPC / CATEGORY_MEDIAN_CPC / categoryCpc /
+     MEDIAN_CPC_BY_CATEGORY / default 中找表（值可为 number 或 {medianCpc|median|cpc}），
+     或导出查询函数 getCategoryMedianCpc / lookupCategoryCpc / categoryMedianCpc。 */
+  const detectedCategory = offerCategory ?? plannerCategory;
+  useEffect(() => {
+    if (!detectedCategory) {
+      setCategoryMedianCpc(null);
+      setCategoryKeyUsed(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore 选品组的 category-cpc 模块可能尚未落地，运行时容错（文件落地后此行同样无害，故不用 ts-expect-error）
+        const mod = (await import(
+          "../../../../../packages/shared/src/category-cpc"
+        )) as Record<string, unknown>;
+        if (cancelled) return;
+        const wanted = detectedCategory.trim().toLowerCase();
+        const variants = Array.from(
+          new Set([
+            detectedCategory.trim(),
+            wanted,
+            wanted.replace(/\s+/g, "_"),
+            wanted.replace(/\s+/g, "-"),
+            wanted.replace(/[\s-]+/g, ""),
+          ])
+        );
+        let median: number | null = null;
+        let usedKey: string | null = null;
+        // 1) 查询函数导出
+        for (const fnName of [
+          "getCategoryMedianCpc",
+          "lookupCategoryCpc",
+          "categoryMedianCpc",
+          "getMedianCpc",
+        ]) {
+          const fn = mod[fnName];
+          if (typeof fn !== "function") continue;
+          for (const v of variants) {
+            try {
+              const out = (fn as (k: string) => unknown)(v);
+              const n =
+                typeof out === "number"
+                  ? out
+                  : out && typeof out === "object"
+                    ? Number(
+                        (out as Record<string, unknown>).medianCpc ??
+                          (out as Record<string, unknown>).median ??
+                          (out as Record<string, unknown>).cpc
+                      )
+                    : NaN;
+              if (Number.isFinite(n) && n > 0) {
+                median = n;
+                usedKey = v;
+                break;
+              }
+            } catch {
+              /* 该变体查不到，继续试 */
+            }
+          }
+          if (median !== null) break;
+        }
+        // 2) 表对象导出（key 大小写不敏感匹配）
+        if (median === null) {
+          for (const tableName of [
+            "CATEGORY_CPC",
+            "CATEGORY_MEDIAN_CPC",
+            "categoryCpc",
+            "categoryMedianCpc",
+            "MEDIAN_CPC_BY_CATEGORY",
+            "default",
+          ]) {
+            const table = mod[tableName];
+            if (!table || typeof table !== "object") continue;
+            for (const [k, raw] of Object.entries(table as Record<string, unknown>)) {
+              if (!variants.includes(k) && k.toLowerCase() !== wanted) continue;
+              const n =
+                typeof raw === "number"
+                  ? raw
+                  : raw && typeof raw === "object"
+                    ? Number(
+                        (raw as Record<string, unknown>).medianCpc ??
+                          (raw as Record<string, unknown>).median ??
+                          (raw as Record<string, unknown>).cpc
+                      )
+                    : NaN;
+              if (Number.isFinite(n) && n > 0) {
+                median = n;
+                usedKey = k;
+                break;
+              }
+            }
+            if (median !== null) break;
+          }
+        }
+        if (!cancelled) {
+          setCategoryMedianCpc(median);
+          setCategoryKeyUsed(usedKey);
+        }
+      } catch {
+        /* 品类基准表未就绪：保持 null，冷启动参考价不显示 */
+        if (!cancelled) {
+          setCategoryMedianCpc(null);
+          setCategoryKeyUsed(null);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [detectedCategory]);
+
+  /** 冷启动参考价（USD）= 品类中位 CPC × 0.7 × 1.2；无品类中位价时为 null（不显示）。 */
+  const coldStartCpc =
+    categoryMedianCpc !== null
+      ? Math.round(categoryMedianCpc * 0.7 * 1.2 * 100) / 100
+      : null;
   /** 确认/Script 用的最高 CPC：快照推荐出价（USD）→ 计划货币；无快照数据时不传（用计划默认）。 */
   const snapshotMaxCpc =
     recommendedBid != null
@@ -1360,6 +1493,7 @@ export function AdsAutoClient({
   useEffect(() => {
     if (!offerId) {
       setOfferNameFromOffer(null);
+      setOfferCategory(null);
       return;
     }
     let cancelled = false;
@@ -1367,6 +1501,9 @@ export function AdsAutoClient({
       const res = await getOfferAction(offerId);
       if (cancelled || !res.ok) return;
       if (res.data.name) setOfferNameFromOffer(res.data.name);
+      // #16：Offer 实体当前类型没有 category 字段；运行时数据若带则防御性读出，判不了就不显示冷启动价。
+      const cat = (res.data as unknown as Record<string, unknown>).category;
+      if (typeof cat === "string" && cat.trim()) setOfferCategory(cat.trim());
     })();
     return () => {
       cancelled = true;
@@ -1854,6 +1991,11 @@ export function AdsAutoClient({
         </div>
       )}
 
+      {/* #19 赠金规划附表：localStorage 本地简表，独立于广告计划，常驻显示。 */}
+      <div className="mt-6">
+        <BonusPlanTable dict={d.bonusPlan} />
+      </div>
+
       {plan ? (
         <>
           <h2 className="mt-6 text-base font-semibold text-ink">{d.preview.title}</h2>
@@ -1912,6 +2054,56 @@ export function AdsAutoClient({
                   </div>
                 </dl>
                 <p className="mt-2 text-xs text-ink/55">{d.bidStrategy.recommendedHint}</p>
+                {/* #16(a) 冷启动参考价：仅当品类判读成功且基准表有该品类时显示，判不了整块不显示。 */}
+                {coldStartCpc !== null && categoryMedianCpc !== null && (
+                  <div className="mt-3 rounded-lg border border-ink/10 bg-ink/[0.02] px-3 py-2">
+                    <p className="text-sm font-semibold text-ink">
+                      {d.bidStrategy.coldStartTitle}
+                    </p>
+                    <dl className="mt-2 grid grid-cols-2 gap-2 text-sm md:grid-cols-3">
+                      <div>
+                        <dt className="text-ink/55">{d.bidStrategy.coldStartCategory}</dt>
+                        <dd className="mt-0.5 font-medium text-ink">
+                          {categoryKeyUsed ?? detectedCategory}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-ink/55">{d.bidStrategy.coldStartMedian}</dt>
+                        <dd className="mt-0.5 font-medium text-ink">
+                          ${categoryMedianCpc.toFixed(2)} USD
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-ink/55">{d.bidStrategy.coldStartValue}</dt>
+                        <dd className="mt-0.5 font-medium text-ink">
+                          ${coldStartCpc.toFixed(2)} USD
+                        </dd>
+                      </div>
+                    </dl>
+                    <p className="mt-2 text-xs text-ink/55">
+                      {d.bidStrategy.coldStartFormula}
+                    </p>
+                  </div>
+                )}
+                {/* #16(b) 阶梯调价建议：按当前推荐出价（USD 口径）给只读文案，不自动改任何出价。 */}
+                {recommendedBid !== null && (
+                  <div className="mt-3 rounded-lg border border-ink/10 bg-ink/[0.02] px-3 py-2">
+                    <p className="text-sm font-semibold text-ink">
+                      {d.bidStrategy.ladderTitle}
+                    </p>
+                    <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-ink/75">
+                      <li>
+                        {recommendedBid < 0.15
+                          ? d.bidStrategy.ladderBelowKnee
+                          : recommendedBid >= 4.5
+                            ? d.bidStrategy.ladderAboveCeiling
+                            : d.bidStrategy.ladderMid}
+                      </li>
+                      <li>{d.bidStrategy.ladderStep}</li>
+                      <li>{d.bidStrategy.ladderCap}</li>
+                    </ul>
+                  </div>
+                )}
                 <Link
                   href={offerId ? `/ai/traffic-planner?offerId=${encodeURIComponent(offerId)}` : "/ai/traffic-planner"}
                   className="mt-2 inline-block text-sm font-medium text-signal underline"

@@ -2,7 +2,7 @@
  * calcProfit: isEstimated flag (P0-2). Math itself must stay unchanged.
  */
 import { describe, expect, it } from "vitest";
-import { calcProfit, clicksToOrderFromCvr, maxCpcForReturnRatio, returnRatioAtCpc, suggestCpcByClicksToOrder } from "@/lib/profit-calc";
+import { calcProfit, clicksToOrderFromCvr, defaultCvrForPrice, maxCpcForReturnRatio, returnRatioAtCpc, settlementPayoutHint, suggestCpcByClicksToOrder } from "@/lib/profit-calc";
 
 describe("calcProfit isEstimated", () => {
   it("defaults isEstimated to false when inputsEstimated is omitted", () => {
@@ -53,6 +53,65 @@ describe("return ratio（产出比）: r = 产出 / 投入，投 1 产出 r、�
     expect(d.returnRatioAtCpc).toBeCloseTo(0.4, 10);
     const r = calcProfit({ payout: 10, cpc: 0.5, cvrF: 0.02, targetReturnRatio: 1.5 });
     expect(r.maxCpcAtTargetRatio).toBeCloseTo(0.2 / 1.5, 10);
+  });
+});
+
+describe("#7 到账率双口径（settlementRateF）", () => {
+  it("默认到账率 0.7：账面产出比不变，到账产出比 = 账面 × 0.7", () => {
+    const r = calcProfit({ payout: 10, cpc: 0.5, cvrF: 0.02 });
+    expect(r.settlementRateF).toBeCloseTo(0.7, 10);
+    expect(r.returnRatioAtCpc).toBeCloseTo(0.4, 10);
+    expect(r.returnRatioNetAtCpc).toBeCloseTo(0.28, 10);
+  });
+
+  it("自定义到账率：0.85 时到账产出比 = 账面 × 0.85；账面口径不受影响", () => {
+    const r = calcProfit({ payout: 10, cpc: 0.5, cvrF: 0.02, settlementRateF: 0.85 });
+    expect(r.settlementRateF).toBeCloseTo(0.85, 10);
+    expect(r.returnRatioAtCpc).toBeCloseTo(0.4, 10);
+    expect(r.returnRatioNetAtCpc).toBeCloseTo(0.34, 10);
+  });
+
+  it("到账率钳制到 0–1；非有限数回落默认 0.7", () => {
+    expect(
+      calcProfit({ payout: 10, cpc: 0.5, cvrF: 0.02, settlementRateF: 1.5 }).settlementRateF
+    ).toBe(1);
+    expect(
+      calcProfit({ payout: 10, cpc: 0.5, cvrF: 0.02, settlementRateF: NaN }).settlementRateF
+    ).toBeCloseTo(0.7, 10);
+  });
+
+  it("null 边界：CPC 无效（0）时账面与到账产出比都为 null", () => {
+    const r = calcProfit({ payout: 10, cpc: 0, cvrF: 0.02 });
+    expect(r.returnRatioAtCpc).toBeNull();
+    expect(r.returnRatioNetAtCpc).toBeNull();
+  });
+
+  it("settlementPayoutHint：默认 135 天 → 约 4.5 个月；自定义天数与英文文案", () => {
+    expect(settlementPayoutHint(null, "zh")).toContain("4.5");
+    expect(settlementPayoutHint(undefined, "zh")).toContain("135");
+    expect(settlementPayoutHint(60, "zh")).toContain("2 个月");
+    expect(settlementPayoutHint(60, "en")).toContain("~2 months");
+    expect(settlementPayoutHint(0, "zh")).toContain("135");
+    expect(settlementPayoutHint(NaN, "en")).toContain("135");
+  });
+});
+
+describe("#8 defaultCvrForPrice（按客单价分档估算 CVR）", () => {
+  it("三档：<100 → 6%；100–300（含）→ 4%；>300 → 2.5%", () => {
+    expect(defaultCvrForPrice(50)).toBeCloseTo(0.06, 10);
+    expect(defaultCvrForPrice(99.99)).toBeCloseTo(0.06, 10);
+    expect(defaultCvrForPrice(100)).toBeCloseTo(0.04, 10);
+    expect(defaultCvrForPrice(300)).toBeCloseTo(0.04, 10);
+    expect(defaultCvrForPrice(300.01)).toBeCloseTo(0.025, 10);
+    expect(defaultCvrForPrice(1200)).toBeCloseTo(0.025, 10);
+  });
+
+  it("无效价格 → null（不编造）", () => {
+    expect(defaultCvrForPrice(null)).toBeNull();
+    expect(defaultCvrForPrice(undefined)).toBeNull();
+    expect(defaultCvrForPrice(0)).toBeNull();
+    expect(defaultCvrForPrice(-10)).toBeNull();
+    expect(defaultCvrForPrice(NaN)).toBeNull();
   });
 });
 

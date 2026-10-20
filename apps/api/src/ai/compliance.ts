@@ -6,6 +6,20 @@
  * No network access here; SSRF guards live in fetch-page.ts.
  */
 
+/**
+ * 补强 #24：直达链接（direct link）合规检查默认执行（默认开，用户可取消）。
+ * 调用方未显式传 enabled 时按 true 处理；显式传 false 才跳过检查。
+ * 只改默认值，不改判定逻辑（checkUrlVerdict 等纯函数不变）。
+ * Web 端对应开关：worksheet-client 的 complianceCounted 已默认 true。
+ */
+export const DIRECT_LINK_CHECK_DEFAULT_ENABLED = true;
+
+export function resolveDirectLinkCheckEnabled(
+  enabled?: boolean | null,
+): boolean {
+  return enabled ?? DIRECT_LINK_CHECK_DEFAULT_ENABLED;
+}
+
 /** Query parameter names commonly used by affiliate tracking links. */
 export const AFFILIATE_PARAMS: ReadonlySet<string> = new Set([
   "aff_id",

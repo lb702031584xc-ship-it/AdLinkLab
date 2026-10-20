@@ -144,6 +144,7 @@ export const zh = {
   bidRecommended: "推荐出价",
   bidNoData: "暂无测算数据：请先填 payout（或均价/佣金率）与转化率",
   bidFormulaHint: "推荐出价 = EPC ÷ 目标产出比；保本 CPC = EPC",
+  epcSmallSampleBadge: "样本小·仅供参考",
   /* 数据来源 · 一键直达（可多选，免费优先） */
   srcPayoutHint: "offer 详情页的佣金即 payout；电商 = 均价 × 佣金率。",
   srcEpcCvrHint: "网络后台 offer 详情页：复制 EPC / 转化数 / 点击数；CVR = 转化数 ÷ 点击数，也可用下方按钮由 EPC 反推。",
@@ -242,6 +243,12 @@ export const zh = {
   longtailSourceDataforseo: "DataForSEO",
   longtailNoVolumeNote: "无搜索量数字：建议用关键词规划师核对后再投。",
   longtailNeedSeed: "先填关键词再生成长尾词",
+  /* #17 长尾过滤参数 */
+  longtailFilterMinVolume: "最低搜索量",
+  longtailFilterBrandCpc: "品牌精确词 CPC（可选）",
+  longtailFilterMaxRatio: "CPC 上限比例（×品牌 CPC）",
+  longtailFilterCompetition: "仅保留低/中竞争度",
+  longtailFilterNote: "过滤规则：搜索量低于最低值被过滤；候选 CPC 高于品牌 CPC × 比例被过滤；无搜索量 / 无 CPC / 无竞争度数据的候选不会被误杀。修改后自动重新过滤。",
   /* 关键词 AI 检查 */
   kwCheck: "AI 检查关键词",
   kwChecking: "AI 检查中…",
@@ -399,6 +406,7 @@ export const en = {
   bidRecommended: "Recommended max CPC",
   bidNoData: "No data for calculation: fill payout (or price / commission rate) and CVR first",
   bidFormulaHint: "Recommended = EPC ÷ target return ratio; break-even CPC = EPC",
+  epcSmallSampleBadge: "Small sample · indicative only",
   /* Data sources: one-click direct (multi-select, free first) */
   srcPayoutHint: "The commission on the offer page is the payout; ecommerce = price × commission rate.",
   srcEpcCvrHint: "Network backend offer page: copy EPC / conversions / clicks; CVR = conversions ÷ clicks, or derive it from EPC below.",
@@ -497,6 +505,12 @@ export const en = {
   longtailSourceDataforseo: "DataForSEO",
   longtailNoVolumeNote: "No volume number: verify with Keyword Planner before spending.",
   longtailNeedSeed: "Fill in a keyword first, then generate long-tail keywords",
+  /* #17 long-tail filter params */
+  longtailFilterMinVolume: "Min. volume",
+  longtailFilterBrandCpc: "Brand exact CPC (optional)",
+  longtailFilterMaxRatio: "CPC cap ratio (× brand CPC)",
+  longtailFilterCompetition: "Keep Low/Medium competition only",
+  longtailFilterNote: "Filters: volume below the minimum is dropped; candidate CPC above brand CPC × ratio is dropped; candidates with no volume / CPC / competition data are never killed. Editing re-filters automatically.",
   /* Keyword AI check */
   kwCheck: "AI check keywords",
   kwChecking: "AI checking…",

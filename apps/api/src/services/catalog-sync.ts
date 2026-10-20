@@ -189,6 +189,8 @@ interface ProductRow {
   syncStreak: number | null;
   recommended: boolean | null;
   recommendationScore: unknown;
+  /** 补强 #4：返款周期天数（DB 行自带；适配器暂不提供时为 null = 未知）。 */
+  payoutCycleDays?: number | null;
 }
 
 const toNum = (v: unknown): number | null => {
@@ -943,6 +945,24 @@ export async function syncCatalog(
   let recommended = 0;
   const scored: Array<ProductRow & { score: number; isRecommended: boolean }> = [];
   if (!scoreCalcPaused) {
+    // 补强 #1：本批商品涉及商家的结算率一次批量查（查不到 → null，未验证中性）。
+    const syncMerchantIds = [
+      ...new Set(
+        upserted
+          .map((r) => r.merchantId)
+          .filter((x): x is string => typeof x === "string" && !!x)
+      ),
+    ];
+    const settlementByMerchant = new Map<string, number | null>();
+    if (syncMerchantIds.length > 0) {
+      const merchants = (await prisma.merchant.findMany({
+        where: { id: { in: syncMerchantIds }, tenantId },
+        select: { id: true, settlementRatePct: true },
+      })) as Array<{ id: string; settlementRatePct: unknown }>;
+      for (const m of merchants) {
+        settlementByMerchant.set(m.id, toNum(m.settlementRatePct));
+      }
+    }
     for (const row of upserted) {
       if (blacklistedProducts.has(row.id)) continue;
       if (row.merchantId && blacklistedMerchants.has(row.merchantId)) continue;
@@ -952,6 +972,14 @@ export async function syncCatalog(
           commissionAmount: toNum(row.commissionAmount),
           commissionRate: toNum(row.commissionRate),
           reviewCount: row.reviewCount,
+          settlementRatePct: row.merchantId
+            ? (settlementByMerchant.get(row.merchantId) ?? null)
+            : null,
+          payoutCycleDays:
+            typeof row.payoutCycleDays === "number" &&
+            Number.isFinite(row.payoutCycleDays)
+              ? row.payoutCycleDays
+              : null,
         },
         preset
       );

@@ -127,3 +127,40 @@ describe("prescreenOverall", () => {
     expect(prescreenOverall(rows)).toBe("pending");
   });
 });
+
+describe("evaluatePaidZeroPrescreen 竞争红海（补强 #2）", () => {
+  it("命中：付费>自然×50% 且 ≥1000 → caution 红海文案（不 kill）", () => {
+    const r = evaluatePaidZeroPrescreen(2200, 1500, 10, 1000, 0.05, "zh");
+    expect(r.status).toBe("caution");
+    expect(r.reason).toContain("竞争红海");
+    expect(r.reason).toContain("68%");
+    expect(r.reason).toContain("慎入");
+  });
+
+  it("命中英文文案", () => {
+    const r = evaluatePaidZeroPrescreen(2200, 1500, 10, 1000, 0.05, "en");
+    expect(r.status).toBe("caution");
+    expect(r.reason).toContain("Red ocean");
+  });
+
+  it("不命中：占比过半但付费 <1000", () => {
+    const r = evaluatePaidZeroPrescreen(1500, 900, 5, 1000, 0.05, "zh");
+    expect(r.status).toBe("pass");
+    expect(r.reason).not.toContain("红海");
+  });
+
+  it("不命中：付费恰好 = 自然×50%", () => {
+    expect(evaluatePaidZeroPrescreen(5000, 2500, 5, 1000, 0.05, "zh").status).toBe("pass");
+  });
+
+  it("数据不足不触发：paid 未知 → unknown；organic 未知 → unknown", () => {
+    expect(evaluatePaidZeroPrescreen(2200, undefined, undefined, 1000, 0.05, "zh").status).toBe("unknown");
+    expect(evaluatePaidZeroPrescreen(undefined, 5000, undefined, 1000, 0.05, "zh").status).toBe("unknown");
+  });
+
+  it("自然低于阈值但付费量与占比足够 → 仍 caution 红海（镜像后端）", () => {
+    const r = evaluatePaidZeroPrescreen(800, 2000, 5, 1000, 0.05, "zh");
+    expect(r.status).toBe("caution");
+    expect(r.reason).toContain("250%");
+  });
+});

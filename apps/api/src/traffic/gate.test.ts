@@ -518,3 +518,76 @@ describe("extractCoreKeywords", () => {
     expect(extractCoreKeywords("", [])).toEqual([]);
   });
 });
+
+describe("竞争红海规则（补强 #2）", () => {
+  it("命中：付费 1500 > 自然 2200×50% 且 ≥1000 → caution 红海，passed 不变（不 kill）", async () => {
+    const res = await evaluateTrafficGate(
+      baseInput({
+        manualMonthlyVisits: 80000,
+        organicTraffic: 2200,
+        paidTraffic: 1500,
+      })
+    );
+    expect(res.passed).toBe(true);
+    expect(res.caution).toContain("竞争红海");
+    expect(res.caution).toContain("68%");
+    expect(res.caution).toContain("慎入");
+    const sig = res.signals.find((x) => x.label.includes("红海"));
+    expect(sig).toBeDefined();
+    expect(sig?.passed).toBe(true);
+    expect(sig?.threshold).toBeNull();
+    expect(sig?.value).toBe(1500);
+  });
+
+  it("不命中：占比过半但付费绝对量 <1000", async () => {
+    const res = await evaluateTrafficGate(
+      baseInput({
+        manualMonthlyVisits: 80000,
+        organicTraffic: 1500,
+        paidTraffic: 900,
+      })
+    );
+    expect(res.passed).toBe(true);
+    expect(res.caution).toBeNull();
+    expect(res.signals.find((x) => x.label.includes("红海"))).toBeUndefined();
+  });
+
+  it("不命中：付费恰好 = 自然×50%（严格大于才触发）", async () => {
+    const res = await evaluateTrafficGate(
+      baseInput({
+        manualMonthlyVisits: 80000,
+        organicTraffic: 5000,
+        paidTraffic: 2500,
+      })
+    );
+    expect(res.passed).toBe(true);
+    expect(res.caution).toBeNull();
+    expect(res.signals.find((x) => x.label.includes("红海"))).toBeUndefined();
+  });
+
+  it("数据不足不触发：付费未知 / 自然未知", async () => {
+    const noPaid = await evaluateTrafficGate(
+      baseInput({ manualMonthlyVisits: 80000, organicTraffic: 2200 })
+    );
+    expect(noPaid.signals.find((x) => x.label.includes("红海"))).toBeUndefined();
+    expect(noPaid.caution).toBeNull();
+    const noOrganic = await evaluateTrafficGate(
+      baseInput({ manualMonthlyVisits: 80000, paidTraffic: 5000 })
+    );
+    expect(noOrganic.signals.find((x) => x.label.includes("红海"))).toBeUndefined();
+    expect(noOrganic.caution).toBeNull();
+  });
+
+  it("自然流量低于 organicTrafficMin 也可触发（付费绝对量与占比已足够说明竞争）", async () => {
+    const res = await evaluateTrafficGate(
+      baseInput({
+        manualMonthlyVisits: 80000,
+        organicTraffic: 800,
+        paidTraffic: 2000,
+      })
+    );
+    expect(res.passed).toBe(true);
+    expect(res.caution).toContain("竞争红海");
+    expect(res.caution).toContain("250%");
+  });
+});

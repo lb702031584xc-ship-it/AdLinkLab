@@ -51,6 +51,11 @@ export interface ProfitScenario {
   cvrPct: number;
   /** Profit per 100 clicks at suggested CPC (moderate level). */
   profitPer100Clicks: number | null;
+  /**
+   * 到账口径：收入按预计到账率折算后的每 100 点击利润
+   * （= revenue × settlementRateF − cost）。账面口径见 profitPer100Clicks。
+   */
+  profitPer100ClicksNet: number | null;
   verdict: "profit" | "loss" | "unknown";
 }
 
@@ -59,9 +64,22 @@ export interface ProfitAnalysis {
   /** Break-even CPC at assumed conversion rate. */
   breakEvenCpc: number | null;
   assumedCvrPct: number;
+  /** 实际生效的预计到账率（0–1）。 */
+  settlementRateF: number;
   bids: BidSuggestion[];
   scenarios: ProfitScenario[];
   currency: string | null;
+}
+
+/** 预计到账率默认值（与 web profit-calc 的 DEFAULT_SETTLEMENT_RATE_F 同口径）。 */
+export const DEFAULT_SETTLEMENT_RATE_F = 0.7;
+
+/** 到账率入参归一：未传/非有限数 → 默认 0.7；其余钳制到 0–1。 */
+export function normalizeSettlementRateF(v?: number | null): number {
+  if (v == null || typeof v !== "number" || !Number.isFinite(v)) {
+    return DEFAULT_SETTLEMENT_RATE_F;
+  }
+  return Math.min(Math.max(v, 0), 1);
 }
 
 function finiteOrNull(v: unknown): number | null {
@@ -150,8 +168,10 @@ export function estimateCommission(
  */
 export function analyzeProfit(
   commissionInput: CommissionRangeInput,
-  assumedCvrPct: unknown = 2
+  assumedCvrPct: unknown = 2,
+  settlementRateF?: number | null
 ): ProfitAnalysis {
+  const settleF = normalizeSettlementRateF(settlementRateF);
   const commission = estimateCommission(commissionInput);
   const cvr =
     finiteOrNull(assumedCvrPct) !== null && (assumedCvrPct as number) > 0
@@ -188,7 +208,12 @@ export function analyzeProfit(
   const moderateCpc = bids[1].maxCpc;
   const scenarios: ProfitScenario[] = scenarioCvrs.map((cvrPct) => {
     if (midCommission === null || moderateCpc === null) {
-      return { cvrPct, profitPer100Clicks: null, verdict: "unknown" as const };
+      return {
+        cvrPct,
+        profitPer100Clicks: null,
+        profitPer100ClicksNet: null,
+        verdict: "unknown" as const,
+      };
     }
     // Profit per 100 clicks = 100 × cvr% × commission − 100 × cpc
     const revenue = 100 * (cvrPct / 100) * midCommission;
@@ -197,11 +222,21 @@ export function analyzeProfit(
     return {
       cvrPct,
       profitPer100Clicks: profit,
+      // 到账口径：只有收入按到账率折算，成本（广告花费）全额发生。
+      profitPer100ClicksNet: round2(revenue * settleF - cost),
       verdict: profit > 0 ? ("profit" as const) : ("loss" as const),
     };
   });
 
-  return { commission, breakEvenCpc, assumedCvrPct: cvr, bids, scenarios, currency };
+  return {
+    commission,
+    breakEvenCpc,
+    assumedCvrPct: cvr,
+    settlementRateF: settleF,
+    bids,
+    scenarios,
+    currency,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -242,6 +277,8 @@ export interface ClickProfitInput {
   cvr?: number | null;
   /** 实际 CPC（美元，可选）：用于计算该出价下的期望盈亏。 */
   cpc?: number | null;
+  /** 预计到账率（0-1，默认 0.7）：只影响到账口径输出，账面口径不变。 */
+  settlementRateF?: number | null;
 }
 
 export interface ClickProfit {
@@ -255,6 +292,13 @@ export interface ClickProfit {
   expectedProfitPerClick: number | null;
   /** 每次点击期望盈亏（按实际 CPC；未提供 cpc 时为 null）。 */
   expectedProfitPerClickAtCpc: number | null;
+  /** 实际生效的预计到账率（0–1）。 */
+  settlementRateF: number;
+  /**
+   * 到账口径每次点击期望盈亏（按实际 CPC）= commissionPerSale × cvr ×
+   * settlementRateF − cpc（未提供 cpc 或不可投时为 null）。
+   */
+  expectedProfitPerClickNetAtCpc: number | null;
   /** 数学上是否可投（佣金>0 且 cvr>0）。 */
   viable: boolean;
   /** 不可投时的提示。 */
@@ -276,6 +320,7 @@ export function computeClickProfit(input: ClickProfitInput): ClickProfit {
   const fixed = finiteOrNull(input.fixedCommission);
   const cvr = input.cvr === undefined || input.cvr === null ? 0.02 : finiteOrNull(input.cvr);
   const cpc = finiteOrNull(input.cpc);
+  const settleF = normalizeSettlementRateF(input.settlementRateF);
 
   const commissionPerSale =
     fixed !== null && fixed > 0
@@ -294,6 +339,8 @@ export function computeClickProfit(input: ClickProfitInput): ClickProfit {
       recommendedBid: 0,
       expectedProfitPerClick: null,
       expectedProfitPerClickAtCpc: null,
+      settlementRateF: settleF,
+      expectedProfitPerClickNetAtCpc: null,
       viable: false,
       note: "数学上不可投：佣金或预估转化率为 0",
     };
@@ -309,6 +356,11 @@ export function computeClickProfit(input: ClickProfitInput): ClickProfit {
     expectedProfitPerClick,
     expectedProfitPerClickAtCpc:
       cpc !== null && cpc >= 0 ? round2(commissionPerSale * (cvr as number) - cpc) : null,
+    settlementRateF: settleF,
+    expectedProfitPerClickNetAtCpc:
+      cpc !== null && cpc >= 0
+        ? round2(commissionPerSale * (cvr as number) * settleF - cpc)
+        : null,
     viable: true,
     note: null,
   };

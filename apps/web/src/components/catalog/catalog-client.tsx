@@ -27,6 +27,8 @@ import {
   listMerchantSignalsAction,
   listSyncJobsAction,
   listWhitelistAction,
+  moveProductPoolStageAction,
+  moveProductsPoolStageAction,
   offlineProductsAction,
   recheckBlacklistAction,
   saveScreeningPresetAction,
@@ -45,6 +47,7 @@ import {
   type CatalogSyncJob,
   type MerchantEvaluateResult,
   type MerchantSignal,
+  type PoolStage,
   type RecheckResult,
   type ScreeningPreset,
   type SessionStatus,
@@ -1569,6 +1572,10 @@ export function CatalogClient({
   /** 广告数下限过滤：草稿（输入框）与已生效值分离，回车/失焦才生效。 */
   const [minAdsDraft, setMinAdsDraft] = useState("");
   const [minAds, setMinAds] = useState<number | undefined>(undefined);
+  /** 补强 #3：备选池阶段筛选（"" = 全部阶段）与批量移动目标阶段。 */
+  const [poolStageFilter, setPoolStageFilter] = useState<PoolStage | "">("");
+  const [batchPoolStage, setBatchPoolStage] = useState<PoolStage>("pool");
+  const [movingStage, setMovingStage] = useState(false);
   const [loadingProducts, setLoadingProducts] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [batching, setBatching] = useState(false);
@@ -1595,6 +1602,7 @@ export function CatalogClient({
       preset: applyPreset ? undefined : false,
       sort,
       minAdCount: minAds,
+      poolStage: poolStageFilter || undefined,
     });
     setLoadingProducts(false);
     if (!res.ok) {
@@ -1610,6 +1618,51 @@ export function CatalogClient({
     setPresetExcluded(res.data.presetExcluded ?? 0);
     setSelectedIds(new Set());
     setBatchResult(null);
+  }
+
+  /** 补强 #3：单条移动备选池阶段（后端 B6 门禁；失败原因直接展示）。 */
+  async function onMovePoolStageOne(prod: CatalogProduct, stage: PoolStage) {
+    if (movingStage || (prod.poolStage ?? "inbox") === stage) return;
+    setMovingStage(true);
+    setMsg(null);
+    const res = await moveProductPoolStageAction(prod.id, stage);
+    setMovingStage(false);
+    if (!res.ok) {
+      setMsg(res.error);
+      return;
+    }
+    setMsg(
+      d.products.poolStageMoved
+        .replace("{n}", "1")
+        .replace("{stage}", d.products.poolStage[stage])
+    );
+    await reloadProducts(page);
+  }
+
+  /** 补强 #3：批量移动备选池阶段。 */
+  async function onBatchMovePoolStage() {
+    if (selectedIds.size === 0 || movingStage) {
+      setMsg(d.products.noSelection);
+      return;
+    }
+    setMovingStage(true);
+    setMsg(null);
+    const res = await moveProductsPoolStageAction(
+      Array.from(selectedIds),
+      batchPoolStage
+    );
+    setMovingStage(false);
+    if (!res.ok) {
+      setMsg(res.error);
+      return;
+    }
+    setMsg(
+      d.products.poolStageMoved
+        .replace("{n}", String(res.data.updated))
+        .replace("{stage}", d.products.poolStage[batchPoolStage])
+    );
+    setSelectedIds(new Set());
+    await reloadProducts(page);
   }
 
   async function onBackfill() {
@@ -1671,7 +1724,7 @@ export function CatalogClient({
     setQ("");
     setQDraft("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, onlyRecommended, applyPreset, sort, minAds]);
+  }, [selectedId, onlyRecommended, applyPreset, sort, minAds, poolStageFilter]);
 
   /** 提交广告数下限草稿：正整数生效，空/非法 → 清除过滤。 */
   function commitMinAds() {
@@ -2386,6 +2439,21 @@ export function CatalogClient({
             </span>
           </p>
         )}
+        <div className="mt-4 flex flex-wrap gap-2">
+          {(["", "inbox", "pool", "testing", "live"] as const).map((st) => (
+            <button
+              key={st || "all"}
+              className={
+                poolStageFilter === st
+                  ? "rounded-lg bg-signal px-3 py-1.5 text-sm font-medium text-white"
+                  : btnGhost
+              }
+              onClick={() => setPoolStageFilter(st)}
+            >
+              {st === "" ? d.products.poolStage.all : d.products.poolStage[st]}
+            </button>
+          ))}
+        </div>
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-2 text-sm text-ink">
             <input
@@ -2515,6 +2583,10 @@ export function CatalogClient({
                 <th className="px-3 py-2.5 ">{d.products.colStatus}</th>
                 <th className="px-3 py-2.5 ">{d.products.colMid}</th>
                 <th className="px-3 py-2.5 ">{d.products.colMerchant}</th>
+                <th className="px-3 py-2.5 ">{d.products.colSettlementRate}</th>
+                <th className="px-3 py-2.5 ">{d.products.colApprovalRate}</th>
+                <th className="px-3 py-2.5 ">{d.products.colPayoutCycle}</th>
+                <th className="px-3 py-2.5 ">{d.products.colPoolStage}</th>
                 {sortTh("brand", d.products.colBrand)}
                 {sortTh(
                   "asin",
@@ -2597,6 +2669,44 @@ export function CatalogClient({
                     </td>
                     <td className="whitespace-nowrap px-3 py-2 text-ink/70">
                       {p.merchantName ?? "—"}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 tabular-nums text-ink/70">
+                      {p.settlementRatePct != null
+                        ? `${p.settlementRatePct}%`
+                        : d.products.settlementUnverified}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 tabular-nums text-ink/70">
+                      {p.approvalRatePct != null ? `${p.approvalRatePct}%` : "—"}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 tabular-nums text-ink/70">
+                      {p.payoutCycleDays != null
+                        ? d.products.payoutDays.replace(
+                            "{n}",
+                            String(p.payoutCycleDays)
+                          )
+                        : "—"}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2">
+                      <select
+                        className="rounded-md border border-ink/15 bg-white px-1.5 py-1 text-xs text-ink/80"
+                        value={(p.poolStage as PoolStage) ?? "inbox"}
+                        disabled={movingStage}
+                        onChange={(e) =>
+                          void onMovePoolStageOne(
+                            p,
+                            e.target.value as PoolStage
+                          )
+                        }
+                        aria-label={d.products.colPoolStage}
+                      >
+                        {(["inbox", "pool", "testing", "live"] as const).map(
+                          (st) => (
+                            <option key={st} value={st}>
+                              {d.products.poolStage[st]}
+                            </option>
+                          )
+                        )}
+                      </select>
                     </td>
                     <td className="whitespace-nowrap px-3 py-2 text-ink/70">{p.brand ?? "—"}</td>
                     <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-ink/70">
@@ -2799,6 +2909,25 @@ export function CatalogClient({
             {offlining
               ? d.products.offlining
               : d.products.batchOffline.replace("{n}", String(selectedIds.size))}
+          </button>
+          <select
+            className="rounded-lg border border-ink/15 bg-white px-2 py-1.5 text-sm text-ink/80"
+            value={batchPoolStage}
+            onChange={(e) => setBatchPoolStage(e.target.value as PoolStage)}
+            aria-label={d.products.colPoolStage}
+          >
+            {(["inbox", "pool", "testing", "live"] as const).map((st) => (
+              <option key={st} value={st}>
+                {d.products.poolStage[st]}
+              </option>
+            ))}
+          </select>
+          <button
+            className={btnGhost}
+            onClick={onBatchMovePoolStage}
+            disabled={movingStage || selectedIds.size === 0}
+          >
+            {movingStage ? d.products.movingPoolStage : d.products.movePoolStage}
           </button>
           <button
             className={btnGhost}

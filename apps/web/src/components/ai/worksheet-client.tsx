@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useDict } from "@/i18n/use-dict";
 import { EntityPageHeader } from "@/components/entities/ui";
 import OfferLinks from "@/components/entities/offer-links";
-import { calcProfit, ASSUMED_CLICKS_TO_ORDER, clicksToOrderFromCvr, normalizeReturnRatio, suggestCpcByClicksToOrder } from "@/lib/profit-calc";
+import { calcProfit, ASSUMED_CLICKS_TO_ORDER, clicksToOrderFromCvr, defaultCvrForPrice, normalizeReturnRatio, settlementPayoutHint, suggestCpcByClicksToOrder } from "@/lib/profit-calc";
 import { getLastOfferId, getManualOffer, setLastOfferId, setManualOffer } from "@/lib/current-offer";
 import {
   evaluateDemandGate,
@@ -63,6 +63,10 @@ export interface WorksheetOffer {
   commissionValue?: string | number | null;
   commissionType?: string | null;
   avgPrice?: string | number | null;
+  /** #7：结算周期（天）；页面层未带入时为空 → 回款提示用默认 135 天。 */
+  payoutCycleDays?: number | null;
+  /** #10：offer 创建时间（ISO）；透传给投流步的 PlannerOffer 做 EPC 小样本判断。 */
+  createdAt?: string | null;
   /** Offer 来源：affiliate | amazon | cashback（亚马逊 offer 才显示销量/评论门槛）。 */
   source?: string | null;
 }
@@ -116,6 +120,8 @@ export interface ProfitStepState {
     commissionRate: string;
     /** 目标产出比 r = 产出 / 投入（投 1 产出 r，利润 r − 1）。如 1.5 = 投 1 产出 1.5、利润 0.5；1 = 保平。 */
     targetReturnRatio: string;
+    /** #7：预计到账率 %（旧快照没有时默认 70）。 */
+    settlementRatePct?: string;
     /** 旧快照：目标 ROI %（已废弃，读旧快照时换算：比值 = 1 + ROI% / 100）。 */
     targetRoiPct?: string;
   };
@@ -131,6 +137,7 @@ function ProfitStep({
   initialCommissionRate,
   initialValues,
   offerId,
+  settlementCycleDays,
   syncInputs,
 }: {
   onChange: (s: ProfitStepState | null) => void;
@@ -143,6 +150,8 @@ function ProfitStep({
   initialValues?: ProfitStepState["inputs"];
   /** 当前 offer：用于从投放选词快照取参考 CPC。 */
   offerId?: string | null;
+  /** #7：offer 的结算周期（天）；未带入时回款提示用默认 135 天。 */
+  settlementCycleDays?: number | null;
   /**
    * ⑤→④ 同步：投流页改了盈利输入后覆盖本步对应字段（最后一次编辑优先）。
    * 与快照恢复的“只补空”不同，这里是显式同步，必须覆盖；seq 变化才应用一次。
@@ -150,10 +159,13 @@ function ProfitStep({
   syncInputs?: { inputs: NonNullable<ProfitStepState["inputs"]>; seq: number } | null;
 }) {
   const t = useDict();
+  const { lang } = useI18n();
   const d = t.ai.profit;
   const w = t.ai.worksheet.profitStep;
 
   const [mode, setMode] = useState<ProfitMode>(initialValues?.mode ?? initialMode ?? "ecommerce");
+  /** #7：预计到账率 %（默认 70）。 */
+  const [settlementPct, setSettlementPct] = useState(initialValues?.settlementRatePct ?? "70");
   const [avgPrice, setAvgPrice] = useState(initialValues?.avgPrice ?? initialAvgPrice ?? "");
   const [commissionRate, setCommissionRate] = useState(
     initialValues?.commissionRate ?? initialCommissionRate ?? ""
@@ -172,7 +184,7 @@ function ProfitStep({
       offer = 库里 Offer 带入；manual = 用户手填；keywords = 投放选词快照；
       planner = 投流决策（⑤）快照；snapshot = 上次保存的工作表快照；
       derived = 切到“其他”时由均价×佣金率带过去的 payout。 */
-  type ProvSource = "offer" | "manual" | "keywords" | "planner" | "snapshot" | "derived" | null;
+  type ProvSource = "offer" | "manual" | "keywords" | "planner" | "snapshot" | "derived" | "tiered" | null;
   type ProvField = "avgPrice" | "commissionRate" | "payout" | "cpc" | "cvrPct";
   const [prov, setProv] = useState<Record<ProvField, ProvSource>>({
     avgPrice: initialValues?.avgPrice ? "snapshot" : initialAvgPrice ? "offer" : null,
@@ -192,6 +204,7 @@ function ProfitStep({
     if (!snapshotAppliedRef.current) {
       snapshotAppliedRef.current = true;
       if (initialValues.mode) setMode(initialValues.mode);
+      if (initialValues.settlementRatePct) setSettlementPct(initialValues.settlementRatePct);
       if (initialValues.targetReturnRatio || initialValues.targetRoiPct)
         setTargetReturnRatio(normalizeReturnRatio(initialValues));
     }
@@ -220,6 +233,7 @@ function ProfitStep({
     setCvrPct(inp.cvrPct);
     setRefundPct(inp.refundPct);
     setShavePct(inp.shavePct);
+    if (inp.settlementRatePct) setSettlementPct(inp.settlementRatePct);
     setTargetReturnRatio(normalizeReturnRatio({ targetReturnRatio: inp.targetReturnRatio }));
     setFieldProv("avgPrice", "planner");
     setFieldProv("commissionRate", "planner");
@@ -285,6 +299,24 @@ function ProfitStep({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offerId]);
 
+  /* #8：CVR 分档预填（仅电商模式有客单价）：CVR 为空、或当前值就是分档
+     自动填的且均价变了时，按 defaultCvrForPrice(均价) 预填并标 tiered
+     来源（属估算，isEstimated 判定不算实测）。用户手填后（manual 等来源）
+     永不覆盖；用户清空手填值也不立即回填（等均价变化再触发）。 */
+  const cvrTierForRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (mode !== "ecommerce") return;
+    const tier = defaultCvrForPrice(parseFloat(avgPrice));
+    if (tier === null) return;
+    if (cvrPct.trim() && prov.cvrPct !== "tiered") return;
+    if (!cvrPct.trim() && cvrTierForRef.current === avgPrice && prov.cvrPct === "tiered") return;
+    if (cvrPct.trim() && cvrTierForRef.current === avgPrice) return;
+    cvrTierForRef.current = avgPrice;
+    setCvrPct(String(Math.round(tier * 1000) / 10));
+    setFieldProv("cvrPct", "tiered");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [avgPrice, mode]);
+
   const inputClass =
     "w-full rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm text-ink placeholder:text-ink/35 focus:border-signal focus:outline-none";
   const labelClass = "mb-1 block text-sm font-medium text-ink/80";
@@ -313,7 +345,9 @@ function ProfitStep({
         : prov.payout === "derived"
           ? measured(prov.avgPrice) && measured(prov.commissionRate)
           : measured(prov.payout);
-    return !(payoutMeasured && measured(prov.cpc) && measured(prov.cvrPct));
+    // #8：分档预填的 CVR 属估算（tiered），不能算实测。
+    const cvrMeasured = measured(prov.cvrPct) && prov.cvrPct !== "tiered";
+    return !(payoutMeasured && measured(prov.cpc) && cvrMeasured);
   }, [mode, avgPrice, commissionRate, prov]);
 
   const result = useMemo(() => {
@@ -334,9 +368,14 @@ function ProfitStep({
       refundF: mode === "ecommerce" ? pct(refundPct) : 0,
       shaveF: mode === "other" ? pct(shavePct) : 0,
       targetReturnRatio: Number.isFinite(ratio) && ratio > 0 ? ratio : 2,
+      // 到账率留空/无效 → undefined（calcProfit 用默认 0.7），不按 0 算
+      settlementRateF: (() => {
+        const n = parseFloat(settlementPct);
+        return Number.isFinite(n) ? Math.min(Math.max(n, 0), 100) / 100 : undefined;
+      })(),
       inputsEstimated: isEstimated,
     });
-  }, [derivedPayout, cpc, cvrPct, refundPct, shavePct, mode, targetReturnRatio, isEstimated]);
+  }, [derivedPayout, cpc, cvrPct, refundPct, shavePct, mode, targetReturnRatio, settlementPct, isEstimated]);
 
   /* 按期望 ROI 反推 CPC：不依赖已填 CPC，只用 payout/CVR/退货/扣量/目标 ROI。 */
   const reverseCpc = useMemo(() => {
@@ -382,6 +421,7 @@ function ProfitStep({
         avgPrice,
         commissionRate,
         targetReturnRatio,
+        settlementRatePct: settlementPct,
       },
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -512,6 +552,18 @@ function ProfitStep({
           <label className={labelClass} htmlFor="ws-cvr">{w.cvrLabel}</label>
           <input id="ws-cvr" inputMode="decimal" value={cvrPct}
             onChange={(e) => { setCvrPct(e.target.value); setFieldProv("cvrPct", "manual"); }} placeholder="2" className={inputClass} />
+          {prov.cvrPct === "tiered" && (
+            <p className="mt-1">
+              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">
+                {w.cvrTieredBadge}
+              </span>
+            </p>
+          )}
+        </div>
+        <div>
+          <label className={labelClass} htmlFor="ws-settlement">{w.settlementRateLabel}</label>
+          <input id="ws-settlement" inputMode="decimal" value={settlementPct}
+            onChange={(e) => setSettlementPct(e.target.value)} placeholder="70" className={inputClass} />
         </div>
         {mode === "ecommerce" ? (
           <div>
@@ -543,6 +595,7 @@ function ProfitStep({
               [w.perClickProfit, w.perClickProfitFormula, `${result.perClickProfit > 0 ? "+" : ""}${fmt(result.perClickProfit)}`],
               [d.results.breakEvenCvr, d.formulas.breakEvenCvr, result.breakEvenCvrPct !== null ? `${fmt(result.breakEvenCvrPct)}%` : "—"],
               [w.currentReturnRatio, w.currentReturnRatioFormula, result.returnRatioAtCpc !== null ? `${fmt(result.returnRatioAtCpc, 2)}（赚 ${fmt(result.returnRatioAtCpc - 1, 2)}）` : "—"],
+              [w.netReturnRatio, w.netReturnRatioFormula, result.returnRatioNetAtCpc !== null ? fmt(result.returnRatioNetAtCpc, 2) : "—"],
             ] as const
           ).map(([label, formula, value]) => (
             <div key={label} className="rounded-xl border border-ink/10 bg-white px-5 py-4">
@@ -551,6 +604,10 @@ function ProfitStep({
               <p className="mt-1 font-mono text-xs text-ink/45">{formula}</p>
             </div>
           ))}
+          {/* #7：预计回款提示（结算周期取 offer 的 payoutCycleDays，未带入时默认 135 天）。 */}
+          <p className="mt-3 text-sm text-ink/60 md:col-span-2 lg:col-span-3">
+            💰 {settlementPayoutHint(settlementCycleDays, lang === "en" ? "en" : "zh")}
+          </p>
         </div>
       ) : (
         <p className="mt-4 text-sm text-ink/55">
@@ -2271,6 +2328,7 @@ export function WorksheetClient({
           initialValues={profitState?.inputs ?? profitSyncPending ?? undefined}
           syncInputs={profitSync}
           offerId={offer?.id ?? null}
+          settlementCycleDays={offer?.payoutCycleDays ?? null}
           key={offer?.id ?? "manual"}
         />
       </StepCard>
