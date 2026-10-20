@@ -380,6 +380,73 @@ export async function registerRoutes(
     );
   });
 
+  // 广告系列卡片统计（真实数据：广告组/追踪链接/点击/转化；只读聚合，不造数）。
+  app.get<{
+    Headers: { "x-tenant-id"?: string };
+    Querystring: { ids?: string };
+  }>("/api/v1/campaigns/stats", async (request) => {
+    const tenantId = tenantOf(request);
+    const ids = (request.query.ids ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 100);
+    if (ids.length === 0) return { stats: [] };
+    const prisma = services.prisma as PrismaClient;
+    const [agRows, tlRows, clickRows, convRows] = await Promise.all([
+      prisma.adGroup.groupBy({
+        by: ["campaignId"],
+        where: { tenantId, campaignId: { in: ids } },
+        _count: { _all: true },
+      }),
+      prisma.trackingLink.groupBy({
+        by: ["campaignId"],
+        where: { tenantId, campaignId: { in: ids } },
+        _count: { _all: true },
+      }),
+      prisma.click.groupBy({
+        by: ["campaignId"],
+        where: { tenantId, campaignId: { in: ids } },
+        _count: { _all: true },
+      }),
+      prisma.conversion.findMany({
+        where: {
+          tenantId,
+          deletedAt: null,
+          click: { campaignId: { in: ids } },
+        },
+        select: { value: true, click: { select: { campaignId: true } } },
+      }),
+    ]);
+    const toMap = (rows: Array<{ campaignId: string; _count: { _all: number } }>) =>
+      new Map(rows.map((r) => [r.campaignId, r._count._all]));
+    const adGroups = toMap(agRows as never);
+    const trackingLinks = toMap(tlRows as never);
+    const clicks = toMap(clickRows as never);
+    const convByCamp = new Map<string, { count: number; value: number }>();
+    for (const c of convRows as Array<{
+      value: unknown;
+      click: { campaignId: string | null };
+    }>) {
+      const cid = c.click?.campaignId;
+      if (!cid) continue;
+      const cur = convByCamp.get(cid) ?? { count: 0, value: 0 };
+      cur.count += 1;
+      cur.value += c.value != null ? Number(c.value) : 0;
+      convByCamp.set(cid, cur);
+    }
+    return {
+      stats: ids.map((id) => ({
+        campaignId: id,
+        adGroups: adGroups.get(id) ?? 0,
+        trackingLinks: trackingLinks.get(id) ?? 0,
+        clicks: clicks.get(id) ?? 0,
+        conversions: convByCamp.get(id)?.count ?? 0,
+        conversionValue: convByCamp.get(id)?.value ?? 0,
+      })),
+    };
+  });
+
   app.get<{
     Headers: { "x-tenant-id"?: string };
     Querystring: { page?: string; pageSize?: string };
