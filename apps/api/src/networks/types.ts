@@ -53,6 +53,12 @@ export interface AdapterContext {
   ssrfCheck?: (url: string) => Promise<void>;
   /** Request timeout per HTTP call, ms. */
   timeoutMs?: number;
+  /**
+   * 官方 API 商品接口路径覆盖（如 YeahPromos Get Products）。
+   * null/缺省 → 适配器默认路径。仿 session 模式的 sessionListPath 覆盖机制，
+   * 经 AffiliateNetwork.apiProductsPath 列 + 网络设置 PATCH 写入。
+   */
+  apiProductsPath?: string | null;
 }
 
 /**

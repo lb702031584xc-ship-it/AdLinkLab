@@ -5,7 +5,8 @@
  * - 每个适配器的 sessionKind 与官方 kind 一致；
  * - 未验证模板 + 对不上的响应 → SessionTemplateError 明错（SESSION_TEMPLATE_UNVERIFIED），
  *   由同步服务统一降级，不死循环、不伪造数据；
- * - YeahPromos 的 pullOffers(api 模式) 直接抛 NOT_IMPLEMENTED（不硬编码猜测端点）。
+ * - YeahPromos 官方 API 已于 2026-10-20 经文档证实并实现（见 yeahpromos-adapter.test.ts）；
+ *   此处只断言其凭证缺失时明错（BAD_CREDENTIALS），api 细节在专属测试文件覆盖。
  */
 import { describe, expect, it } from "vitest";
 import { SessionTemplateError } from "./session-adapter.js";
@@ -113,21 +114,21 @@ describe("未验证端点 → 明确错误降级（不伪造数据）", () => {
 });
 
 describe("YeahPromos 官方 API", () => {
-  it("pullOffers(api 模式) 抛 NOT_IMPLEMENTED（不硬编码猜测端点）", async () => {
+  it("pullOffers(api 模式) 已实现：缺 site_id 时抛 BAD_CREDENTIALS 明错（不发请求）", async () => {
     const adapter = new YeahPromosAdapter();
     const err = await adapter
       .pullOffers({
-        apiKey: "k",
+        apiKey: "bare-token-without-site-id",
         apiBaseUrl: "https://yeahpromos.com",
         tenantId: "t",
       })
       .catch((e) => e);
     expect(err).toBeInstanceOf(NetworkAdapterError);
-    expect((err as NetworkAdapterError).code).toBe("NOT_IMPLEMENTED");
+    expect((err as NetworkAdapterError).code).toBe("BAD_CREDENTIALS");
   });
 
   it("supportsModes 声明正确", () => {
-    expect(new YeahPromosAdapter().supportsModes).toEqual(["session"]);
+    expect(new YeahPromosAdapter().supportsModes).toEqual(["api", "session"]);
     expect(new PartnerBoostSessionAdapter().sessionKind).toBe("partnerboost");
   });
 });

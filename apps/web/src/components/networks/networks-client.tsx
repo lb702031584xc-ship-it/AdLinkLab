@@ -51,6 +51,7 @@ const KIND_LABELS: Record<string, [string, string]> = {
   rakuten: ["联盟网络", "Rakuten Advertising"],
   flexoffers: ["联盟网络", "FlexOffers"],
   partnerboost: ["联盟网络", "PartnerBoost"],
+  yeahpromos: ["联盟网络", "YeahPromos"],
 };
 
 function kindLabel(kind: string): string {
@@ -88,7 +89,11 @@ export function NetworksClient({
   const [fKind, setFKind] = useState(supportedKinds[0] ?? "impact");
   const [fBaseUrl, setFBaseUrl] = useState("");
   const [fSessionListPath, setFSessionListPath] = useState("");
+  const [fApiProductsPath, setFApiProductsPath] = useState("");
   const [fApiKey, setFApiKey] = useState("");
+  // YeahPromos 官方 API 凭证：token + site_id（只写，保存时合并为一段加密存储）。
+  const [fYpToken, setFYpToken] = useState("");
+  const [fYpSiteId, setFYpSiteId] = useState("");
   const [fClearCreds, setFClearCreds] = useState(false);
 
   // expandable detail
@@ -104,7 +109,10 @@ export function NetworksClient({
     setFKind(supportedKinds[0] ?? "impact");
     setFBaseUrl("");
     setFSessionListPath("");
+    setFApiProductsPath("");
     setFApiKey("");
+    setFYpToken("");
+    setFYpSiteId("");
     setFClearCreds(false);
     setDialogOpen(true);
   }
@@ -115,18 +123,37 @@ export function NetworksClient({
     setFKind(n.kind);
     setFBaseUrl(n.apiBaseUrl ?? "");
     setFSessionListPath(n.sessionListPath ?? "");
+    setFApiProductsPath(n.apiProductsPath ?? "");
     setFApiKey("");
+    setFYpToken("");
+    setFYpSiteId("");
     setFClearCreds(false);
     setDialogOpen(true);
   }
 
   async function onSave() {
+    const isYp = fKind === "yeahpromos";
+    const ypToken = fYpToken.trim();
+    const ypSiteId = fYpSiteId.trim();
+    // YP 凭证成对校验：只填一项无法保存（site_id 必须与 token 配对）。
+    if (isYp && !fClearCreds && Boolean(ypToken) !== Boolean(ypSiteId)) {
+      setMsg(d.dialog.ypCredBothRequired);
+      return;
+    }
     setSaving(true);
     setMsg(null);
     try {
       const baseUrl = fBaseUrl.trim() ? fBaseUrl.trim() : undefined;
       const listPath = fSessionListPath.trim() ? fSessionListPath.trim() : undefined;
-      const trimmedKey = fApiKey.trim();
+      const productsPath = fApiProductsPath.trim()
+        ? fApiProductsPath.trim()
+        : undefined;
+      // YP：token + site_id 合并为一段 JSON 走既有 apiKey 加密通道（只写不读）。
+      const trimmedKey = isYp
+        ? ypToken && ypSiteId
+          ? JSON.stringify({ token: ypToken, siteId: ypSiteId })
+          : ""
+        : fApiKey.trim();
       const res = editing
         ? await updateNetworkAction(editing.id, {
             name: fName.trim(),
@@ -138,6 +165,9 @@ export function NetworksClient({
             ...(fSessionListPath.trim() === (editing.sessionListPath ?? "")
               ? {}
               : { sessionListPath: listPath ?? null }),
+            ...(fApiProductsPath.trim() === (editing.apiProductsPath ?? "")
+              ? {}
+              : { apiProductsPath: productsPath ?? null }),
             ...(fClearCreds
               ? { apiKey: null as string | null }
               : trimmedKey
@@ -149,6 +179,7 @@ export function NetworksClient({
             kind: fKind,
             ...(baseUrl ? { apiBaseUrl: baseUrl } : {}),
             ...(listPath ? { sessionListPath: listPath } : {}),
+            ...(productsPath ? { apiProductsPath: productsPath } : {}),
             ...(trimmedKey ? { apiKey: trimmedKey } : {}),
           });
       if (res.ok) {
@@ -459,22 +490,69 @@ export function NetworksClient({
                   placeholder={d.dialog.sessionListPathPlaceholder}
                 />
               </label>
-              <label className="block">
-                <span className="mb-1 block text-sm text-ink/70">
-                  {d.dialog.apiKey}
-                </span>
-                <input
-                  type="password"
-                  className={inputCls}
-                  value={fApiKey}
-                  onChange={(e) => setFApiKey(e.target.value)}
-                  placeholder={d.dialog.apiKeyPlaceholder}
-                  autoComplete="new-password"
-                />
-                <span className="mt-1 block text-xs text-ink/50">
-                  {d.dialog.apiKeyHint}
-                </span>
-              </label>
+              {fKind === "yeahpromos" && (
+                <label className="block">
+                  <span className="mb-1 block text-sm text-ink/70">
+                    {d.dialog.apiProductsPath}
+                  </span>
+                  <input
+                    className={inputCls}
+                    value={fApiProductsPath}
+                    onChange={(e) => setFApiProductsPath(e.target.value)}
+                    placeholder={d.dialog.apiProductsPathPlaceholder}
+                  />
+                </label>
+              )}
+              {fKind === "yeahpromos" ? (
+                <>
+                  <label className="block">
+                    <span className="mb-1 block text-sm text-ink/70">
+                      {d.dialog.ypToken}
+                    </span>
+                    <input
+                      type="password"
+                      className={inputCls}
+                      value={fYpToken}
+                      onChange={(e) => setFYpToken(e.target.value)}
+                      placeholder={d.dialog.ypTokenPlaceholder}
+                      autoComplete="new-password"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-sm text-ink/70">
+                      {d.dialog.ypSiteId}
+                    </span>
+                    <input
+                      type="password"
+                      className={inputCls}
+                      value={fYpSiteId}
+                      onChange={(e) => setFYpSiteId(e.target.value)}
+                      placeholder={d.dialog.ypSiteIdPlaceholder}
+                      autoComplete="new-password"
+                    />
+                    <span className="mt-1 block text-xs text-ink/50">
+                      {d.dialog.ypCredHint}
+                    </span>
+                  </label>
+                </>
+              ) : (
+                <label className="block">
+                  <span className="mb-1 block text-sm text-ink/70">
+                    {d.dialog.apiKey}
+                  </span>
+                  <input
+                    type="password"
+                    className={inputCls}
+                    value={fApiKey}
+                    onChange={(e) => setFApiKey(e.target.value)}
+                    placeholder={d.dialog.apiKeyPlaceholder}
+                    autoComplete="new-password"
+                  />
+                  <span className="mt-1 block text-xs text-ink/50">
+                    {d.dialog.apiKeyHint}
+                  </span>
+                </label>
+              )}
               {editing?.apiConfigured && (
                 <label className="flex items-center gap-2 text-sm text-ink/80">
                   <input

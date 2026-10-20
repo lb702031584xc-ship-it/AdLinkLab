@@ -177,6 +177,7 @@ export async function pullNetwork(
           apiKey,
           apiBaseUrl: (network.apiBaseUrl ?? "").trim() || adapter.defaultBaseUrl,
           tenantId,
+          apiProductsPath: network.apiProductsPath ?? null,
         })
       );
     } catch (e) {

@@ -21,6 +21,7 @@ export interface NetworkRow {
   apiConfigured: boolean;
   apiBaseUrl: string | null;
   sessionListPath: string | null;
+  apiProductsPath: string | null;
   lastPullAt: string | null;
   pullStatus: string;
   pullError: string | null;
@@ -113,6 +114,7 @@ export async function createNetworkAction(input: {
   website?: string;
   apiBaseUrl?: string;
   sessionListPath?: string;
+  apiProductsPath?: string;
   apiKey?: string;
 }) {
   return attempt(async () => {
@@ -133,6 +135,7 @@ export async function updateNetworkAction(
     kind?: string;
     apiBaseUrl?: string | null;
     sessionListPath?: string | null;
+    apiProductsPath?: string | null;
     apiKey?: string | null;
   }
 ) {

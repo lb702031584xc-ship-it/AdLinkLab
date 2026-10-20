@@ -108,6 +108,18 @@ function asSessionListPath(v: unknown): string | null | undefined {
   return s;
 }
 
+/** 官方 API 商品接口路径覆盖（可选；必须以 / 开头，≤500 字符）。 */
+function asApiProductsPath(v: unknown): string | null | undefined {
+  if (v === undefined || v === null) return undefined;
+  const s = asTrimmedString(v);
+  if (!s) return null;
+  if (!s.startsWith("/")) {
+    throw new ValidationError("apiProductsPath 必须以 / 开头");
+  }
+  if (s.length > 500) throw new ValidationError("apiProductsPath 过长（上限 500）");
+  return s;
+}
+
 /** Public shape — credentials masked to a boolean flag. */
 export function serializeNetwork(row: {
   id: string;
@@ -127,6 +139,8 @@ export function serializeNetwork(row: {
   sessionRef?: string | null;
   sessionStatus?: string | null;
   sessionListPath?: string | null;
+  /** 官方 API 商品接口路径覆盖（null → 适配器默认已验证路径）。 */
+  apiProductsPath?: string | null;
   /** 登录用户名（明文可显示）。 */
   sessionUsername?: string | null;
   /** 是否已设置登录密码（只返回布尔值，绝不回显密码本身）。 */
@@ -158,6 +172,7 @@ export function serializeNetwork(row: {
     sessionConfigured: Boolean(row.sessionRef),
     sessionStatus: row.sessionStatus ?? "NEVER",
     sessionListPath: row.sessionListPath ?? null,
+    apiProductsPath: row.apiProductsPath ?? null,
     // 登录账号（密码只写不读：只返回"是否已设置"，永不回显）。
     sessionUsername: row.sessionUsername ?? null,
     sessionPasswordSet: Boolean(row.sessionPasswordRef),
@@ -220,6 +235,7 @@ export async function registerNetworkRoutes(
       if (!name) throw new ValidationError("名称不能为空");
       const kind = asKind(body.kind);
       const apiBaseUrl = asApiBaseUrl(body.apiBaseUrl);
+      const apiProductsPath = asApiProductsPath(body.apiProductsPath);
 
       let apiKeyRef: string | null = null;
       const apiKey = asTrimmedString(body.apiKey);
@@ -238,6 +254,7 @@ export async function registerNetworkRoutes(
           apiConfigured: Boolean(apiKeyRef),
           apiKeyRef,
           ...(apiBaseUrl !== undefined ? { apiBaseUrl } : {}),
+          ...(apiProductsPath !== undefined ? { apiProductsPath } : {}),
         },
       });
       // Validate adapter exists eagerly (fail fast on unsupported kind).
@@ -272,6 +289,8 @@ export async function registerNetworkRoutes(
       if (apiBaseUrl !== undefined) patch.apiBaseUrl = apiBaseUrl;
       const sessionListPath = asSessionListPath(body.sessionListPath);
       if (sessionListPath !== undefined) patch.sessionListPath = sessionListPath;
+      const apiProductsPath = asApiProductsPath(body.apiProductsPath);
+      if (apiProductsPath !== undefined) patch.apiProductsPath = apiProductsPath;
 
       // apiKey rotation: string → re-encrypt; null → clear credentials.
       if (body.apiKey !== undefined) {
