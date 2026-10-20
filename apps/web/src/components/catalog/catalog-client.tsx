@@ -2308,7 +2308,6 @@ export function CatalogClient({
                 <th className="sticky left-[36px] z-30 w-[44px] min-w-[44px] bg-inherit px-2 py-2.5 ">
                   {d.products.colSeq}
                 </th>
-                {sortTh("id", d.products.colExtId)}
                 <th className="px-3 py-2.5 ">{d.products.colNetwork}</th>
                 <th className="px-3 py-2.5 ">{d.products.colAccount}</th>
                 <th className="px-3 py-2.5 ">{d.products.colStatus}</th>
@@ -2371,10 +2370,6 @@ export function CatalogClient({
                     </td>
                     <td className="sticky left-[36px] z-10 w-[44px] min-w-[44px] bg-inherit px-2 py-3 text-xs tabular-nums text-ink/50">
                       {seq}
-                    </td>
-                    
-                    <td className="whitespace-nowrap px-3 py-2 tabular-nums text-ink/70">
-                      {p.productId ?? p.externalId ?? "—"}
                     </td>
                     <td className="px-3 py-2">
                       <span className="text-xs font-medium text-ink/70">
