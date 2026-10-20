@@ -17,11 +17,18 @@
  *   ≥6.5s；429 直接降级，不重试、不死循环。
  *   凭证：token + site_id 合并为一段 JSON 存入网络设置的 apiKeyRef
  *   （AES-256-GCM 加密、只写不读，跟随 PB 现有凭证模式；绝不明文、绝不经聊天）。
- *   ⚠️ 返回字段清单未经真实响应验证：字段映射沿用 session mapper 的防御式
- *   pickField 候选名；响应结构对不上（无 code / 候选路径找不到列表）时抛
- *   YP_API_STRUCTURE_UNVERIFIED 明错，由同步服务统一降级（FAILED + 审计），
- *   绝不伪造数据。products 路径默认值为上方已验证地址，仍可在网络设置用
- *   apiProductsPath 覆盖（仿 sessionListPath 机制）。
+ *   信封结构已于 2026-10-20 经真实响应验证：body 为**双重编码** JSON
+ *   （整个负载又被包成一层 JSON 字符串返回、引号带反斜杠转义，一次
+ *   JSON.parse 只得到 string——本适配器逐层解包，最多 3 层）；解包后
+ *   {code:"100000"（**字符串**，比较前统一 Number()）, status:"SUCCESS",
+ *   msg, data:{…}}；列表在 **data.data**（Laravel 分页器信封：
+ *   per_page/current_page/last_page/total/data[]）；brands 记录字段
+ *   advert_id / advert_name / image。products 的字段级映射（价格/佣金等）
+ *   仍沿用 session mapper 的防御式 pickField 候选名；解包后仍非 object、
+ *   或候选路径找不到列表时抛 YP_API_STRUCTURE_UNVERIFIED 明错，由同步
+ *   服务统一降级（FAILED + 审计），绝不伪造数据。products 路径默认值为
+ *   上方已验证地址，仍可在网络设置用 apiProductsPath 覆盖（仿
+ *   sessionListPath 机制）。
  *
  * ── 登录态(session)模式（备用）──
  * ═══════════════════════════════════════════════════════════════════════
@@ -187,7 +194,7 @@ export async function assertYpApiUrlSafe(rawUrl: string): Promise<void> {
   }
 }
 
-/* ── 防御式 JSON 读取（响应结构未经真实响应验证，候选路径兜底） ── */
+/* ── 防御式 JSON 读取（信封已验证：双重编码 + data.data；字段级仍候选路径兜底） ── */
 
 function getPath(obj: unknown, path: string): unknown {
   let cur: unknown = obj;
@@ -214,21 +221,29 @@ function firstNumberAtPaths(obj: unknown, paths: string[]): number | null {
   return null;
 }
 
-/** 列表候选路径（products/brands 返回字段均未经真实响应验证，按常见结构防御式排列）。 */
+/**
+ * 列表候选路径：真实结构为 data.data（Laravel 分页器，2026-10-20 验证），
+ * 放最前；其余为防御式兜底。
+ */
 const YP_API_LIST_PATHS = [
+  "data.data",
   "data.list",
   "data.items",
   "data.products",
   "data.brands",
   "data.adverts",
   "data.rows",
-  "data.data",
   "list",
   "items",
   "products",
   "brands",
   "data",
 ] as const;
+
+/** Laravel 分页器当前页/末页候选路径（2026-10-20 真实响应证实）。 */
+const YP_API_CURRENT_PAGE_PATHS = ["data.current_page", "current_page"] as const;
+const YP_API_LAST_PAGE_PATHS = ["data.last_page", "last_page"] as const;
+const YP_API_NEXT_PAGE_URL_PATHS = ["data.next_page_url", "next_page_url"] as const;
 
 /** 总页数候选路径（Transaction API 文档为 PageTotal/PageNow 风格）。 */
 const YP_API_PAGE_TOTAL_PATHS = [
@@ -517,6 +532,19 @@ export class YeahPromosAdapter
     } catch {
       json = null;
     }
+    // 双重编码解包（2026-10-20 真实响应证实）：YP 把整个 JSON 负载又包了
+    // 一层 JSON 字符串返回（引号带反斜杠转义），一次 parse 只得到 string，
+    // 不是 object——此前正是这里误判"响应不是 JSON"。结果是 string 就再
+    // parse，循环逐层解包，最多 3 层防无限套娃；解包后仍非 object 才走
+    // 下面的结构未验证明错（诊断片段逻辑不变）。
+    for (let depth = 0; depth < 3 && typeof json === "string"; depth += 1) {
+      try {
+        json = JSON.parse(json);
+      } catch {
+        json = null;
+        break;
+      }
+    }
     if (json === null || typeof json !== "object") {
       // 诊断信息（不含任何凭证：token 只在请求头里，从不写入错误；
       // 请求 URL 只有 site_id/page 等公开参数，最终 URL 与 body 片段可安全带回）：
@@ -540,6 +568,8 @@ export class YeahPromosAdapter
     const root = json as Record<string, unknown>;
 
     // 结果码判定（文档：100000 成功 / 100001 失败；code 可能在顶层或 data/status 下）。
+    // 真实响应中 code 是字符串 "100000"，故统一 Number() 后再与成功码比较
+    // （字符串/数字都兼容）；失败带 root.msg 明错。
     const codeRaw =
       pickField(root, "code") ??
       getPath(root, "data.code") ??
@@ -573,7 +603,7 @@ export class YeahPromosAdapter
         "YP_API_STRUCTURE_UNVERIFIED",
         `YeahPromos API（${label}）响应结构与文档不符：未在候选路径（` +
           YP_API_LIST_PATHS.join(" / ") +
-          "）找到列表。返回字段未经真实响应验证，已停止导入（未写入任何数据）；" +
+          "）找到列表。信封结构已验证但列表位置对不上，已停止导入（未写入任何数据）；" +
           "请把真实响应样例反馈给管理员核对字段结构"
       );
     }
@@ -606,14 +636,32 @@ export class YeahPromosAdapter
           >
         );
       }
-      const pageTotal = firstNumberAtPaths(root, [...YP_API_PAGE_TOTAL_PATHS]);
-      if (pageTotal != null) {
-        hasMore = page < pageTotal && list.length > 0;
-      } else if (YP_API_HAS_MORE_PATHS.some((p) => getPath(root, p) === true)) {
+      // Laravel 分页器口径优先（2026-10-20 真实响应证实）：current_page 与
+      // last_page 都是数字时以之为准；next_page_url 非 null 也算有下一页。
+      const currentPage = firstNumberAtPaths(root, [
+        ...YP_API_CURRENT_PAGE_PATHS,
+      ]);
+      const lastPage = firstNumberAtPaths(root, [...YP_API_LAST_PAGE_PATHS]);
+      if (currentPage != null && lastPage != null) {
+        hasMore = currentPage < lastPage && list.length > 0;
+      } else if (
+        YP_API_NEXT_PAGE_URL_PATHS.some((p) => getPath(root, p) != null)
+      ) {
         hasMore = list.length > 0;
       } else {
-        // 无分页元数据：满页则试探下一页，不满页即结束。
-        hasMore = list.length >= deps.pageSize;
+        const pageTotal = firstNumberAtPaths(root, [
+          ...YP_API_PAGE_TOTAL_PATHS,
+        ]);
+        if (pageTotal != null) {
+          hasMore = page < pageTotal && list.length > 0;
+        } else if (
+          YP_API_HAS_MORE_PATHS.some((p) => getPath(root, p) === true)
+        ) {
+          hasMore = list.length > 0;
+        } else {
+          // 无分页元数据：满页则试探下一页，不满页即结束。
+          hasMore = list.length >= deps.pageSize;
+        }
       }
       page += 1;
     }

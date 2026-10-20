@@ -6,8 +6,10 @@
  *   GET https://yeahpromos.com/index/apioffer/brands   （广告主，建 advert_id → 名称映射）
  *   Header token；参数 site_id / page / page_size（上限 200）/ relationship。
  *   结果码 code=100000 成功 / 100001 失败；限流 10 次/分钟，两拉取共享预算串行节流。
- * ⚠️ 返回字段清单未经真实响应验证：本测试的响应形状按文档 + 常见结构构造，
- * 只验证适配器的防御式解析/映射/节流/明错行为，不代表真实字段已核实。
+ * 信封结构已于 2026-10-20 经真实响应验证（双重编码 JSON + 字符串 code +
+ * data.data 的 Laravel 分页器 + brands 的 advert_id/advert_name）：真实信封
+ * 用例按该结构构造；products 字段级形状仍按文档 + 常见结构构造，验证
+ * 适配器的防御式解析/映射/节流/明错行为。
  */
 import { describe, expect, it, vi } from "vitest";
 import { NetworkAdapterError } from "./partnerboost-adapter.js";
@@ -82,6 +84,40 @@ function listBody(
   extra: Record<string, unknown> = {}
 ): Record<string, unknown> {
   return { code: 100000, msg: "success", data: { list, ...extra } };
+}
+
+/** 把 body 编码 times 层 JSON（times=2 即 YP 真实行为：双重编码）。 */
+function encodedResponse(body: unknown, times = 2): Response {
+  let text = JSON.stringify(body);
+  for (let i = 1; i < times; i += 1) text = JSON.stringify(text);
+  return {
+    ok: true,
+    status: 200,
+    url: "",
+    text: async () => text,
+    json: async () => body,
+  } as unknown as Response;
+}
+
+/** 真实信封（2026-10-20 验证）：字符串 code + Laravel 分页器 data{…, data[]}。 */
+function laravelBody(
+  items: unknown[],
+  page: number,
+  lastPage: number,
+  code: string = "100000"
+): Record<string, unknown> {
+  return {
+    code,
+    status: "SUCCESS",
+    msg: "",
+    data: {
+      per_page: 200,
+      current_page: page,
+      last_page: lastPage,
+      total: items.length,
+      data: items,
+    },
+  };
 }
 
 /**
@@ -423,6 +459,93 @@ describe("YeahPromosAdapter.pullOffers (api 模式)", () => {
     // brands 1 页 + products 2 页 = 3 次请求、2 个间隔，每个 ≥80ms。
     expect(calls).toHaveLength(3);
     expect(Date.now() - started).toBeGreaterThanOrEqual(150);
+  });
+
+  it("真实信封：双重编码 body + 字符串 code + data.data + Laravel 两页分页（brands/products 拉全，brands 第 2 页回填 brand）", async () => {
+    const pages: string[] = [];
+    const fetchImpl = vi.fn(async (url: string) => {
+      const u = new URL(String(url));
+      const page = Number(u.searchParams.get("page"));
+      const isBrands = u.pathname.endsWith("/brands");
+      pages.push(`${isBrands ? "brands" : "products"}:${page}`);
+      if (isBrands) {
+        const items =
+          page === 1
+            ? [brand({ advert_id: "adv-1", advert_name: "FirstPageBrand" })]
+            : [brand({ advert_id: "adv-2", advert_name: "SecondPageBrand" })];
+        return encodedResponse(laravelBody(items, page, 2));
+      }
+      const items =
+        page === 1
+          ? [
+              product({
+                product_id: "yp-2001",
+                brand_name: undefined,
+                advert_id: "adv-2",
+              }),
+            ]
+          : [
+              product({
+                product_id: "yp-2002",
+                product_name: "Second Page Gadget",
+              }),
+            ];
+      return encodedResponse(laravelBody(items, page, 2));
+    }) as unknown as typeof fetch;
+
+    const offers = await new YeahPromosAdapter().pullOffers(
+      ctxWith(fetchImpl),
+      { pageDelayMs: 0 }
+    );
+
+    // 每页只有 1 条（远小于 page_size 200）：靠 Laravel current_page<last_page
+    // 续拉（不是满页启发式）；顺序 brands 两页 → products 两页。
+    expect(pages).toEqual([
+      "brands:1",
+      "brands:2",
+      "products:1",
+      "products:2",
+    ]);
+    expect(offers).toHaveLength(2);
+    expect(offers.map((o) => o.externalId)).toEqual(["yp-2001", "yp-2002"]);
+    // brand 由 brands 第 2 页记录的 advert_name 经 advert_id 映射回填。
+    expect(offers[0].brand).toBe("SecondPageBrand");
+    expect(offers[0].payout).toBe(12.5);
+    expect(offers[1].name).toBe("Second Page Gadget");
+  });
+
+  it("三重编码 body 也能逐层解包", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      const u = new URL(String(url));
+      if (u.pathname.endsWith("/brands")) {
+        return encodedResponse(laravelBody([brand()], 1, 1), 3);
+      }
+      return encodedResponse(laravelBody([product()], 1, 1), 3);
+    }) as unknown as typeof fetch;
+    const offers = await new YeahPromosAdapter().pullOffers(
+      ctxWith(fetchImpl),
+      { pageDelayMs: 0 }
+    );
+    expect(offers).toHaveLength(1);
+    expect(offers[0].externalId).toBe("yp-1001");
+  });
+
+  it("字符串 code \"100001\" → API_ERROR 并带出原始 msg", async () => {
+    const fetchImpl = vi.fn(async () =>
+      encodedResponse({
+        code: "100001",
+        status: "ERROR",
+        msg: "token mismatch",
+        data: null,
+      })
+    ) as unknown as typeof fetch;
+    const err = await new YeahPromosAdapter()
+      .pullOffers(ctxWith(fetchImpl), { pageDelayMs: 0 })
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(NetworkAdapterError);
+    expect((err as NetworkAdapterError).code).toBe("API_ERROR");
+    expect((err as Error).message).toContain("token mismatch");
+    expect((err as Error).message).toContain("100001");
   });
 });
 
