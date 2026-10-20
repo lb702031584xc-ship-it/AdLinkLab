@@ -6,8 +6,10 @@ export const zh = {
   overview: {
     total: "广告系列总数",
     active: "投放中",
+    paused: "已暂停",
     clicks: "总点击",
     conversions: "总转化",
+    value: "总转化价值",
   },
   card: {
     adGroups: "广告组",
@@ -28,8 +30,10 @@ export const en: CampaignCardsDict = {
   overview: {
     total: "Campaigns",
     active: "Active",
+    paused: "Paused",
     clicks: "Total clicks",
     conversions: "Total conversions",
+    value: "Total conv. value",
   },
   card: {
     adGroups: "Ad groups",

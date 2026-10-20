@@ -35,17 +35,19 @@ export function CampaignCards({
       if (s) {
         acc.clicks += s.clicks;
         acc.conversions += s.conversions;
+        acc.value += s.conversionValue;
       }
       if (c.status === "ACTIVE") acc.active += 1;
+      if (c.status === "PAUSED") acc.paused += 1;
       return acc;
     },
-    { active: 0, clicks: 0, conversions: 0 }
+    { active: 0, paused: 0, clicks: 0, conversions: 0, value: 0 }
   );
 
   return (
     <div>
       {/* 总览统计 */}
-      <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
         <div className="rounded-xl border border-ink/10 bg-white p-4 shadow-sm">
           <p className="text-xs text-ink/50">{t.overview.total}</p>
           <p className="mt-1 text-2xl font-semibold tabular-nums text-ink">
@@ -59,6 +61,12 @@ export function CampaignCards({
           </p>
         </div>
         <div className="rounded-xl border border-ink/10 bg-white p-4 shadow-sm">
+          <p className="text-xs text-ink/50">{t.overview.paused}</p>
+          <p className="mt-1 text-2xl font-semibold tabular-nums text-amber-600">
+            {totals.paused}
+          </p>
+        </div>
+        <div className="rounded-xl border border-ink/10 bg-white p-4 shadow-sm">
           <p className="text-xs text-ink/50">{t.overview.clicks}</p>
           <p className="mt-1 text-2xl font-semibold tabular-nums text-ink">
             {totals.clicks.toLocaleString()}
@@ -68,6 +76,12 @@ export function CampaignCards({
           <p className="text-xs text-ink/50">{t.overview.conversions}</p>
           <p className="mt-1 text-2xl font-semibold tabular-nums text-ink">
             {totals.conversions.toLocaleString()}
+          </p>
+        </div>
+        <div className="rounded-xl border border-ink/10 bg-white p-4 shadow-sm">
+          <p className="text-xs text-ink/50">{t.overview.value}</p>
+          <p className="mt-1 text-2xl font-semibold tabular-nums text-ink">
+            {totals.value.toFixed(2)}
           </p>
         </div>
       </div>
