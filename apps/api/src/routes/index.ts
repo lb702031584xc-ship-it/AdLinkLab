@@ -232,6 +232,12 @@ export async function registerRoutes(
     // 每租户系统设置（AI 引擎/广告发布/代理/系统偏好；租户级覆盖，不动全局配置）
     const { registerSettingsRoutes } = await import("./settings.js");
     await registerSettingsRoutes(app, { prisma: services.prisma });
+    // 创意管理库（RSA 文案资产；CRUD + 从投放档案导入）
+    const { registerCreativesRoutes } = await import("./creatives.js");
+    await registerCreativesRoutes(app, { prisma: services.prisma });
+    // 数据管理：用户自助导出/导入（Offers/Campaigns/Settings，密钥脱敏）
+    const { registerDataIoRoutes } = await import("./data-io.js");
+    await registerDataIoRoutes(app, { prisma: services.prisma });
     await registerMonitoringRoutes(app, { prisma: services.prisma });
     await registerOfferIntelRoutes(app, { prisma: services.prisma });
     await registerTrafficIntelRoutes(app, { prisma: services.prisma });

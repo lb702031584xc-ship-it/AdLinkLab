@@ -249,6 +249,8 @@ model Tenant {
   catalogMerchantSignals CatalogMerchantSignal[]
   /// 每租户系统设置 back-references (additive)
   tenantSettings        TenantSetting[]
+  /// 创意管理库 back-references (additive)
+  creatives             Creative[]
 
   @@map("tenants")
 }
@@ -479,6 +481,7 @@ model Offer {
   tenant             Tenant              @relation(fields: [tenantId], references: [id])
   merchant           Merchant?           @relation(fields: [merchantId], references: [id], onDelete: SetNull)
   landingPages       LandingPage[]
+  creatives          Creative[]
   trackingLinks      TrackingLink[]
   /// Launch Wizard back-reference (additive)
   launchChecklists   LaunchChecklist[]
@@ -2591,4 +2594,40 @@ model TenantSetting {
   @@unique([tenantId, key], name: "tenant_settings_tenant_key_unique")
   @@index([tenantId])
   @@map("tenant_settings")
+}
+
+/// 创意管理库：租户自有 RSA 文案资产（标题+描述）。手动建 / AI 入库 / 从投放档案导入。
+enum CreativeStatus {
+  DRAFT
+  USED
+  ARCHIVED
+}
+
+enum CreativeSource {
+  MANUAL
+  AI
+  ARCHIVE
+}
+
+model Creative {
+  id          String         @id @db.Uuid
+  tenantId    String         @map("tenant_id") @db.Uuid
+  offerId     String?        @map("offer_id") @db.Uuid
+  title       String
+  description String
+  finalUrl    String?        @map("final_url")
+  angle       String?
+  status      CreativeStatus @default(DRAFT)
+  source      CreativeSource @default(MANUAL)
+  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt   DateTime?      @map("deleted_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  offer  Offer? @relation(fields: [offerId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([offerId])
+  @@map("creatives")
 }

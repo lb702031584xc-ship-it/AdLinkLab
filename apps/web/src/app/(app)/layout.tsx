@@ -98,6 +98,11 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
               label: t.common.nav.landingPages,
               phase: ph.creative,
             },
+            {
+              href: "/creatives",
+              label: lang === "en" ? "Creative Library" : "创意管理",
+              phase: ph.creative,
+            },
             { href: "/ads/auto-create", label: ni.launchAds, phase: ph.traffic },
             { href: "/campaigns", label: t.common.nav.campaigns, phase: ph.traffic },
             { href: "/monitoring", label: ni.trafficMonitoring, phase: ph.monitor },
@@ -137,6 +142,11 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
               label: t.common.nav.landingPages,
               phase: ph.creative,
             },
+            {
+              href: "/creatives",
+              label: lang === "en" ? "Creative Library" : "创意管理",
+              phase: ph.creative,
+            },
             { href: "/campaigns", label: t.common.nav.campaigns, phase: ph.traffic },
             { href: "/monitoring", label: ni.trafficMonitoring, phase: ph.monitor },
           ],
@@ -161,6 +171,11 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
             {
               href: "/landing-pages",
               label: t.common.nav.landingPages,
+              phase: ph.creative,
+            },
+            {
+              href: "/creatives",
+              label: lang === "en" ? "Creative Library" : "创意管理",
               phase: ph.creative,
             },
             { href: "/cashback/rotations", label: ni.cashbackRotations, phase: ph.traffic },
@@ -204,6 +219,11 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         {
           title: s.reports,
                     items: [
+            {
+              href: "/daily-alerts",
+              label: (lang === "en" ? "Daily Alerts" : "每日预警"),
+              phase: ph.monitor,
+            },
             { href: "/reports", label: ni.launchArchive, phase: ph.monitor },
             { href: "/tracking-links", label: t.common.nav.trackingLinks },
             { href: "/clicks", label: t.common.nav.clicks },
@@ -219,6 +239,10 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
             {
               href: "/settings",
               label: (lang === "en" ? settingsEn : settingsZh).page.title,
+            },
+            {
+              href: "/data-management",
+              label: lang === "en" ? "Data Management" : "数据管理",
             },
             { href: "/script-integrations", label: t.common.nav.scriptIntegrations },
             { href: "/jobs", label: t.common.nav.jobs },

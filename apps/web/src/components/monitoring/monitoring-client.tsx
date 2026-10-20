@@ -253,7 +253,7 @@ export function MonitoringClient() {
         <DailyAlertsCard
           title={d.dailyAlertsTitle}
           emptyText={d.dailyAlertsEmpty}
-          detailLinkHref="/reports/launch"
+          detailLinkHref="/daily-alerts"
         />
       </div>
 
