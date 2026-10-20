@@ -72,7 +72,11 @@ export const YP_DEFAULT_API_BRANDS_PATH = "/index/apioffer/brands";
 /** page_size 上限 200（文档明示），用满以减少请求数（限流 10 次/分钟）。 */
 export const YP_API_PAGE_SIZE = 200;
 export const YP_API_MAX_PAGES = 20;
-export const YP_API_DEFAULT_TIMEOUT_MS = 15_000;
+/**
+ * 单请求超时：15s → 45s（2026-10-20）。YP 是慢 ThinkPHP 接口，真实拉取实测
+ * 一页 200 条的响应（尤其响应体传输）超过 15s 被 AbortSignal 掐断，故放宽到 45s。
+ */
+export const YP_API_DEFAULT_TIMEOUT_MS = 45_000;
 /** 官方限流 10 次/分钟 → 任意相邻请求最小间隔 6.5s（留 0.5s 余量）。 */
 export const YP_API_MIN_REQUEST_INTERVAL_MS = 6_500;
 /** YP 结果码：成功。 */
@@ -268,6 +272,29 @@ interface YpApiRequestDeps {
   throttle: () => Promise<void>;
 }
 
+/** 安全取错误 message：DOMException（超时 abort 的实际类型）不是 Error 子类，优先读 .message。 */
+function ypErrorMessage(error: unknown): string {
+  if (error !== null && typeof error === "object") {
+    const m = (error as { message?: unknown }).message;
+    if (typeof m === "string" && m.length > 0) return m;
+  }
+  return String(error);
+}
+
+/**
+ * 超时类错误识别：AbortSignal.timeout 触发的是 name="TimeoutError" 的
+ * DOMException（message "The operation was aborted due to timeout"）；
+ * 本适配器唯一的 abort 信号就是该超时信号，AbortError 同按超时处理。
+ */
+function isYpTimeoutError(error: unknown): boolean {
+  if (error === null || typeof error !== "object") return false;
+  const name = (error as { name?: unknown }).name;
+  if (name === "TimeoutError" || name === "AbortError") return true;
+  return /aborted due to timeout|operation was aborted|timed?\s*out/i.test(
+    ypErrorMessage(error)
+  );
+}
+
 export class YeahPromosAdapter
   extends TemplateSessionAdapter
   implements NetworkAdapter
@@ -423,6 +450,7 @@ export class YeahPromosAdapter
     });
     const url = `${deps.baseUrl}${path}?${params.toString()}`;
     let res: Response;
+    let text: string;
     try {
       res = await deps.fetchImpl(url, {
         method: "GET",
@@ -436,10 +464,27 @@ export class YeahPromosAdapter
         },
         signal: AbortSignal.timeout(deps.timeoutMs),
       });
+      // 响应体读取必须在同一个 try 里：AbortSignal 在 body 传输期间同样会
+      // 触发超时（YP 先回响应头、再慢吐 200 条数据时实测发生过）。此前
+      // res.text() 在 try 外，超时抛出的原始 DOMException 未经本适配器包装
+      // 直接落库，前端只看到英文原文 "The operation was aborted due to
+      // timeout"，没有接口/页码定位信息。
+      text = await res.text();
     } catch (error) {
+      const original = ypErrorMessage(error);
+      if (isYpTimeoutError(error)) {
+        const secs = deps.timeoutMs / 1000;
+        const secsLabel = Number.isInteger(secs)
+          ? String(secs)
+          : secs.toFixed(1);
+        throw new NetworkAdapterError(
+          "NETWORK_ERROR",
+          `YeahPromos API（${label} 第 ${page} 页）请求超时（>${secsLabel}s）：${original}`
+        );
+      }
       throw new NetworkAdapterError(
         "NETWORK_ERROR",
-        `YeahPromos API（${label}）请求失败：${error instanceof Error ? error.message : String(error)}`
+        `YeahPromos API（${label}）请求失败：${original}`
       );
     }
     if (res.status === 401) {
@@ -465,7 +510,7 @@ export class YeahPromosAdapter
       );
     }
 
-    const text = await res.text();
+    // text 已在上方与 fetch 同一 try 中读完（超时包装覆盖 body 传输阶段）。
     let json: unknown = null;
     try {
       json = JSON.parse(text);

@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 import { NetworkAdapterError } from "./partnerboost-adapter.js";
 import {
   parseYpApiCredentials,
+  YP_API_DEFAULT_TIMEOUT_MS,
   YP_API_MIN_REQUEST_INTERVAL_MS,
   YP_API_USER_AGENT,
   YeahPromosAdapter,
@@ -306,6 +307,90 @@ describe("YeahPromosAdapter.pullOffers (api 模式)", () => {
     expect(msg).not.toContain("请求被重定向到：");
     // 200 字符之后的尾部标记已被截断，不出现。
     expect(msg).not.toContain("TAILMARKER");
+  });
+
+  it("默认超时已放宽到 45s（YP 慢接口实测超 15s）", () => {
+    expect(YP_API_DEFAULT_TIMEOUT_MS).toBe(45_000);
+  });
+
+  it("fetch 阶段超时（TimeoutError）→ NETWORK_ERROR 文案开头标明接口/页码/秒数", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new DOMException(
+        "The operation was aborted due to timeout",
+        "TimeoutError"
+      );
+    }) as unknown as typeof fetch;
+    const err = await new YeahPromosAdapter()
+      .pullOffers(ctxWith(fetchImpl), { pageDelayMs: 0 })
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(NetworkAdapterError);
+    expect((err as NetworkAdapterError).code).toBe("NETWORK_ERROR");
+    const msg = (err as Error).message;
+    // brands 是第一步：第 1 页超时。
+    expect(msg.startsWith("YeahPromos API（Get Adverts 第 1 页）请求超时")).toBe(
+      true
+    );
+    expect(msg).toContain("（>45s）");
+    expect(msg).toContain("The operation was aborted due to timeout");
+    expect(msg).not.toContain("test-website-token");
+  });
+
+  it("products 阶段超时 → 文案标明 Get Products 第 1 页", async () => {
+    const { fetchImpl } = routedFetch([brand()], () => {
+      throw new DOMException(
+        "The operation was aborted due to timeout",
+        "TimeoutError"
+      );
+    });
+    const err = await new YeahPromosAdapter()
+      .pullOffers(ctxWith(fetchImpl), { pageDelayMs: 0 })
+      .catch((e) => e);
+    expect((err as NetworkAdapterError).code).toBe("NETWORK_ERROR");
+    const msg = (err as Error).message;
+    expect(
+      msg.startsWith("YeahPromos API（Get Products 第 1 页）请求超时（>45s）")
+    ).toBe(true);
+  });
+
+  it("响应体读取阶段超时（回归：此前 text() 在 try 外，原始英文未包装直接透出）→ 同样带接口/页码定位", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        ({
+          ok: true,
+          status: 200,
+          url: "https://yeahpromos.com/index/apioffer/brands",
+          text: async () => {
+            throw new DOMException(
+              "The operation was aborted due to timeout",
+              "TimeoutError"
+            );
+          },
+          json: async () => ({}),
+        }) as unknown as Response
+    ) as unknown as typeof fetch;
+    const err = await new YeahPromosAdapter()
+      .pullOffers(ctxWith(fetchImpl), { pageDelayMs: 0 })
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(NetworkAdapterError);
+    expect((err as NetworkAdapterError).code).toBe("NETWORK_ERROR");
+    const msg = (err as Error).message;
+    expect(msg).not.toBe("The operation was aborted due to timeout");
+    expect(
+      msg.startsWith("YeahPromos API（Get Adverts 第 1 页）请求超时（>45s）")
+    ).toBe(true);
+  });
+
+  it("非超时网络错误保持现有格式（请求失败 + 原始信息，不带页码/超时字样）", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("socket hang up");
+    }) as unknown as typeof fetch;
+    const err = await new YeahPromosAdapter()
+      .pullOffers(ctxWith(fetchImpl), { pageDelayMs: 0 })
+      .catch((e) => e);
+    expect((err as NetworkAdapterError).code).toBe("NETWORK_ERROR");
+    expect((err as Error).message).toBe(
+      "YeahPromos API（Get Adverts）请求失败：socket hang up"
+    );
   });
 
   it("纯 token 凭证（缺 site_id）→ BAD_CREDENTIALS 且不发请求", async () => {
