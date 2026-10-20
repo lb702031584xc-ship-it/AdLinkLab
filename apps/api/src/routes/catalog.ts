@@ -48,6 +48,7 @@ import {
   scoreProduct,
 } from "../services/catalog-screening.js";
 import { calcRecommendationScore } from "../services/recommendation-score.js";
+import { calcBrandAdCounts } from "../services/brand-ad-count.js";
 import {
   addToBlacklist,
   addWhitelistEntry,
@@ -177,6 +178,12 @@ function serializeProduct(r: Record<string, unknown>, whitelisted: boolean) {
     landingPageType: (r.landingPageType as string) ?? null,
     countryCode: (r.countryCode as string) ?? null,
     status: (r.status as string) ?? "active",
+    adCount: numOrNull(r.adCount),
+    adCountSelf: numOrNull(r.adCountSelf),
+    adCountOthers: numOrNull(r.adCountOthers),
+    adCountCheckedAt:
+      (r.adCountCheckedAt as Date)?.toISOString?.() ??
+      (typeof r.adCountCheckedAt === "string" ? r.adCountCheckedAt : null),
     syncStreak: r.syncStreak ?? 0,
     whitelisted,
     syncedAt: (r.syncedAt as Date)?.toISOString?.() ?? null,
@@ -842,6 +849,47 @@ export async function registerCatalogRoutes(
         detail: { requested: ids.length, updated: res.count },
       });
       return { updated: res.count, requested: ids.length };
+    }
+  );
+
+  // 广告投放数量计算（按品牌+国家查 DataForSEO SERP，14 天缓存增量）。
+  // ids 缺省/空 = 该 tenant 全部商品增量；凭证未配置 → 明确报错不静默。
+  app.post<{ Body: { ids?: unknown } }>(
+    "/api/v1/catalog/products/calc-ad-count",
+    async (request) => {
+      const info = await requireSession(deps, request);
+      let productIds: string[] | undefined;
+      const rawIds = request.body?.ids;
+      if (Array.isArray(rawIds) && rawIds.length > 0) {
+        productIds = asIdArray(rawIds, "ids");
+      }
+      let result;
+      try {
+        result = await calcBrandAdCounts(prisma, info.tenantId, productIds);
+      } catch (e) {
+        if (
+          e instanceof Error &&
+          e.message === "DataForSEO credentials not configured"
+        ) {
+          throw new ValidationError(
+            "DataForSEO 凭证未配置：请先在管理控制台 → AI 设置里填写 DataForSEO API login / password"
+          );
+        }
+        throw e;
+      }
+      await writeCatalogAudit(prisma, {
+        tenantId: info.tenantId,
+        actorId: info.id,
+        action: "catalog.calc_ad_count",
+        detail: {
+          requested: productIds?.length ?? null,
+          groupsQueried: result.groupsQueried,
+          groupsSkippedCache: result.groupsSkippedCache,
+          productsUpdated: result.productsUpdated,
+          errors: result.errors.length,
+        },
+      });
+      return result;
     }
   );
 

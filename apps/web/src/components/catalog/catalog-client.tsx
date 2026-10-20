@@ -10,6 +10,7 @@ import {
   addWhitelistAction,
   backfillCatalogProductsAction,
   batchCreateOffersAction,
+  calcAdCountAction,
   calcScoreAction,
   confirmWhitelistAction,
   deleteBlacklistAction,
@@ -1713,6 +1714,7 @@ export function CatalogClient({
   }
 
   const [calcScoring, setCalcScoring] = useState(false);
+  const [calcAdCounting, setCalcAdCounting] = useState(false);
   const [offlining, setOfflining] = useState(false);
   const [scorePaused, setScorePaused] = useState(false);
   const [togglingPause, setTogglingPause] = useState(false);
@@ -1754,6 +1756,31 @@ export function CatalogClient({
       d.products.calcScoreDone.replace("{n}", String(res.data.updated))
     );
     setSelectedIds(new Set());
+    await reloadProducts(page);
+  }
+
+  async function onCalcAdCount() {
+    if (calcAdCounting) return;
+    setCalcAdCounting(true);
+    setMsg(null);
+    // 未选中 = 全量增量（后端按 14 天缓存自动跳过已查的品牌组）。
+    const res = await calcAdCountAction(Array.from(selectedIds));
+    setCalcAdCounting(false);
+    if (!res.ok) {
+      setMsg(res.error);
+      return;
+    }
+    let text = d.products.calcAdCountDone
+      .replace("{q}", String(res.data.groupsQueried))
+      .replace("{s}", String(res.data.groupsSkippedCache))
+      .replace("{u}", String(res.data.productsUpdated));
+    if (res.data.errors.length > 0) {
+      text += d.products.calcAdCountErrors.replace(
+        "{e}",
+        String(res.data.errors.length)
+      );
+    }
+    setMsg(text);
     await reloadProducts(page);
   }
 
@@ -2471,10 +2498,36 @@ export function CatalogClient({
                     </td>
                     <td className="px-3 py-2 text-ink/40">—</td>
                     <td className="whitespace-nowrap px-3 py-2">
-                      {(launchCounts[p.id] ?? 0) > 0 ? (
+                      {p.adCount == null ? (
+                        <span className="text-xs text-ink/40">
+                          {d.products.adsNotCalculated}
+                        </span>
+                      ) : (
+                        <span className="block">
+                          <span className="tabular-nums text-ink/80">
+                            ~{p.adCount} ads
+                          </span>
+                          {p.adCountCheckedAt &&
+                            Date.now() -
+                              new Date(p.adCountCheckedAt).getTime() >
+                              14 * 24 * 3600 * 1000 && (
+                              <span className="ml-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">
+                                {d.products.adsExpired}
+                              </span>
+                            )}
+                          {p.adCountSelf != null && p.adCountOthers != null && (
+                            <span className="block text-[11px] text-ink/50">
+                              {d.products.adsSelfOthers
+                                .replace("{s}", String(p.adCountSelf))
+                                .replace("{o}", String(p.adCountOthers))}
+                            </span>
+                          )}
+                        </span>
+                      )}
+                      {(launchCounts[p.id] ?? 0) > 0 && (
                         <button
                           type="button"
-                          className="text-xs tabular-nums text-signal hover:underline"
+                          className="block text-[11px] tabular-nums text-signal hover:underline"
                           onClick={() =>
                             setHistoryFor({ id: p.id, name: p.name })
                           }
@@ -2485,8 +2538,6 @@ export function CatalogClient({
                             String(launchCounts[p.id])
                           )}
                         </button>
-                      ) : (
-                        <span className="text-xs text-ink/40">—</span>
                       )}
                     </td>
                     <td className="whitespace-nowrap px-3 py-2 text-xs tabular-nums text-ink/60">
@@ -2549,6 +2600,21 @@ export function CatalogClient({
             {calcScoring
               ? d.products.calculating
               : d.products.calcScore.replace("{n}", String(selectedIds.size))}
+          </button>
+          <button
+            className={btnGhost}
+            onClick={onCalcAdCount}
+            disabled={calcAdCounting}
+            title={d.products.calcAdCountAll}
+          >
+            {calcAdCounting
+              ? d.products.calculatingAds
+              : selectedIds.size > 0
+                ? d.products.calcAdCount.replace(
+                    "{n}",
+                    String(selectedIds.size)
+                  )
+                : d.products.calcAdCountAll}
           </button>
           <button
             className={btnGhost}

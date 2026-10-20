@@ -1146,6 +1146,14 @@ model NetworkProduct {
   countryCode     String?  @map("country_code") @db.Text
   /// 商品状态：active（有效）/ inactive（手动下线）。默认 active。
   status          String   @default("active") @db.Text
+  /// 广告投放数量（按品牌+国家查 Google SERP 付费广告数；null = 未计算）。
+  adCount         Int?     @map("ad_count")
+  /// 自投广告数（广告落地页域名含品牌名；Amazon 落地页分不清 → null）。
+  adCountSelf     Int?     @map("ad_count_self")
+  /// 他投广告数（联盟客/同行在投）。
+  adCountOthers   Int?     @map("ad_count_others")
+  /// 广告投放数量上次查询时间（14 天缓存期内跳过重查）。
+  adCountCheckedAt DateTime? @map("ad_count_checked_at") @db.Timestamptz(3)
   promoUrl          String?  @map("promo_url")
   rawData           Json     @map("raw_data") @db.JsonB
   syncedAt          DateTime @map("synced_at") @db.Timestamptz(3)

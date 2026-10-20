@@ -83,6 +83,11 @@ export interface CatalogProduct {
   landingPageType: string | null;
   countryCode: string | null;
   status: string;
+  /** 广告投放数量（按品牌查 SERP；null = 未计算；Amazon 商品 self/others 为 null）。 */
+  adCount?: number | null;
+  adCountSelf?: number | null;
+  adCountOthers?: number | null;
+  adCountCheckedAt?: string | null;
   /** Optional for forward-compat: the backend list-flag batch is still landing. */
   blacklisted?: boolean;
   whitelisted?: boolean;
@@ -679,6 +684,25 @@ export async function offlineProductsAction(productIds: string[]) {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ ids: productIds }),
+    }
+  ), ["/catalog"]);
+}
+
+export interface CalcAdCountResult {
+  groupsQueried: number;
+  groupsSkippedCache: number;
+  productsUpdated: number;
+  errors: Array<{ brand: string; countryCode: string | null; message: string }>;
+}
+
+/** 广告投放数量计算：ids 为空数组 = 全量增量（后端按 14 天缓存跳过已查组）。 */
+export async function calcAdCountAction(productIds: string[]) {
+  return attempt(() => apiFetch<CalcAdCountResult>(
+    "/api/v1/catalog/products/calc-ad-count",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ids: productIds.slice(0, 500) }),
     }
   ), ["/catalog"]);
 }
