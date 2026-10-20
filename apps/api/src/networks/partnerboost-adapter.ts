@@ -189,6 +189,24 @@ function parseCommission(raw: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/** 解析价格字符串（如 "$1,299.99" / "105.99"）→ 数字；解析不出 → null。 */
+function parsePrice(raw: unknown): number | null {
+  if (raw == null) return null;
+  if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
+  const cleaned = String(raw).replace(/[^0-9.]/g, "");
+  if (!cleaned) return null;
+  const n = parseFloat(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** 解析评论数（"489" / 489）→ 整数；解析不出 → null。 */
+function parseReviewCount(raw: unknown): number | null {
+  if (raw == null) return null;
+  const n =
+    typeof raw === "number" ? raw : parseInt(String(raw).replace(/[^0-9]/g, ""), 10);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+}
+
 /**
  * 从落地页 URL 推导落地页类型。
  * - 含 /stores/ 或 amazon.com/s? → amazon_storefront（Amazon 店铺页）
@@ -297,6 +315,11 @@ export class PartnerBoostAdapter implements NetworkAdapter {
           url: landingUrl,
           countryCode: p.country_code?.trim() || null,
           landingPageType: deriveLandingPageType(landingUrl),
+          brand: p.brand_name?.trim() || null,
+          asin: p.asin?.trim() || null,
+          price: parsePrice(p.discount_price ?? p.original_price),
+          priceCurrency: p.currency?.trim() || null,
+          reviewCount: parseReviewCount(p.reviews),
           rawData: p as unknown as Record<string, unknown>,
         });
       }

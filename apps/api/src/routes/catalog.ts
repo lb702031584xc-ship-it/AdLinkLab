@@ -108,9 +108,27 @@ const numOrNull = (v: unknown): number | null => {
 };
 
 function serializeProduct(r: Record<string, unknown>, whitelisted: boolean) {
+  // MID：网络侧商家 ID（PB rawData.brand_id），内部 merchantId 是 UUID 不对外展示。
+  let raw: Record<string, unknown> = {};
+  const rawVal = r.rawData;
+  if (rawVal && typeof rawVal === "object") raw = rawVal as Record<string, unknown>;
+  else if (typeof rawVal === "string") {
+    try {
+      raw = JSON.parse(rawVal) as Record<string, unknown>;
+    } catch {
+      raw = {};
+    }
+  }
+  const mid =
+    raw.brand_id != null && String(raw.brand_id).trim() !== ""
+      ? String(raw.brand_id)
+      : (raw.brandId != null && String(raw.brandId).trim() !== ""
+        ? String(raw.brandId)
+        : null);
   return {
     id: r.id,
     externalId: r.externalId,
+    networkId: r.networkId ?? null,
     name: r.name,
     brand: r.brand,
     asin: r.asin,
@@ -123,12 +141,14 @@ function serializeProduct(r: Record<string, unknown>, whitelisted: boolean) {
     recommendationScore: numOrNull(r.recommendationScore),
     promoUrl: r.promoUrl,
     merchantId: r.merchantId ?? null,
+    mid,
     landingPageType: (r.landingPageType as string) ?? null,
     countryCode: (r.countryCode as string) ?? null,
     status: (r.status as string) ?? "active",
     syncStreak: r.syncStreak ?? 0,
     whitelisted,
     syncedAt: (r.syncedAt as Date)?.toISOString?.() ?? null,
+    createdAt: (r.createdAt as Date)?.toISOString?.() ?? null,
   };
 }
 
@@ -145,11 +165,56 @@ async function findNetwork(prisma: PrismaClient, tenantId: string, id: string) {
   };
 }
 
+/**
+ * 筛选预设 → Prisma where 条件（AutoAds 式自动过滤）。
+ * 规则：阈值 > 0 才生效；字段为 null（未知）不拦——与 $8 佣金门槛
+ * "未知不拦"原则一致，只过滤明确低于阈值的商品。
+ */
+export function buildPresetWhere(preset: {
+  minReviews?: number | null;
+  minCommissionAmount?: number | null;
+  minCommissionRate?: number | null;
+  minPrice?: number | null;
+  maxPrice?: number | null;
+  minScore?: number | null;
+}): Record<string, unknown> {
+  const and: Record<string, unknown>[] = [];
+  const num = (v: unknown): number | null =>
+    typeof v === "number" && Number.isFinite(v) ? v : null;
+  const minReviews = num(preset.minReviews);
+  if (minReviews != null && minReviews > 0)
+    and.push({ OR: [{ reviewCount: { gte: minReviews } }, { reviewCount: null }] });
+  const minAmount = num(preset.minCommissionAmount);
+  if (minAmount != null && minAmount > 0)
+    and.push({
+      OR: [{ commissionAmount: { gte: minAmount } }, { commissionAmount: null }],
+    });
+  const minRate = num(preset.minCommissionRate);
+  if (minRate != null && minRate > 0)
+    and.push({
+      OR: [{ commissionRate: { gte: minRate } }, { commissionRate: null }],
+    });
+  const minPrice = num(preset.minPrice);
+  if (minPrice != null && minPrice > 0)
+    and.push({ OR: [{ price: { gte: minPrice } }, { price: null }] });
+  const maxPrice = num(preset.maxPrice);
+  if (maxPrice != null && maxPrice > 0)
+    and.push({ OR: [{ price: { lte: maxPrice } }, { price: null }] });
+  const minScore = num(preset.minScore);
+  if (minScore != null && minScore > 0)
+    and.push({
+      OR: [{ recommendationScore: { gte: minScore } }, { recommendationScore: null }],
+    });
+  return and.length > 0 ? { AND: and } : {};
+}
+
 export async function registerCatalogRoutes(
   app: FastifyInstance,
   deps: CatalogRouteDeps
 ): Promise<void> {
   const { prisma } = deps;
+
+  /* ── 同步 ── */
 
   /* ── 同步 ── */
 
@@ -195,7 +260,56 @@ export async function registerCatalogRoutes(
       where.recommended = false;
     }
     const q = asTrimmed(query.q);
-    if (q) where.name = { contains: q, mode: "insensitive" };
+    if (q)
+      where.OR = [
+        { name: { contains: q, mode: "insensitive" } },
+        { brand: { contains: q, mode: "insensitive" } },
+        { asin: { contains: q, mode: "insensitive" } },
+      ];
+    // 筛选预设自动过滤：用户填过条件并保存后，列表自动隐藏不符合的商品。
+    // preset=0 可临时关闭。未保存过预设 → 不过滤。
+    const applyPreset = query.preset !== "0" && query.preset !== "false";
+    let presetApplied = false;
+    let presetExcluded = 0;
+    if (applyPreset) {
+      const presetRow = (await prisma.catalogScreeningPreset.findUnique({
+        where: { tenantId: info.tenantId },
+      })) as {
+        minReviews: number | null;
+        minCommissionAmount: unknown;
+        minCommissionRate: unknown;
+        minPrice: unknown;
+        maxPrice: unknown;
+        minScore: number | null;
+      } | null;
+      if (presetRow) {
+        const pw = buildPresetWhere({
+          minReviews: presetRow.minReviews,
+          minCommissionAmount:
+            presetRow.minCommissionAmount == null
+              ? null
+              : Number(presetRow.minCommissionAmount),
+          minCommissionRate:
+            presetRow.minCommissionRate == null
+              ? null
+              : Number(presetRow.minCommissionRate),
+          minPrice:
+            presetRow.minPrice == null ? null : Number(presetRow.minPrice),
+          maxPrice:
+            presetRow.maxPrice == null ? null : Number(presetRow.maxPrice),
+          minScore: presetRow.minScore,
+        });
+        if (Object.keys(pw).length > 0) {
+          presetApplied = true;
+          const baseWhere = { ...where };
+          Object.assign(where, pw);
+          presetExcluded =
+            ((await prisma.networkProduct.count({ where: baseWhere })) as number) -
+            ((await prisma.networkProduct.count({ where })) as number);
+          if (presetExcluded < 0) presetExcluded = 0;
+        }
+      }
+    }
     const [total, rows] = await Promise.all([
       prisma.networkProduct.count({ where }),
       prisma.networkProduct.findMany({
@@ -271,21 +385,148 @@ export async function registerCatalogRoutes(
       })) as Array<{ id: string; name: string }>;
       for (const m of merchants) merchantNameById.set(m.id, m.name);
     }
+    // 联盟平台/账号列：一次查出本页涉及的网络（kind + name）。
+    const networkIds = [
+      ...new Set(
+        (rows as Array<{ networkId: string | null }>)
+          .map((r) => r.networkId)
+          .filter((v): v is string => Boolean(v))
+      ),
+    ];
+    const networkById = new Map<string, { kind: string; name: string }>();
+    if (networkIds.length > 0) {
+      const nets = (await prisma.affiliateNetwork.findMany({
+        where: { tenantId: info.tenantId, id: { in: networkIds } },
+        select: { id: true, kind: true, name: true },
+      })) as Array<{ id: string; kind: string; name: string }>;
+      for (const n of nets) networkById.set(n.id, { kind: n.kind, name: n.name });
+    }
     const products = (rows as Record<string, unknown>[]).map((r) => {
       const mid = (r.merchantId as string) ?? "";
       const pinned = whiteSet.has(r.id as string) && !observed.has(mid);
       const blacklisted =
         blackProductIds.has(r.id as string) || blackMerchantIds.has(mid);
+      const net = networkById.get((r.networkId as string) ?? "");
       return {
         ...serializeProduct(r, whiteSet.has(r.id as string)),
         pinned,
         blacklisted,
         merchantName: mid ? (merchantNameById.get(mid) ?? null) : null,
+        networkKind: net?.kind ?? null,
+        networkName: net?.name ?? null,
       };
     });
     products.sort((a, b) => Number(b.pinned) - Number(a.pinned));
-    return { total, page, pageSize, products, items: products };
+    return {
+      total,
+      page,
+      pageSize,
+      products,
+      items: products,
+      presetApplied,
+      presetExcluded,
+    };
   });
+
+  /* ── 回填：从 rawData 补 brand/asin/price/reviewCount（老数据同步时适配器没映射） ── */
+
+  app.post<{ Body: { networkId?: unknown } }>(
+    "/api/v1/catalog/products/backfill",
+    async (request) => {
+      const info = await requireSession(deps, request);
+      const where: Record<string, unknown> = { tenantId: info.tenantId };
+      if (request.body?.networkId)
+        where.networkId = assertId(request.body.networkId, "networkId");
+      const parseNum = (v: unknown): number | null => {
+        if (v == null) return null;
+        if (typeof v === "number") return Number.isFinite(v) ? v : null;
+        const n = parseFloat(String(v).replace(/[^0-9.]/g, ""));
+        return Number.isFinite(n) ? n : null;
+      };
+      const parseInt0 = (v: unknown): number | null => {
+        if (v == null) return null;
+        const n =
+          typeof v === "number"
+            ? v
+            : parseInt(String(v).replace(/[^0-9]/g, ""), 10);
+        return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+      };
+      let scanned = 0;
+      let backfilled = 0;
+      const BATCH = 500;
+      for (let skip = 0; ; skip += BATCH) {
+        const rows = (await prisma.networkProduct.findMany({
+          where,
+          select: {
+            id: true,
+            brand: true,
+            asin: true,
+            price: true,
+            reviewCount: true,
+            currency: true,
+            rawData: true,
+          },
+          skip,
+          take: BATCH,
+        })) as Array<{
+          id: string;
+          brand: string | null;
+          asin: string | null;
+          price: unknown;
+          reviewCount: number | null;
+          currency: string | null;
+          rawData: unknown;
+        }>;
+        if (rows.length === 0) break;
+        scanned += rows.length;
+        for (const r of rows) {
+          let raw: Record<string, unknown> = {};
+          if (r.rawData && typeof r.rawData === "object")
+            raw = r.rawData as Record<string, unknown>;
+          else if (typeof r.rawData === "string") {
+            try {
+              raw = JSON.parse(r.rawData) as Record<string, unknown>;
+            } catch {
+              continue;
+            }
+          } else continue;
+          const data: Record<string, unknown> = {};
+          if (r.brand == null) {
+            const b =
+              (raw.brand_name as string) ?? (raw.brand as string) ?? null;
+            if (typeof b === "string" && b.trim()) data.brand = b.trim();
+          }
+          if (r.asin == null) {
+            const a = (raw.asin as string) ?? (raw.sku as string) ?? null;
+            if (typeof a === "string" && a.trim()) data.asin = a.trim();
+          }
+          if (r.price == null) {
+            const pr = parseNum(raw.discount_price ?? raw.original_price ?? raw.price);
+            if (pr != null) data.price = pr;
+          }
+          if (r.reviewCount == null) {
+            const rc = parseInt0(raw.reviews ?? raw.review_count ?? raw.reviewCount);
+            if (rc != null) data.reviewCount = rc;
+          }
+          if (r.currency == null || r.currency === "%") {
+            const c = raw.currency;
+            if (typeof c === "string" && c.trim() && c.trim() !== "%")
+              data.currency = c.trim().toUpperCase();
+            else if (r.currency === "%") data.currency = "USD";
+          }
+          if (Object.keys(data).length > 0) {
+            await prisma.networkProduct.update({
+              where: { id: r.id },
+              data: data as never,
+            });
+            backfilled += 1;
+          }
+        }
+        if (rows.length < BATCH) break;
+      }
+      return { scanned, backfilled };
+    }
+  );
 
   /* ── 批量操作：推荐指数计算 / 批量下线 / 全局暂停开关 ── */
 

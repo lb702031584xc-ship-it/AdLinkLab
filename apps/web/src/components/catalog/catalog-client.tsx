@@ -8,6 +8,7 @@ import { zh as catalogZh, en as catalogEn } from "@/i18n/dict/catalog";
 import {
   addBlacklistAction,
   addWhitelistAction,
+  backfillCatalogProductsAction,
   batchCreateOffersAction,
   calcScoreAction,
   confirmWhitelistAction,
@@ -69,6 +70,35 @@ const KIND_LABELS: Record<string, string> = {
 
 function kindLabel(kind: string): string {
   return KIND_LABELS[kind.toLowerCase()] ?? kind;
+}
+
+/** 联盟平台缩写（AutoAds 式：PB / YP / AW …），未知取前两位大写。 */
+function kindAbbr(kind: string | null | undefined): string {
+  const k = (kind ?? "").toLowerCase();
+  const map: Record<string, string> = {
+    partnerboost: "PB",
+    yeahpromos: "YP",
+    awin: "AW",
+    cj: "CJ",
+    shareasale: "SS",
+    rakuten: "RK",
+    flexoffers: "FO",
+    impact: "IM",
+    amazon: "AMZ",
+  };
+  if (map[k]) return map[k];
+  const clean = k.replace(/[^a-z]/g, "");
+  return clean ? clean.slice(0, 2).toUpperCase() : "—";
+}
+
+function formatDate(v: string | null | undefined): string {
+  if (!v) return "—";
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return "—";
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}/${m}/${day}`;
 }
 
 function pullStatusColor(status: string): string {
@@ -1459,10 +1489,13 @@ export function CatalogClient({
   const [q, setQ] = useState("");
   const [qDraft, setQDraft] = useState("");
   const [onlyRecommended, setOnlyRecommended] = useState(false);
+  const [applyPreset, setApplyPreset] = useState(true);
+  const [presetExcluded, setPresetExcluded] = useState(0);
   const [loadingProducts, setLoadingProducts] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [batching, setBatching] = useState(false);
   const [batchResult, setBatchResult] = useState<BatchCreateResult | null>(null);
+  const [backfilling, setBackfilling] = useState(false);
 
   async function reloadProducts(targetPage: number, qOverride?: string) {
     if (!selectedId) {
@@ -1478,6 +1511,7 @@ export function CatalogClient({
       q: query || undefined,
       page: targetPage,
       pageSize: PAGE_SIZE,
+      preset: applyPreset ? undefined : false,
     });
     setLoadingProducts(false);
     if (!res.ok) {
@@ -1487,8 +1521,56 @@ export function CatalogClient({
     setProducts(res.data.items);
     setTotal(res.data.total);
     setPage(res.data.page);
+    setPresetExcluded(res.data.presetExcluded ?? 0);
     setSelectedIds(new Set());
     setBatchResult(null);
+  }
+
+  async function onBackfill() {
+    if (backfilling || !selectedId) return;
+    setBackfilling(true);
+    setMsg(null);
+    const res = await backfillCatalogProductsAction(selectedId);
+    setBackfilling(false);
+    if (!res.ok) {
+      setMsg(res.error);
+      return;
+    }
+    setMsg(
+      d.products.backfillDone
+        .replace("{a}", String(res.data.scanned))
+        .replace("{b}", String(res.data.backfilled))
+    );
+    await reloadProducts(page);
+  }
+
+  async function onCreateOfferOne(id: string) {
+    if (batching) return;
+    setBatching(true);
+    setMsg(null);
+    const res = await batchCreateOffersAction([id]);
+    setBatching(false);
+    if (!res.ok) {
+      setMsg(res.error);
+      return;
+    }
+    setMsg(d.products.batchResultCreated.replace("{n}", String(res.data.created.length)));
+    await reloadProducts(page);
+  }
+
+  async function onOfflineOne(p: CatalogProduct) {
+    if (offlining) return;
+    if (!window.confirm(d.products.offlineConfirm.replace("{n}", "1"))) return;
+    setOfflining(true);
+    setMsg(null);
+    const res = await offlineProductsAction([p.id]);
+    setOfflining(false);
+    if (!res.ok) {
+      setMsg(res.error);
+      return;
+    }
+    setMsg(d.products.offlineDone.replace("{n}", String(res.data.updated)));
+    await reloadProducts(page);
   }
 
   useEffect(() => {
@@ -1496,7 +1578,7 @@ export function CatalogClient({
     setQ("");
     setQDraft("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, onlyRecommended]);
+  }, [selectedId, onlyRecommended, applyPreset]);
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const selectable = selectableProducts(products);
@@ -2038,6 +2120,30 @@ export function CatalogClient({
             />
             {d.products.onlyRecommended}
           </label>
+          <label
+            className="flex items-center gap-2 text-sm text-ink"
+            title={d.preset.title}
+          >
+            <input
+              type="checkbox"
+              checked={applyPreset}
+              onChange={(e) => setApplyPreset(e.target.checked)}
+            />
+            {d.products.autoPresetFilter}
+          </label>
+          {applyPreset && presetExcluded > 0 && (
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
+              {d.products.presetFilteredNote.replace("{n}", String(presetExcluded))}
+            </span>
+          )}
+          <button
+            className={btnGhost}
+            onClick={onBackfill}
+            disabled={backfilling || loadingProducts}
+            title={d.products.backfill}
+          >
+            {backfilling ? d.products.backfilling : d.products.backfill}
+          </button>
           <div className="flex gap-2">
             <input
               className={inputCls}
@@ -2084,7 +2190,7 @@ export function CatalogClient({
         </div>
 
         <div className="mt-4 overflow-x-auto">
-          <table className="w-full min-w-[900px] text-sm">
+          <table className="w-full min-w-[1800px] text-sm">
             <thead>
               <tr className="border-b border-ink/10 text-left text-xs text-ink/60">
                 <th className="py-2 pr-2">
@@ -2095,23 +2201,34 @@ export function CatalogClient({
                     onChange={toggleAll}
                   />
                 </th>
+                <th className="py-2 pr-2">{d.products.colSeq}</th>
                 <th className="py-2 pr-2">{d.products.colName}</th>
+                <th className="py-2 pr-2">{d.products.colExtId}</th>
+                <th className="py-2 pr-2">{d.products.colNetwork}</th>
+                <th className="py-2 pr-2">{d.products.colAccount}</th>
+                <th className="py-2 pr-2">{d.products.colStatus}</th>
+                <th className="py-2 pr-2">{d.products.colMid}</th>
+                <th className="py-2 pr-2">{d.products.colMerchant}</th>
                 <th className="py-2 pr-2">{d.products.colBrand}</th>
                 <th className="py-2 pr-2">{d.products.colAsin}</th>
-                <th className="py-2 pr-2">{d.products.colPrice}</th>
-                <th className="py-2 pr-2">{d.products.colCommission}</th>
+                <th className="py-2 pr-2">{d.products.colLandingType}</th>
                 <th className="py-2 pr-2">{d.products.colReviews}</th>
                 <th className="py-2 pr-2">{d.products.colScore}</th>
-                <th className="py-2 pr-2">{d.products.colLandingType}</th>
+                <th className="py-2 pr-2">{d.products.colAds}</th>
                 <th className="py-2 pr-2">{d.products.colCountry}</th>
-                <th className="py-2 pr-2">{d.products.colStatus}</th>
-                <th className="py-2 pr-2">{d.products.colSynced}</th>
+                <th className="py-2 pr-2">{d.products.colPrice}</th>
+                <th className="py-2 pr-2">{d.products.colCommissionRate}</th>
+                <th className="py-2 pr-2">{d.products.colCommissionAmount}</th>
+                <th className="py-2 pr-2">{d.products.colPromo}</th>
+                <th className="py-2 pr-2">{d.products.colOfferCount}</th>
+                <th className="py-2 pr-2">{d.products.colCreated}</th>
+                <th className="py-2 pr-2">{d.products.colActions}</th>
               </tr>
             </thead>
             <tbody>
-              {products.map((p) => {
+              {products.map((p, i) => {
                 const blacklisted = !!p.blacklisted;
-                const whitelisted = !!p.whitelisted;
+                const seq = (page - 1) * PAGE_SIZE + i + 1;
                 return (
                   <tr
                     key={p.id}
@@ -2134,74 +2251,117 @@ export function CatalogClient({
                         }
                       />
                     </td>
+                    <td className="py-2 pr-2 text-xs text-ink/50">{seq}</td>
                     <td className="py-2 pr-2">
                       <span className="font-medium text-ink">{p.name}</span>
-                      {p.merchantName && (
-                        <span className="block text-xs text-ink/50">
-                          {d.products.merchantName.replace(
-                            "{n}",
-                            p.merchantName
-                          )}
+                      <span className="ml-2 inline-flex gap-1 align-middle">
+                        {p.recommended && (
+                          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
+                            {d.products.recommendedBadge}
+                          </span>
+                        )}
+                        {blacklisted && (
+                          <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800">
+                            {d.products.blacklistedBadge}
+                          </span>
+                        )}
+                        {p.whitelisted && (
+                          <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-800">
+                            {d.products.whitelistedBadge}
+                          </span>
+                        )}
+                      </span>
+                    </td>
+                    <td className="py-2 pr-2 font-mono text-xs text-ink/70">
+                      {p.externalId ?? "—"}
+                    </td>
+                    <td className="py-2 pr-2">
+                      <span className="rounded bg-ink/10 px-1.5 py-0.5 font-mono text-xs font-medium text-ink/70">
+                        {kindAbbr(p.networkKind)}
+                      </span>
+                    </td>
+                    <td className="py-2 pr-2 text-ink/70">
+                      {p.networkName ?? kindLabel(p.networkKind ?? "")}
+                    </td>
+                    <td className="py-2 pr-2">
+                      {p.status === "inactive" ? (
+                        <span className="rounded-full bg-ink/10 px-2 py-0.5 text-xs font-medium text-ink/60">
+                          {d.products.statusInactive}
                         </span>
-                      )}
-                      {p.recommended && (
-                        <span className="ml-2 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
-                          {d.products.recommendedBadge}
-                        </span>
-                      )}
-                      {blacklisted && (
-                        <span className="ml-2 rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800">
-                          {d.products.blacklistedBadge}
-                        </span>
-                      )}
-                      {whitelisted && (
-                        <span className="ml-2 rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-800">
-                          {d.products.whitelistedBadge}
+                      ) : (
+                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
+                          {d.products.statusActive}
                         </span>
                       )}
                     </td>
-                  <td className="py-2 pr-2 text-ink/70">{p.brand ?? "—"}</td>
-                  <td className="py-2 pr-2 font-mono text-xs text-ink/70">
-                    {p.asin ?? "—"}
-                  </td>
-                  <td className="py-2 pr-2 text-ink/80">
-                    {fmtMoney(p.price, p.currency)}
-                  </td>
-                  <td className="py-2 pr-2 text-ink/80">
-                    {fmtMoney(p.commissionAmount, p.currency)}
-                    {p.commissionRate != null && (
-                      <span className="text-xs text-ink/50">
-                        {" "}
-                        ({fmtRate(p.commissionRate)})
+                    <td className="py-2 pr-2 font-mono text-xs text-ink/70">
+                      {p.mid ?? "—"}
+                    </td>
+                    <td className="py-2 pr-2 text-ink/70">
+                      {p.merchantName ?? "—"}
+                    </td>
+                    <td className="py-2 pr-2 text-ink/70">{p.brand ?? "—"}</td>
+                    <td className="py-2 pr-2 font-mono text-xs text-ink/70">
+                      {p.asin ?? "—"}
+                    </td>
+                    <td className="py-2 pr-2 text-ink/70">
+                      {landingPageTypeLabel(p.landingPageType)}
+                    </td>
+                    <td className="py-2 pr-2 text-ink/70">
+                      {fmtNum(p.reviewCount)}
+                    </td>
+                    <td className="py-2 pr-2 text-ink/70">
+                      {fmtNum(p.recommendationScore)}
+                    </td>
+                    <td className="py-2 pr-2 text-ink/40">—</td>
+                    <td className="py-2 pr-2 text-ink/70">
+                      {p.countryCode ?? "—"}
+                    </td>
+                    <td className="py-2 pr-2 text-ink/80">
+                      {fmtMoney(p.price, p.currency)}
+                    </td>
+                    <td className="py-2 pr-2 text-ink/80">
+                      {fmtRate(p.commissionRate)}
+                    </td>
+                    <td className="py-2 pr-2 text-ink/80">
+                      {fmtMoney(p.commissionAmount, p.currency)}
+                    </td>
+                    <td className="py-2 pr-2">
+                      {p.promoUrl ? (
+                        <a
+                          href={p.promoUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-signal hover:underline"
+                        >
+                          {d.products.viewLink}
+                        </a>
+                      ) : (
+                        <span className="text-ink/40">—</span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-2 text-ink/40">—</td>
+                    <td className="py-2 pr-2 text-xs text-ink/60">
+                      {formatDate(p.createdAt)}
+                    </td>
+                    <td className="py-2 pr-2">
+                      <span className="flex gap-2">
+                        <button
+                          className="text-xs text-signal hover:underline disabled:opacity-40"
+                          onClick={() => void onCreateOfferOne(p.id)}
+                          disabled={batching || blacklisted}
+                        >
+                          {d.products.createOfferOne}
+                        </button>
+                        <button
+                          className="text-xs text-ink/60 hover:underline disabled:opacity-40"
+                          onClick={() => void onOfflineOne(p)}
+                          disabled={offlining || p.status === "inactive"}
+                        >
+                          {d.products.offlineOne}
+                        </button>
                       </span>
-                    )}
-                  </td>
-                  <td className="py-2 pr-2 text-ink/70">
-                    {fmtNum(p.reviewCount)}
-                  </td>
-                  <td className="py-2 pr-2 text-ink/70">
-                    {fmtNum(p.recommendationScore)}
-                  </td>
-                  <td className="py-2 pr-2 text-ink/70">
-                    {landingPageTypeLabel(p.landingPageType)}
-                  </td>
-                  <td className="py-2 pr-2 text-ink/70">
-                    {p.countryCode ?? "—"}
-                  </td>
-                  <td className="py-2 pr-2">
-                    {p.status === "inactive" ? (
-                      <span className="rounded-full bg-ink/10 px-2 py-0.5 text-xs font-medium text-ink/60">
-                        {d.products.statusInactive}
-                      </span>
-                    ) : (
-                      <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
-                        {d.products.statusActive}
-                      </span>
-                    )}
-                  </td>
-                  <td className="py-2 pr-2 text-xs text-ink/60">
-                    {formatDateTime(p.syncedAt)}
-                  </td>
+                    </td>
                   </tr>
                 );
               })}

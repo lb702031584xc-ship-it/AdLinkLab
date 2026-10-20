@@ -24,6 +24,16 @@ export interface NetworkOffer {
   landingPageType?: string | null;
   /** 允许投放国家（如 US；多国家逗号分隔），null = 未知。 */
   countryCode?: string | null;
+  /** 商品品牌（如 PartnerBoost brand_name），null = 未知。 */
+  brand?: string | null;
+  /** ASIN / SKU，null = 未知。 */
+  asin?: string | null;
+  /** 商品价格（数字），null = 未知。 */
+  price?: number | null;
+  /** 商品价格的货币（如 USD）；null = 未知。注意 currency 字段仍表示佣金口径。 */
+  priceCurrency?: string | null;
+  /** 商品评论数，null = 未知。 */
+  reviewCount?: number | null;
   /** Full raw API object for debugging / future field extraction. */
   rawData: Record<string, unknown>;
 }

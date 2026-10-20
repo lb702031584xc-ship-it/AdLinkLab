@@ -62,7 +62,9 @@ export interface CatalogProduct {
   id: string;
   networkId: string;
   networkKind: string;
+  networkName?: string | null;
   externalId: string | null;
+  mid?: string | null;
   name: string;
   brand: string | null;
   asin: string | null;
@@ -75,12 +77,14 @@ export interface CatalogProduct {
   recommendationScore: number | null;
   promoUrl: string | null;
   syncedAt: string | null;
+  createdAt?: string | null;
   landingPageType: string | null;
   countryCode: string | null;
   status: string;
   /** Optional for forward-compat: the backend list-flag batch is still landing. */
   blacklisted?: boolean;
   whitelisted?: boolean;
+  pinned?: boolean;
   /** 商家维度：后端新契约正在落地，可无，防御性读取。 */
   merchantName?: string | null;
 }
@@ -593,12 +597,15 @@ export async function listCatalogProductsAction(params: {
   q?: string;
   page?: number;
   pageSize?: number;
+  /** false → preset=0，关闭预设自动过滤；默认开启。 */
+  preset?: boolean;
 }) {
   const qs = new URLSearchParams();
   if (params.networkId) qs.set("networkId", params.networkId);
   if (typeof params.recommended === "boolean")
     qs.set("recommended", String(params.recommended));
   if (params.q) qs.set("q", params.q);
+  if (params.preset === false) qs.set("preset", "0");
   qs.set("page", String(params.page ?? 1));
   qs.set("pageSize", String(params.pageSize ?? 20));
   return attempt(
@@ -608,8 +615,26 @@ export async function listCatalogProductsAction(params: {
         total: number;
         page: number;
         pageSize: number;
+        presetApplied?: boolean;
+        presetExcluded?: number;
       }>(`/api/v1/catalog/products?${qs.toString()}`),
     []
+  );
+}
+
+/** 从 rawData 回填 brand/asin/price/reviewCount（只补空，不覆盖）。 */
+export async function backfillCatalogProductsAction(networkId?: string) {
+  return attempt(
+    () =>
+      apiFetch<{ scanned: number; backfilled: number }>(
+        "/api/v1/catalog/products/backfill",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(networkId ? { networkId } : {}),
+        }
+      ),
+    ["/catalog"]
   );
 }
 

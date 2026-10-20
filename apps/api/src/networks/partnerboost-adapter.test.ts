@@ -73,6 +73,54 @@ describe("PartnerBoostAdapter.pullOffers", () => {
     );
   });
 
+  it("maps brand/asin/price/reviewCount from datafeed fields", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse(
+        listResponse([
+          product({
+            product_id: "62837599",
+            brand_name: "Midea WMT",
+            discount_price: "$105.99",
+            original_price: "$129.99",
+            reviews: "96",
+            currency: "USD",
+          }),
+        ])
+      )
+    ) as unknown as typeof fetch;
+    const adapter = new PartnerBoostAdapter();
+    const offers = await adapter.pullOffers(ctxWith(fetchImpl));
+
+    expect(offers).toHaveLength(1);
+    expect(offers[0].brand).toBe("Midea WMT");
+    expect(offers[0].asin).toBe("B0TEST1234");
+    expect(offers[0].price).toBe(105.99);
+    expect(offers[0].priceCurrency).toBe("USD");
+    expect(offers[0].reviewCount).toBe(96);
+  });
+
+  it("falls back to original_price when discount_price missing; null when unparseable", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse(
+        listResponse([
+          product({ product_id: "p1", original_price: "23.99", reviews: 489 }),
+          product({
+            product_id: "p2",
+            original_price: "n/a",
+            reviews: "unknown",
+          }),
+        ])
+      )
+    ) as unknown as typeof fetch;
+    const adapter = new PartnerBoostAdapter();
+    const offers = await adapter.pullOffers(ctxWith(fetchImpl));
+
+    expect(offers[0].price).toBe(23.99);
+    expect(offers[0].reviewCount).toBe(489);
+    expect(offers[1].price).toBeNull();
+    expect(offers[1].reviewCount).toBeNull();
+  });
+
   it("paginates while has_more is true", async () => {
     const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
       const page = JSON.parse((init?.body as string) ?? "{}").page ?? 1;

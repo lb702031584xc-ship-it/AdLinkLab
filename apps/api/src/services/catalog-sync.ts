@@ -222,16 +222,17 @@ function offerToSessionProduct(o: NetworkOffer): SessionProduct {
     externalId: o.externalId,
     name: o.name,
     payout: o.payout ?? null,
-    currency: o.currency ?? null,
+    // 商品价格的货币优先（PB 的 currency="%" 是佣金口径，不能写进商品货币）。
+    currency: o.priceCurrency ?? (isPct ? null : (o.currency ?? null)),
     termsText: o.termsText ?? null,
     url: o.url ?? null,
     rawData: o.rawData,
-    brand: null,
-    asin: null,
-    price: null,
+    brand: o.brand ?? null,
+    asin: o.asin ?? null,
+    price: o.price ?? null,
     commissionAmount: !isPct ? (o.payout ?? null) : null,
     commissionRate: isPct ? (o.payout ?? null) : null,
-    reviewCount: null,
+    reviewCount: o.reviewCount ?? null,
     promoUrl: o.url ?? null,
   };
 }
