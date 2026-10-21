@@ -1947,11 +1947,23 @@ export async function registerCatalogRoutes(
     throw new ValidationError("scope 非法（all/alive）");
   }
 
+  // 广告数计算深度（每组总查询数，含裸词）：仅 4 / 8 / 12 三档。
+  // 缺省不传 → 服务层默认 12（历史行为）；非法值 400（与 scope 同口径，
+  // 不静默回落——付费深度必须让用户明确知道自己签的是哪一档）。
+  function parseCalcDepth(raw: unknown): number | undefined {
+    if (raw === undefined || raw === null) return undefined;
+    if (raw === 4 || raw === 8 || raw === 12) return raw;
+    throw new ValidationError("depth 非法（每组查询深度仅支持 4/8/12）");
+  }
+
   // 广告投放数量计算（按品牌+国家查 DataForSEO SERP，14 天缓存增量）。
   // ids 缺省/空 = 该 tenant 全部商品增量；凭证未配置 → 明确报错不静默。
   // force=true 忽略缓存强制重算（前端须先走 preview 确认）；scope=alive
   // 跳过整组判死的品牌组。两者默认关，口径与历史行为一致。
-  app.post<{ Body: { ids?: unknown; force?: unknown; scope?: unknown } }>(
+  // depth=每组查询深度 4/8/12（缺省 12），由用户在确认框按费用预估选定。
+  app.post<{
+    Body: { ids?: unknown; force?: unknown; scope?: unknown; depth?: unknown };
+  }>(
     "/api/v1/catalog/products/calc-ad-count",
     async (request) => {
       const info = await requireSession(deps, request);
@@ -1962,6 +1974,7 @@ export async function registerCatalogRoutes(
       }
       const force = request.body?.force === true;
       const scope = parseCalcScope(request.body?.scope);
+      const depth = parseCalcDepth(request.body?.depth);
       // 付费数据网关：广告数计算是 DataForSEO 计费调用，统一走网关
       // （站长直通 / 租户自备 key / 平台 key + paid-data 授权）。
       const access = await requirePaidDataAccess(prisma, {
@@ -1976,6 +1989,7 @@ export async function registerCatalogRoutes(
           credentials: access.credentials ?? undefined,
           force,
           aliveOnly: scope === "alive",
+          depth,
         });
       } catch (e) {
         if (
@@ -1994,8 +2008,8 @@ export async function registerCatalogRoutes(
           actorId: info.id,
           feature: "catalog-ad-count",
           keySource: access.keySource,
-          // 深度 12 后一组最多 12 次 SERP 查询：按实际查询次数记账，
-          // 不能再按组数记（会把真实消耗大幅低估）。
+          // 一组最多 depth 次 SERP 查询（深度可选 4/8/12）：按实际
+          // 查询次数记账，不能再按组数记（会把真实消耗大幅低估）。
           calls: result.serpQueries ?? result.groupsQueried,
           grantId: access.grantId,
         });
@@ -2008,6 +2022,7 @@ export async function registerCatalogRoutes(
           requested: productIds?.length ?? null,
           force,
           scope,
+          depth: depth ?? 12,
           groupsQueried: result.groupsQueried,
           serpQueries: result.serpQueries ?? result.groupsQueried,
           groupsSkippedCache: result.groupsSkippedCache,
@@ -2029,11 +2044,15 @@ export async function registerCatalogRoutes(
   // 广告数计算的只读预估（提交付费计算前的确认数字）：只读本地库，
   // 不调 DataForSEO、不记用量；附带网关判定（只判不记）供确认框展示
   // 计费路径与可用性。allowed=false 时前端禁用确认按钮。
-  app.post<{ Body: { scope?: unknown } }>(
+  // depth/force 与 calc 同口径传入：预估的查询数/费用必须对应用户在
+  // 确认框里实际选定的模式与深度（切换深度 → 重新预估刷新数字）。
+  app.post<{ Body: { scope?: unknown; depth?: unknown; force?: unknown } }>(
     "/api/v1/catalog/products/calc-ad-count/preview",
     async (request) => {
       const info = await requireSession(deps, request);
       const scope = parseCalcScope(request.body?.scope);
+      const depth = parseCalcDepth(request.body?.depth);
+      const force = request.body?.force === true;
       const resolution = await resolvePaidDataAccess(prisma, {
         tenantId: info.tenantId,
         userId: info.id,
@@ -2042,6 +2061,8 @@ export async function registerCatalogRoutes(
       });
       const preview = await previewBrandAdCounts(prisma, info.tenantId, {
         aliveOnly: scope === "alive",
+        force,
+        depth,
       });
       return {
         allowed: resolution.allowed,

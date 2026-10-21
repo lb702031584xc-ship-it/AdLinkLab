@@ -72,6 +72,11 @@ function setup(role: "owner" | "member") {
     groupsStale: 6,
     deadGroupsSkipped: 2,
     maxQueriesPerGroup: 12,
+    depth: 12,
+    expectedQueries: 40,
+    worstCaseQueries: 72,
+    unitPriceUsd: 0.002,
+    estimatedCostUsd: 0.08,
   });
   return { ctx, app: buildApp(ctx, role).app };
 }
@@ -133,6 +138,49 @@ describe("POST /catalog/products/calc-ad-count", () => {
     expect(res.statusCode).toBe(400);
     expect(mocks.calc).not.toHaveBeenCalled();
   });
+
+  it("depth 透传给 calc，审计带 depth", async () => {
+    const { ctx, app } = setup("owner");
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/catalog/products/calc-ad-count",
+      payload: { depth: 8 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(mocks.calc.mock.calls[0][3].depth).toBe(8);
+    const audit = ctx.adminGrantAudit.find(
+      (a) => a.action === "catalog.calc_ad_count"
+    );
+    expect(audit?.detail.depth).toBe(8);
+  });
+
+  it("缺省 depth：deps.depth 为 undefined（服务层默认 12），审计记 12", async () => {
+    const { ctx, app } = setup("owner");
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/catalog/products/calc-ad-count",
+      payload: {},
+    });
+    expect(res.statusCode).toBe(200);
+    expect(mocks.calc.mock.calls[0][3].depth).toBeUndefined();
+    const audit = ctx.adminGrantAudit.find(
+      (a) => a.action === "catalog.calc_ad_count"
+    );
+    expect(audit?.detail.depth).toBe(12);
+  });
+
+  it("非法 depth（5 / 字符串）→ 400，calc 不被调用", async () => {
+    const { app } = setup("owner");
+    for (const depth of [5, "12", 0]) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/catalog/products/calc-ad-count",
+        payload: { depth },
+      });
+      expect(res.statusCode).toBe(400);
+    }
+    expect(mocks.calc).not.toHaveBeenCalled();
+  });
 });
 
 describe("POST /catalog/products/calc-ad-count/preview", () => {
@@ -153,12 +201,44 @@ describe("POST /catalog/products/calc-ad-count/preview", () => {
       deadGroupsSkipped: 2,
       // 每组最坏查询数口径（深度 12）随预估一并带出，供确认框估算。
       maxQueriesPerGroup: 12,
+      // 深度回显 + 费用预估（预计查询数/最坏查询数/单价/预计费用）。
+      depth: 12,
+      expectedQueries: 40,
+      worstCaseQueries: 72,
+      unitPriceUsd: 0.002,
+      estimatedCostUsd: 0.08,
     });
     expect(mocks.preview).toHaveBeenCalledWith(
       expect.anything(),
       TEST_TENANT,
-      { aliveOnly: true }
+      { aliveOnly: true, force: false, depth: undefined }
     );
+  });
+
+  it("depth/force 透传给 preview（切换深度重新预估的入参面）", async () => {
+    const { app } = setup("owner");
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/catalog/products/calc-ad-count/preview",
+      payload: { scope: "all", depth: 4, force: true },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(mocks.preview).toHaveBeenCalledWith(
+      expect.anything(),
+      TEST_TENANT,
+      { aliveOnly: false, force: true, depth: 4 }
+    );
+  });
+
+  it("非法 depth → 400，preview 不被调用", async () => {
+    const { app } = setup("owner");
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/catalog/products/calc-ad-count/preview",
+      payload: { depth: 6 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(mocks.preview).not.toHaveBeenCalled();
   });
 
   it("member 无授权：allowed=false、keySource=null，预估数字仍返回", async () => {

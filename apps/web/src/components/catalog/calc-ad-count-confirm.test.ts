@@ -6,6 +6,8 @@ import { describe, expect, it } from "vitest";
 import { en, zh } from "../../i18n/dict/catalog";
 import {
   calcAdCountConfirmFacts,
+  formatUsdAmount,
+  resolveStoredCalcDepth,
   type CalcAdCountPreviewData,
 } from "./calc-ad-count-confirm";
 
@@ -63,6 +65,74 @@ describe("calcAdCountConfirmFacts", () => {
     expect(f.allowed).toBe(false);
     expect(f.keySource).toBeNull();
   });
+
+  it("深度：缺省 12；opts 指定优先；preview 回显覆盖 opts（以服务端为准）", () => {
+    expect(
+      calcAdCountConfirmFacts(preview(), { force: false, scope: "all" }).depth
+    ).toBe(12);
+    expect(
+      calcAdCountConfirmFacts(preview(), {
+        force: false,
+        scope: "all",
+        depth: 4,
+      }).depth
+    ).toBe(4);
+    expect(
+      calcAdCountConfirmFacts(preview({ depth: 8 }), {
+        force: false,
+        scope: "all",
+        depth: 4,
+      }).depth
+    ).toBe(8);
+  });
+
+  it("费用预估字段原样透传（前端不算钱）；preview 缺失 → null 不展示", () => {
+    const f = calcAdCountConfirmFacts(
+      preview({
+        expectedQueries: 40,
+        worstCaseQueries: 72,
+        unitPriceUsd: 0.002,
+        estimatedCostUsd: 0.08,
+      }),
+      { force: false, scope: "all", depth: 12 }
+    );
+    expect(f.expectedQueries).toBe(40);
+    expect(f.worstCaseQueries).toBe(72);
+    expect(f.unitPriceUsd).toBe(0.002);
+    expect(f.estimatedCostUsd).toBe(0.08);
+    const bare = calcAdCountConfirmFacts(preview(), {
+      force: false,
+      scope: "all",
+    });
+    expect(bare.expectedQueries).toBeNull();
+    expect(bare.worstCaseQueries).toBeNull();
+    expect(bare.unitPriceUsd).toBeNull();
+    expect(bare.estimatedCostUsd).toBeNull();
+  });
+});
+
+describe("resolveStoredCalcDepth / formatUsdAmount", () => {
+  it("只接受 4/8/12，其余（脏值/缺失）→ null 回默认", () => {
+    expect(resolveStoredCalcDepth("4")).toBe(4);
+    expect(resolveStoredCalcDepth("8")).toBe(8);
+    expect(resolveStoredCalcDepth("12")).toBe(12);
+    expect(resolveStoredCalcDepth("5")).toBeNull();
+    expect(resolveStoredCalcDepth("abc")).toBeNull();
+    expect(resolveStoredCalcDepth("")).toBeNull();
+    expect(resolveStoredCalcDepth(null)).toBeNull();
+    expect(resolveStoredCalcDepth(undefined)).toBeNull();
+  });
+
+  it("金额格式化：最多 4 位小数、至少 2 位（小额不被舍成 0.00）", () => {
+    expect(formatUsdAmount(0.004)).toBe("0.004");
+    expect(formatUsdAmount(0.002)).toBe("0.002");
+    expect(formatUsdAmount(0.08)).toBe("0.08");
+    expect(formatUsdAmount(0.324)).toBe("0.324");
+    expect(formatUsdAmount(0.3)).toBe("0.30");
+    expect(formatUsdAmount(1)).toBe("1.00");
+    expect(formatUsdAmount(12.5)).toBe("12.50");
+    expect(formatUsdAmount(0)).toBe("0.00");
+  });
 });
 
 describe("catalog dict 本批新键（calc/toolbar）", () => {
@@ -86,6 +156,7 @@ describe("catalog dict 本批新键（calc/toolbar）", () => {
     "calcConfirmDenied",
     "calcConfirmSubmit",
     "calcConfirmCancel",
+    "calcDepthLabel",
   ] as const;
   const templatedKeys: Array<[string, string]> = [
     ["calcAdCountSkippedDead", "{n}"],
@@ -93,6 +164,11 @@ describe("catalog dict 本批新键（calc/toolbar）", () => {
     ["calcConfirmFreshSkipped", "{n}"],
     ["calcConfirmDeadSkipped", "{n}"],
     ["calcConfirmBilling", "{path}"],
+    ["calcConfirmDepth", "{n}"],
+    ["calcConfirmExpectedQueries", "{n}"],
+    ["calcConfirmWorstCaseQueries", "{n}"],
+    ["calcConfirmEstCost", "{cost}"],
+    ["calcConfirmEstCost", "{unit}"],
   ];
 
   it("zh/en 都有全部新键且为非空字符串", () => {

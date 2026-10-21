@@ -73,8 +73,13 @@ import {
   adProbeFields,
 } from "./catalog-brand-view";
 import {
+  CALC_DEPTH_OPTIONS,
+  DEFAULT_CALC_DEPTH,
   calcAdCountConfirmFacts,
+  formatUsdAmount,
+  resolveStoredCalcDepth,
   type CalcAdCountScope,
+  type CalcDepth,
 } from "./calc-ad-count-confirm";
 import {
   localDayRangeToIso,
@@ -121,6 +126,27 @@ function persistSort(v: string): void {
     window.localStorage.setItem(SORT_STORAGE_KEY, v);
   } catch {
     /* localStorage 不可用（隐私模式等）时静默降级，不影响列表渲染。 */
+  }
+}
+
+/** 广告数计算深度选择的 localStorage 键（与排序同持久化风格）。 */
+const CALC_DEPTH_STORAGE_KEY = "catalog:calc-depth";
+
+function readStoredCalcDepth(): CalcDepth | null {
+  try {
+    return resolveStoredCalcDepth(
+      window.localStorage.getItem(CALC_DEPTH_STORAGE_KEY)
+    );
+  } catch {
+    return null;
+  }
+}
+
+function persistCalcDepth(v: CalcDepth): void {
+  try {
+    window.localStorage.setItem(CALC_DEPTH_STORAGE_KEY, String(v));
+  } catch {
+    /* localStorage 不可用时静默降级，不影响计算。 */
   }
 }
 
@@ -2151,13 +2177,28 @@ export function CatalogClient({
   /** 广告数付费计算的范围/强制控制与预估确认（防误触：先预估、再确认）。 */
   const [adCalcScope, setAdCalcScope] = useState<CalcAdCountScope>("all");
   const [adCalcForce, setAdCalcForce] = useState(false);
+  /** 每组查询深度（4/8/12，默认 12）：工具栏选择 + localStorage 持久化。 */
+  const [adCalcDepth, setAdCalcDepth] = useState<CalcDepth>(DEFAULT_CALC_DEPTH);
   const [adCalcPreviewing, setAdCalcPreviewing] = useState(false);
+  /** 确认框内切换深度后重新预估中（数字刷新完成前禁用深度选择与确认）。 */
+  const [adCalcRepricing, setAdCalcRepricing] = useState(false);
   const [adCalcConfirm, setAdCalcConfirm] = useState<{
     preview: CalcAdCountPreviewResult;
     scope: CalcAdCountScope;
     force: boolean;
+    depth: CalcDepth;
     facts: ReturnType<typeof calcAdCountConfirmFacts>;
   } | null>(null);
+
+  // 深度选择持久化：挂载后从 localStorage 恢复（同排序口径，不在
+  // useState 初始化里读 window）；每次变更写回。
+  useEffect(() => {
+    const stored = readStoredCalcDepth();
+    if (stored) setAdCalcDepth(stored);
+  }, []);
+  useEffect(() => {
+    persistCalcDepth(adCalcDepth);
+  }, [adCalcDepth]);
   /** 按新增日期全选：所选本地日期与请求中标记。 */
   const [addedDate, setAddedDate] = useState(() => localTodayString());
   const [selectingAdded, setSelectingAdded] = useState(false);
@@ -2224,25 +2265,70 @@ export function CatalogClient({
     setAdCalcPreviewing(true);
     setMsg(null);
     try {
-      const res = await previewCalcAdCountAction(adCalcScope);
+      const res = await previewCalcAdCountAction(adCalcScope, {
+        depth: adCalcDepth,
+        force: adCalcForce,
+      });
       if (!res.ok) {
         setMsg(res.error);
         return;
       }
-      // 快照当时的范围/强制：确认提交时按快照走，不受其后改动影响。
+      // 快照当时的范围/强制/深度：确认提交时按快照走，不受其后改动影响。
       setAdCalcConfirm({
         preview: res.data,
         scope: adCalcScope,
         force: adCalcForce,
+        depth: adCalcDepth,
         facts: calcAdCountConfirmFacts(res.data, {
           force: adCalcForce,
           scope: adCalcScope,
+          depth: adCalcDepth,
         }),
       });
     } catch (err) {
       setMsg(d.products.actionFailed.replace("{error}", errText(err)));
     } finally {
       setAdCalcPreviewing(false);
+    }
+  }
+
+  /**
+   * 确认框内切换深度：以快照的范围/强制 + 新深度重新预估（只读、不
+   * 计费），回来后整框数字（预计查询数/最坏/费用）按新深度刷新——
+   * 费用永远由后端按新深度重算，前端不在本地算钱。失败则保留旧数字
+   * 并报错，不让用户对着过期费用确认。
+   */
+  async function onConfirmDepthChange(next: CalcDepth) {
+    if (!adCalcConfirm || adCalcRepricing || calcAdCounting) return;
+    if (next === adCalcConfirm.depth) return;
+    const snapshot = adCalcConfirm;
+    setAdCalcRepricing(true);
+    try {
+      const res = await previewCalcAdCountAction(snapshot.scope, {
+        depth: next,
+        force: snapshot.force,
+      });
+      if (!res.ok) {
+        setMsg(res.error);
+        return;
+      }
+      setAdCalcConfirm({
+        preview: res.data,
+        scope: snapshot.scope,
+        force: snapshot.force,
+        depth: next,
+        facts: calcAdCountConfirmFacts(res.data, {
+          force: snapshot.force,
+          scope: snapshot.scope,
+          depth: next,
+        }),
+      });
+      // 工具栏深度同步跟随（并经 effect 持久化），下次打开即是这一档。
+      setAdCalcDepth(next);
+    } catch (err) {
+      setMsg(d.products.actionFailed.replace("{error}", errText(err)));
+    } finally {
+      setAdCalcRepricing(false);
     }
   }
 
@@ -2253,10 +2339,11 @@ export function CatalogClient({
     setCalcAdCounting(true);
     setMsg(null);
     try {
-      // 未选中 = 全量（范围/强制仍按快照）；选中 = 只算勾选的商品。
+      // 未选中 = 全量（范围/强制/深度仍按快照）；选中 = 只算勾选的商品。
       const res = await calcAdCountAction(Array.from(selectedIds), {
         force: snapshot.force,
         scope: snapshot.scope,
+        depth: snapshot.depth,
       });
       setAdCalcConfirm(null);
       if (!res.ok) {
@@ -3822,6 +3909,23 @@ export function CatalogClient({
                 />
                 {d.products.calcForceLabel}
               </label>
+              <label className="flex items-center gap-1.5 text-sm text-ink/80">
+                {d.products.calcDepthLabel}
+                <select
+                  className="rounded-lg border border-ink/15 bg-white px-2 py-1.5 text-sm text-ink/80"
+                  value={adCalcDepth}
+                  onChange={(e) =>
+                    setAdCalcDepth(Number(e.target.value) as CalcDepth)
+                  }
+                  aria-label={d.products.calcDepthLabel}
+                >
+                  {CALC_DEPTH_OPTIONS.map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <PaidDataBillingNote
                 feature="catalog-ad-count"
                 labels={{
@@ -3888,6 +3992,66 @@ export function CatalogClient({
                     )}
                   </li>
                 )}
+                <li className="flex items-center gap-2">
+                  <span>
+                    {d.products.calcConfirmDepth.replace(
+                      "{n}",
+                      String(adCalcConfirm.depth)
+                    )}
+                  </span>
+                  <select
+                    className="rounded-lg border border-ink/15 bg-white px-2 py-1 text-sm text-ink/80"
+                    value={adCalcConfirm.depth}
+                    disabled={adCalcRepricing || calcAdCounting}
+                    onChange={(e) =>
+                      void onConfirmDepthChange(
+                        Number(e.target.value) as CalcDepth
+                      )
+                    }
+                    aria-label={d.products.calcDepthLabel}
+                  >
+                    {CALC_DEPTH_OPTIONS.map((n) => (
+                      <option key={n} value={n}>
+                        {n}
+                      </option>
+                    ))}
+                  </select>
+                  {adCalcRepricing && (
+                    <span className="text-xs text-ink/50">
+                      {d.products.calcPreviewing}
+                    </span>
+                  )}
+                </li>
+                {adCalcConfirm.facts.expectedQueries !== null && (
+                  <li>
+                    {d.products.calcConfirmExpectedQueries.replace(
+                      "{n}",
+                      String(adCalcConfirm.facts.expectedQueries)
+                    )}
+                  </li>
+                )}
+                {adCalcConfirm.facts.worstCaseQueries !== null && (
+                  <li>
+                    {d.products.calcConfirmWorstCaseQueries.replace(
+                      "{n}",
+                      String(adCalcConfirm.facts.worstCaseQueries)
+                    )}
+                  </li>
+                )}
+                {adCalcConfirm.facts.estimatedCostUsd !== null &&
+                  adCalcConfirm.facts.unitPriceUsd !== null && (
+                    <li className="font-medium text-ink">
+                      {d.products.calcConfirmEstCost
+                        .replace(
+                          "{cost}",
+                          formatUsdAmount(adCalcConfirm.facts.estimatedCostUsd)
+                        )
+                        .replace(
+                          "{unit}",
+                          formatUsdAmount(adCalcConfirm.facts.unitPriceUsd)
+                        )}
+                    </li>
+                  )}
                 <li>
                   {adCalcConfirm.scope === "alive"
                     ? d.products.calcConfirmScopeAlive
@@ -3927,7 +4091,11 @@ export function CatalogClient({
                 <button
                   className={btnPrimary}
                   onClick={onConfirmCalcAdCount}
-                  disabled={calcAdCounting || !adCalcConfirm.facts.allowed}
+                  disabled={
+                    calcAdCounting ||
+                    adCalcRepricing ||
+                    !adCalcConfirm.facts.allowed
+                  }
                 >
                   {calcAdCounting
                     ? d.products.calculatingAds

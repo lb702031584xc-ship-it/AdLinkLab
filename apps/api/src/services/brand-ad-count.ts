@@ -35,6 +35,12 @@
  * - 历史快照：重算写入新值前，把组内旧 adCount/adCountCheckedAt 挪到
  *   lastAdCount/lastAdCountCheckedAt，趋势（deriveAdTrend）由新旧两值现算。
  * - 单组 SERP 失败不中断整批：跳过该组并把原因记入返回值 errors。
+ * - 深度可选 + 费用预估（2026-10-21 三批）：每组查询深度按次可选
+ *   4 / 8 / 12（calcBrandAdCounts deps.depth，默认 12 = 历史行为；
+ *   one-click-screen / offer-prescreen 内部调用不传 → 默认 12）。
+ *   preview 用本地派生（零 API）预估实际查询数 expectedQueries，
+ *   并按 SERP_QUERY_PRICE_USD 估算费用——确认框签的是看得见的钱，
+ *   不是盲签的最坏值。
  */
 import type { PrismaClient } from "@adlinklab/database";
 import {
@@ -47,6 +53,17 @@ export const AD_COUNT_CACHE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 
 const SERP_API_URL =
   "https://api.dataforseo.com/v3/serp/google/organic/live/advanced";
+
+/**
+ * 单次 SERP 查询的估算单价（美元）——费用预估的唯一出处，全站不得
+ * 另编第二个数。口径：端点 serp/google/organic/live/advanced
+ * （Live、depth=100）。仓内研究报告（2026-10-20，
+ * research_notes/dataforseo-data-catalog-affiliate-ads-20261020-2054）
+ * 未针对该端点确证单价，仅记录通用 SERP Live 参考价 $0.002/次。
+ * 故此值是**估算单价，待 DataForSEO 实际账单校准**；确认框文案亦
+ * 按估算口径标注，不当作精确账单。
+ */
+export const SERP_QUERY_PRICE_USD = 0.002;
 
 /** 国家 → DataForSEO location_code。未知国家默认美国。 */
 const LOCATION_CODES: Record<string, number> = {
@@ -202,10 +219,26 @@ function sortForProbes(
   });
 }
 
-/** 每组 SERP 查询总预算（裸品牌词 1 + 长尾探针 ≤ 11）。 */
+/** 每组 SERP 查询总预算上限（裸品牌词 1 + 长尾探针 ≤ 11）= 默认深度。 */
 export const MAX_QUERIES_PER_GROUP = 12;
-/** 每组长尾探针上限（总预算减裸品牌词 1 次）。 */
+/** 每组长尾探针上限（总预算减裸品牌词 1 次，随所选深度变化）。 */
 export const MAX_LONGTAIL_PROBES = MAX_QUERIES_PER_GROUP - 1;
+
+/** 每组查询深度的可选档位（总查询数，含裸品牌词 1 次）。 */
+export const CALC_DEPTH_OPTIONS = [4, 8, 12] as const;
+/** 默认深度 = 历史行为（每组最多 12 次）。 */
+export const DEFAULT_CALC_DEPTH = 12;
+
+/**
+ * 深度归一：未传 → 默认 12；合法档位（4/8/12）→ 原样；其余 → 抛错
+ * （路由层另有校验并回 400，此处是服务层防线，防止内部调用方传脏值
+ * 静默放大付费查询量）。
+ */
+export function resolveCalcDepth(depth?: number | null): number {
+  if (depth === undefined || depth === null) return DEFAULT_CALC_DEPTH;
+  if ((CALC_DEPTH_OPTIONS as readonly number[]).includes(depth)) return depth;
+  throw new Error(`depth 非法（每组查询深度仅支持 4/8/12）：${depth}`);
+}
 
 /** 长尾探针类型：model = 品牌+型号；category = 品牌+类目。 */
 export type LongtailProbeKind = "model" | "category";
@@ -277,15 +310,18 @@ export function modelCandidatesOf(
  *   型号（modelCandidatesOf），逐个型号入队：先原文形态，粘连型号
  *   再入带空格形态；两种形态各算一条、各占预算。
  * - 去重：同一查询词（小写归一）只入队一次；探针不得等于裸品牌词。
- * - 预算：长尾最多 MAX_LONGTAIL_PROBES（11）条，满额即停。
+ * - 预算：长尾最多 maxProbes 条（默认 MAX_LONGTAIL_PROBES = 深度 12
+ *   的 11；深度可选后由调用方按 depth − 1 传入），满额即停。
  * - 类目回退：型号探针不足 4 条且组有类目（排序后第一件带类目的
- *   商品的类目）时，补 1 条 `{品牌} {类目}`（未被型号探针覆盖时）。
+ *   商品的类目）时，补 1 条 `{品牌} {类目}`（未被型号探针覆盖时，
+ *   同样受预算约束）。
  * 无任何长尾探针可派生 → 空数组（该组 adCountLongtail 恒 null，
  * 是终局不是缺失）。
  */
 export function deriveLongtailProbes(
   brand: string,
-  products: ProbeSourceProduct[]
+  products: ProbeSourceProduct[],
+  maxProbes: number = MAX_LONGTAIL_PROBES
 ): LongtailProbe[] {
   const b = (brand ?? "").trim();
   if (!b) return [];
@@ -294,7 +330,7 @@ export function deriveLongtailProbes(
   const seen = new Set<string>();
   const bareKey = b.toLowerCase();
   const push = (q: string, kind: LongtailProbeKind): boolean => {
-    if (probes.length >= MAX_LONGTAIL_PROBES) return false;
+    if (probes.length >= maxProbes) return false;
     const key = q.toLowerCase();
     if (key === bareKey || seen.has(key)) return true;
     seen.add(key);
@@ -302,7 +338,7 @@ export function deriveLongtailProbes(
     return true;
   };
   for (const p of sorted) {
-    if (probes.length >= MAX_LONGTAIL_PROBES) break;
+    if (probes.length >= maxProbes) break;
     for (const cand of modelCandidatesOf(p.name ?? "", b)) {
       if (!push(`${b} ${cand.token}`, "model")) break;
       if (cand.spaced && !push(`${b} ${cand.spaced}`, "model")) break;
@@ -490,6 +526,12 @@ export interface BrandAdCountDeps {
    * 默认 false。
    */
   aliveOnly?: boolean;
+  /**
+   * 每组查询深度（总查询数含裸词）：4 / 8 / 12，默认 12（历史行为）。
+   * 仅人工 calc 入口按用户所选传入；one-click-screen / offer-prescreen
+   * 的内部增量调用不传 → 默认 12，行为不变。
+   */
+  depth?: number;
 }
 
 /** calc 的只读预估（不调 DataForSEO、不需要凭证）：提交付费计算前的数字。 */
@@ -502,8 +544,23 @@ export interface BrandAdCountPreview {
   groupsStale: number;
   /** aliveOnly 时整组皆死的组数（将被跳过）；scope=all 时恒为 0。 */
   deadGroupsSkipped: number;
-  /** 每组 SERP 查询上限（裸词 1 + 长尾 ≤11）：确认框按 组数 × 此值 估最坏消耗。 */
+  /** 每组 SERP 查询上限（= 本次预估采用的深度）：确认框按 组数 × 此值 估最坏消耗。 */
   maxQueriesPerGroup: number;
+  /** 本次预估采用的每组查询深度（4/8/12，回显给确认框标注）。 */
+  depth: number;
+  /**
+   * 预计实际查询数：对每个将计费组（死组跳过、增量模式下新鲜组跳过
+   * 后实际会跑的组）按本地派生预算 = 1（裸词）+ 该组在所选深度下可
+   * 派生的长尾探针数，求和。近似精确——仅个别查询 API 失败时实际
+   * 略低，不是 组数 × 深度的最坏值。
+   */
+  expectedQueries: number;
+  /** 最坏查询数 = 将计费组数 × 深度（上限参考）。 */
+  worstCaseQueries: number;
+  /** 单次 SERP 查询单价（美元，= SERP_QUERY_PRICE_USD，估算单价）。 */
+  unitPriceUsd: number;
+  /** 预计费用（美元）= expectedQueries × unitPriceUsd（4 位小数）。 */
+  estimatedCostUsd: number;
 }
 
 interface ProductRow {
@@ -624,6 +681,8 @@ function isGroupFresh(
   if (!recent) return false;
   if (!items.some((p) => p.adProbeDetail != null)) return false;
   if (items.some((p) => p.adCountLongtail != null)) return true;
+  // 新鲜度不看 depth：此处派生用默认上限，只判"有没有探针可派生"
+  // （detail 在不在 + 有无可探才是新鲜度标准，与本次所选深度无关）。
   return deriveLongtailProbes(brand, items).length === 0;
 }
 
@@ -765,6 +824,8 @@ export async function calcBrandAdCounts(
     throw new Error("DataForSEO credentials not configured");
   }
   const fetchImpl = deps.fetchImpl ?? fetch;
+  // 每组查询深度（默认 12 = 历史行为）；非法值在花钱之前就抛错。
+  const depth = resolveCalcDepth(deps.depth);
 
   const rows = await loadAdCountRows(prisma, tenantId, productIds);
   const groups = groupAdCountRows(rows);
@@ -829,7 +890,7 @@ export async function calcBrandAdCounts(
     // 无可派生探针 → null（终局）；探针全失败 → null 并记 errors
     // （新鲜度规则会让该组下次重探，不静默当 0）；失败的探针不入
     // detail（没跑出结果就不留假记录）。
-    const probes = deriveLongtailProbes(g.brand, g.items);
+    const probes = deriveLongtailProbes(g.brand, g.items, depth - 1);
     let longtail: number | null = null;
     let probeSucceeded = 0;
     for (const probe of probes) {
@@ -916,28 +977,50 @@ export async function calcBrandAdCounts(
  * - deadGroupsSkipped 仅 aliveOnly 时统计（与 calc 一样先于缓存判死，
  *   死组同时也计入它自身的新鲜/过期归类——总数口径：
  *   groupsTotal = groupsFresh + groupsStale，死组是其中的子集）。
+ * - 费用预估：将计费组 = 按 calc 同一顺序判定后实际会跑的组
+ *   （aliveOnly 先跳死组；force=false 再跳新鲜组；force=true 全跑）。
+ *   每组预计查询数 = 1（裸词）+ 本地派生在所选 depth 下的长尾探针数
+ *   （deriveLongtailProbes 纯函数零 API，派生多少条就会查多少条）；
+ *   estimatedCostUsd = expectedQueries × SERP_QUERY_PRICE_USD。
  */
 export async function previewBrandAdCounts(
   prisma: PrismaClient,
   tenantId: string,
-  opts: { aliveOnly?: boolean } = {}
+  opts: { aliveOnly?: boolean; force?: boolean; depth?: number } = {}
 ): Promise<BrandAdCountPreview> {
+  const depth = resolveCalcDepth(opts.depth);
   const rows = await loadAdCountRows(prisma, tenantId);
   const groups = groupAdCountRows(rows);
   const now = Date.now();
   let groupsFresh = 0;
   let groupsStale = 0;
   let deadGroupsSkipped = 0;
+  let billableGroups = 0;
+  let expectedQueries = 0;
   for (const g of groups.values()) {
-    if (isGroupFresh(g.brand, g.items, now)) groupsFresh += 1;
+    const fresh = isGroupFresh(g.brand, g.items, now);
+    if (fresh) groupsFresh += 1;
     else groupsStale += 1;
-    if (opts.aliveOnly && isDeadGroup(g.items)) deadGroupsSkipped += 1;
+    const dead = opts.aliveOnly === true && isDeadGroup(g.items);
+    if (dead) deadGroupsSkipped += 1;
+    // 将计费判定与 calc 的跳过顺序一致：死组先跳 → 新鲜组增量跳过。
+    if (dead) continue;
+    if (!opts.force && fresh) continue;
+    billableGroups += 1;
+    expectedQueries +=
+      1 + deriveLongtailProbes(g.brand, g.items, depth - 1).length;
   }
   return {
     groupsTotal: groups.size,
     groupsFresh,
     groupsStale,
     deadGroupsSkipped,
-    maxQueriesPerGroup: MAX_QUERIES_PER_GROUP,
+    maxQueriesPerGroup: depth,
+    depth,
+    expectedQueries,
+    worstCaseQueries: billableGroups * depth,
+    unitPriceUsd: SERP_QUERY_PRICE_USD,
+    estimatedCostUsd:
+      Math.round(expectedQueries * SERP_QUERY_PRICE_USD * 10000) / 10000,
   };
 }

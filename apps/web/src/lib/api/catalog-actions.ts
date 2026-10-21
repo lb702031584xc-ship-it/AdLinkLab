@@ -944,12 +944,13 @@ export interface CalcAdCountResult {
 
 /**
  * 广告投放数量计算：ids 为空数组 = 全量（后端按 14 天缓存跳过已查组）。
- * opts.force = 忽略缓存强制重算；opts.scope = "alive" 时跳过全死组。
+ * opts.force = 忽略缓存强制重算；opts.scope = "alive" 时跳过全死组；
+ * opts.depth = 每组查询深度 4/8/12（不传 → 后端默认 12）。
  * 付费调用——前端必须先走 previewCalcAdCountAction 预估确认再调本函数。
  */
 export async function calcAdCountAction(
   productIds: string[],
-  opts?: { force?: boolean; scope?: "all" | "alive" }
+  opts?: { force?: boolean; scope?: "all" | "alive"; depth?: number }
 ) {
   return attempt(() => apiFetch<CalcAdCountResult>(
     "/api/v1/catalog/products/calc-ad-count",
@@ -960,6 +961,7 @@ export async function calcAdCountAction(
         ids: productIds.slice(0, 500),
         force: opts?.force === true,
         scope: opts?.scope ?? "all",
+        ...(opts?.depth !== undefined ? { depth: opts.depth } : {}),
       }),
     }
   ), ["/catalog"]);
@@ -972,16 +974,40 @@ export interface CalcAdCountPreviewResult {
   groupsFresh: number;
   groupsStale: number;
   deadGroupsSkipped: number;
+  /** 每组查询上限（= 本次预估采用的深度）。 */
+  maxQueriesPerGroup: number;
+  /** 本次预估采用的每组查询深度（4/8/12）。 */
+  depth: number;
+  /** 预计实际查询数（后端按本地派生预估，非最坏值）。 */
+  expectedQueries: number;
+  /** 最坏查询数 = 将计费组数 × 深度。 */
+  worstCaseQueries: number;
+  /** 单次查询单价（美元，后端常量，估算单价）。 */
+  unitPriceUsd: number;
+  /** 预计费用（美元）= 预计查询数 × 单价（后端算，前端只展示）。 */
+  estimatedCostUsd: number;
 }
 
-/** 广告数计算的只读预估（不计费、不记用量）：提交前确认框的数字来源。 */
-export async function previewCalcAdCountAction(scope: "all" | "alive") {
+/**
+ * 广告数计算的只读预估（不计费、不记用量）：提交前确认框的数字来源。
+ * opts.depth/force 必须与用户在确认框选定的模式一致传入——预估的查询
+ * 数与费用对应实际将提交的口径；确认框里切换深度即以新 depth 重调本
+ * 函数刷新数字（前端不在本地算钱）。
+ */
+export async function previewCalcAdCountAction(
+  scope: "all" | "alive",
+  opts?: { depth?: number; force?: boolean }
+) {
   return attempt(() => apiFetch<CalcAdCountPreviewResult>(
     "/api/v1/catalog/products/calc-ad-count/preview",
     {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ scope }),
+      body: JSON.stringify({
+        scope,
+        ...(opts?.depth !== undefined ? { depth: opts.depth } : {}),
+        ...(opts?.force !== undefined ? { force: opts.force } : {}),
+      }),
     }
   ), ["/catalog"]);
 }

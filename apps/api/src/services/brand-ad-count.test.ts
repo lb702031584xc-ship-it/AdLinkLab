@@ -21,6 +21,8 @@ import {
   modelCandidatesOf,
   modelTokensOf,
   previewBrandAdCounts,
+  resolveCalcDepth,
+  SERP_QUERY_PRICE_USD,
   tallySerpAds,
 } from "./brand-ad-count.js";
 
@@ -569,27 +571,39 @@ describe("previewBrandAdCounts", () => {
     );
   }
 
-  it("scope=all：总数 = 新鲜 + 过期，死组不单独计；带每组最坏查询数（深度 12）", async () => {
+  it("scope=all：总数 = 新鲜 + 过期，死组不单独计；默认深度 12 + 费用预估", async () => {
     const { prisma } = seedFourGroups();
     const p = await previewBrandAdCounts(prisma, "t1");
+    // 种子商品无名无类目 → 每组派生 0 探针：将计费 2 个过期组 ×（1 裸词）
     expect(p).toEqual({
       groupsTotal: 4,
       groupsFresh: 2,
       groupsStale: 2,
       deadGroupsSkipped: 0,
       maxQueriesPerGroup: 12,
+      depth: 12,
+      expectedQueries: 2,
+      worstCaseQueries: 24,
+      unitPriceUsd: SERP_QUERY_PRICE_USD,
+      estimatedCostUsd: 0.004,
     });
   });
 
-  it("aliveOnly：死组单独计（含新鲜死组），新鲜/过期口径不变", async () => {
+  it("aliveOnly：死组单独计（含新鲜死组），新鲜/过期口径不变；死组不计费", async () => {
     const { prisma } = seedFourGroups();
     const p = await previewBrandAdCounts(prisma, "t1", { aliveOnly: true });
+    // 将计费只剩 StaleAlive 一组（DeadStale 被活口径跳过）
     expect(p).toEqual({
       groupsTotal: 4,
       groupsFresh: 2,
       groupsStale: 2,
       deadGroupsSkipped: 2,
       maxQueriesPerGroup: 12,
+      depth: 12,
+      expectedQueries: 1,
+      worstCaseQueries: 12,
+      unitPriceUsd: SERP_QUERY_PRICE_USD,
+      estimatedCostUsd: 0.002,
     });
   });
 
@@ -1097,5 +1111,178 @@ describe("calcBrandAdCounts 多探针", () => {
     const p = await previewBrandAdCounts(prisma, "t1", {});
     expect(p.groupsStale).toBe(1);
     expect(p.groupsFresh).toBe(0);
+  });
+});
+
+/* ── 深度可选 + 费用预估（2026-10-21 三批） ── */
+
+describe("resolveCalcDepth / 深度档位", () => {
+  it("未传 → 默认 12；4/8/12 原样；非法值抛错", () => {
+    expect(resolveCalcDepth(undefined)).toBe(12);
+    expect(resolveCalcDepth(null)).toBe(12);
+    expect(resolveCalcDepth(4)).toBe(4);
+    expect(resolveCalcDepth(8)).toBe(8);
+    expect(resolveCalcDepth(12)).toBe(12);
+    expect(() => resolveCalcDepth(5)).toThrow(/depth 非法/);
+    expect(() => resolveCalcDepth(0)).toThrow(/depth 非法/);
+  });
+
+  it("单价常量是唯一出处（估算单价 $0.002/次）", () => {
+    expect(SERP_QUERY_PRICE_USD).toBe(0.002);
+  });
+
+  it("deriveLongtailProbes 的 maxProbes 参数按深度截断（depth 4 → 长尾 ≤3）", () => {
+    const products = Array.from({ length: 8 }, (_, i) => ({
+      name: `BrandX AB${100 + i} Tool`,
+      recommendationScore: 100 - i,
+      reviewCount: 1,
+    }));
+    expect(deriveLongtailProbes("BrandX", products, 3)).toHaveLength(3);
+    expect(deriveLongtailProbes("BrandX", products, 7)).toHaveLength(7);
+    // 不传 → 默认上限 11（历史行为）
+    expect(deriveLongtailProbes("BrandX", products)).toHaveLength(11);
+  });
+});
+
+describe("calcBrandAdCounts 深度可选", () => {
+  const base = (
+    over: Partial<FakeProduct> & { id: string }
+  ): FakeProduct => ({
+    brand: "BrandX",
+    countryCode: "US",
+    landingPageType: "dtc",
+    adCountCheckedAt: null,
+    screenVerdict: null,
+    status: "active",
+    ...over,
+  });
+
+  /** 8 件粘连型号商品 → 16 个探针候选，足够把各深度档位截满。 */
+  function manyModelProducts() {
+    return Array.from({ length: 8 }, (_, i) =>
+      base({
+        id: `m${i}`,
+        name: `BrandX AB${100 + i} Tool`,
+        recommendationScore: 100 - i,
+        reviewCount: 1,
+      })
+    );
+  }
+
+  it("depth=4：一组总查询 = 4（裸词 1 + 长尾 3），记账/明细按实际查询", async () => {
+    const { prisma, store } = makeFakePrisma(manyModelProducts());
+    const fetchImpl = vi.fn(serpFetch(["brandx.com"]));
+    const r = await calcBrandAdCounts(prisma, "t1", undefined, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      depth: 4,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    expect(r.serpQueries).toBe(4);
+    expect(r.groupsQueried).toBe(1);
+    // 明细也只落实际跑的 4 条
+    expect(store.get("m0")?.adProbeDetail).toHaveLength(4);
+  });
+
+  it("depth=8：一组总查询 = 8；不传 depth → 默认 12", async () => {
+    const a = makeFakePrisma(manyModelProducts());
+    const fetchA = vi.fn(serpFetch(["brandx.com"]));
+    const ra = await calcBrandAdCounts(a.prisma, "t1", undefined, {
+      fetchImpl: fetchA as unknown as typeof fetch,
+      depth: 8,
+    });
+    expect(fetchA).toHaveBeenCalledTimes(8);
+    expect(ra.serpQueries).toBe(8);
+
+    const b = makeFakePrisma(manyModelProducts());
+    const fetchB = vi.fn(serpFetch(["brandx.com"]));
+    const rb = await calcBrandAdCounts(b.prisma, "t1", undefined, {
+      fetchImpl: fetchB as unknown as typeof fetch,
+    });
+    expect(fetchB).toHaveBeenCalledTimes(12);
+    expect(rb.serpQueries).toBe(12);
+  });
+
+  it("非法 depth（5）→ 抛错且不发出任何查询", async () => {
+    const { prisma } = makeFakePrisma(manyModelProducts());
+    const fetchImpl = vi.fn(serpFetch(["brandx.com"]));
+    await expect(
+      calcBrandAdCounts(prisma, "t1", undefined, {
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        depth: 5,
+      })
+    ).rejects.toThrow(/depth 非法/);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe("previewBrandAdCounts 费用预估", () => {
+  const base = (
+    over: Partial<FakeProduct> & { id: string }
+  ): FakeProduct => ({
+    brand: "BrandX",
+    countryCode: "US",
+    landingPageType: "dtc",
+    adCountCheckedAt: null,
+    screenVerdict: null,
+    status: "active",
+    ...over,
+  });
+
+  it("expectedQueries 按本地派生算（裸词 + 深度内探针数），随 depth 变", async () => {
+    // 8 件粘连型号 = 16 个探针候选：depth 12 → 11 探针；depth 4 → 3 探针
+    const products = Array.from({ length: 8 }, (_, i) =>
+      base({
+        id: `m${i}`,
+        name: `BrandX AB${100 + i} Tool`,
+        recommendationScore: 100 - i,
+        reviewCount: 1,
+      })
+    );
+    const { prisma } = makeFakePrisma(products, false);
+    const p12 = await previewBrandAdCounts(prisma, "t1", {});
+    expect(p12.expectedQueries).toBe(12);
+    expect(p12.worstCaseQueries).toBe(12);
+    expect(p12.estimatedCostUsd).toBe(0.024);
+    const p4 = await previewBrandAdCounts(prisma, "t1", { depth: 4 });
+    expect(p4.depth).toBe(4);
+    expect(p4.maxQueriesPerGroup).toBe(4);
+    expect(p4.expectedQueries).toBe(4);
+    expect(p4.worstCaseQueries).toBe(4);
+    expect(p4.estimatedCostUsd).toBe(0.008);
+    const p8 = await previewBrandAdCounts(prisma, "t1", { depth: 8 });
+    expect(p8.expectedQueries).toBe(8);
+    expect(p8.estimatedCostUsd).toBe(0.016);
+  });
+
+  it("force=true：新鲜组也计入将计费（与 calc 强制模式一致）", async () => {
+    const recent = new Date(Date.now() - 3 * 24 * 3600 * 1000);
+    const detailStamp = [
+      { q: "BrandX", kind: "bare", paid: 0, shopping: 0, total: 0 },
+    ];
+    const { prisma } = makeFakePrisma(
+      [
+        base({
+          id: "f1",
+          adCountCheckedAt: recent,
+          adCountLongtail: 0,
+          adProbeDetail: detailStamp,
+        }),
+      ],
+      false
+    );
+    const inc = await previewBrandAdCounts(prisma, "t1", {});
+    expect(inc.groupsFresh).toBe(1);
+    expect(inc.expectedQueries).toBe(0);
+    expect(inc.estimatedCostUsd).toBe(0);
+    const forced = await previewBrandAdCounts(prisma, "t1", { force: true });
+    expect(forced.expectedQueries).toBe(1); // 无名无类目 → 只有裸词
+    expect(forced.worstCaseQueries).toBe(12);
+  });
+
+  it("非法 depth → 抛错（不静默回落）", async () => {
+    const { prisma } = makeFakePrisma([base({ id: "p1" })], false);
+    await expect(
+      previewBrandAdCounts(prisma, "t1", { depth: 6 })
+    ).rejects.toThrow(/depth 非法/);
   });
 });
