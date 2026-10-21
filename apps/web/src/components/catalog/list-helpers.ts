@@ -26,3 +26,12 @@ export function isValidSortValue(v: unknown): v is string {
 export function resolveStoredSort(raw: string | null | undefined): string | null {
   return isValidSortValue(raw) ? raw : null;
 }
+
+/**
+ * 测试优先分列的「先测」名次：仅在测试优先分降序（priority_desc）时，
+ * 行的全局序号（(page-1)*pageSize + 行序）就是全局名次，可点亮名次 ≤5
+ * 的「先测」徽标；其他排序（含 priority_asc 升序）下名次无"先测"语义 → null。
+ */
+export function priorityRankFor(sort: string, seq: number): number | null {
+  return sort === "priority_desc" ? seq : null;
+}

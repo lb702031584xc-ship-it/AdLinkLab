@@ -74,6 +74,10 @@ import {
   type OneClickProductRow,
 } from "../services/one-click-screen.js";
 import {
+  catalogPriorityInputFromRow,
+  computeCatalogTestPriority,
+} from "../services/catalog-priority.js";
+import {
   recordPaidDataUsage,
   requirePaidDataAccess,
   resolvePaidDataAccess,
@@ -243,6 +247,10 @@ function serializeProduct(r: Record<string, unknown>, whitelisted: boolean) {
     adTrend: deriveAdTrend(numOrNull(r.adCount), numOrNull(r.lastAdCount)),
     syncStreak: r.syncStreak ?? 0,
     whitelisted,
+    /** 商品级测试优先分（与 Offer 侧同构同数值，建 Offer 前排名用）：
+     * 初筛腿（screenVerdict 映射）+ 广告腿（品牌组广告数/长尾/趋势）+
+     * 佣金腿（estimateCommissionFigure），纯内存现算，每行都带。 */
+    testPriority: computeCatalogTestPriority(catalogPriorityInputFromRow(r)),
     /** 一键筛选结论（未筛 → null）：pass | kill | review + 原因 + 时间。 */
     screenVerdict: (r.screenVerdict as string) ?? null,
     screenReason: (r.screenReason as string) ?? null,
@@ -833,6 +841,15 @@ export async function registerCatalogRoutes(
     const info = await requireSession(deps, request);
     const query = request.query as Record<string, unknown>;
     const { page, pageSize } = pageArgs(query);
+    // 测试优先分排序：分数是多字段现算，Prisma orderBy 表达不了，在
+    // 过滤后的候选集上内存算分排序再分页（与品牌聚合的全量加载同模式）。
+    // priority 与 priority_desc 同义（分数降序）；priority_asc 为分数升序
+    // （前端列头方向切换产生的状态值）。buildProductOrderBy 不加此分支。
+    const sortRaw = typeof query.sort === "string" ? query.sort.trim() : "";
+    const isPrioritySort =
+      sortRaw === "priority" ||
+      sortRaw === "priority_desc" ||
+      sortRaw === "priority_asc";
     const where: Record<string, unknown> = { tenantId: info.tenantId };
     if (query.networkId) where.networkId = assertId(query.networkId, "networkId");
     if (query.recommended === "true" || query.recommended === "1") {
@@ -912,15 +929,47 @@ export async function registerCatalogRoutes(
       if (blMerchants.length > 0)
         where.merchantId = { notIn: blMerchants };
     }
-    const [total, rows] = await Promise.all([
-      prisma.networkProduct.count({ where }),
-      prisma.networkProduct.findMany({
+    let total: number;
+    let rows: Array<Record<string, unknown>>;
+    if (isPrioritySort) {
+      // 先过滤（where 与普通路径完全一致）→ 全量候选集内存算分排序 → 切片。
+      // total = 过滤后候选总数，与普通路径 count 口径一致。
+      const allRows = (await prisma.networkProduct.findMany({
         where,
-        orderBy: buildProductOrderBy(query.sort) as never,
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-      }),
-    ]);
+      })) as Array<Record<string, unknown>>;
+      const dir = sortRaw === "priority_asc" ? 1 : -1;
+      const scored = allRows.map((r) => ({
+        r,
+        score: computeCatalogTestPriority(catalogPriorityInputFromRow(r))
+          .score,
+      }));
+      scored.sort((a, b) => {
+        if (a.score !== b.score) return dir * (a.score - b.score);
+        // 同分兜底（两个方向一致，保证序确定）：推荐指数降序 → externalId 降序。
+        const ra = numOrNull(a.r.recommendationScore);
+        const rb = numOrNull(b.r.recommendationScore);
+        if (ra !== rb) return (rb ?? -Infinity) - (ra ?? -Infinity);
+        const ea = String(a.r.externalId ?? "");
+        const eb = String(b.r.externalId ?? "");
+        return ea < eb ? 1 : ea > eb ? -1 : 0;
+      });
+      total = allRows.length;
+      rows = scored
+        .slice((page - 1) * pageSize, page * pageSize)
+        .map((s) => s.r);
+    } else {
+      const [t, rs] = await Promise.all([
+        prisma.networkProduct.count({ where }),
+        prisma.networkProduct.findMany({
+          where,
+          orderBy: buildProductOrderBy(query.sort) as never,
+          skip: (page - 1) * pageSize,
+          take: pageSize,
+        }),
+      ]);
+      total = t as number;
+      rows = rs as Array<Record<string, unknown>>;
+    }
     // 白名单置顶（channel 按商品所属网络映射；观察期商家不置顶）。
     const ids = (rows as Array<{ id: string }>).map((r) => r.id);
     const whiteRows =
@@ -1029,7 +1078,11 @@ export async function registerCatalogRoutes(
         networkName: net?.name ?? null,
       };
     });
-    products.sort((a, b) => Number(b.pinned) - Number(a.pinned));
+    // 白名单本页置顶只对普通排序生效：priority 排序下分数序必须纯粹
+    // （用户按"先测"名次从上往下建 Offer），pinned 仅保留标记不重排。
+    if (!isPrioritySort) {
+      products.sort((a, b) => Number(b.pinned) - Number(a.pinned));
+    }
     return {
       total,
       page,

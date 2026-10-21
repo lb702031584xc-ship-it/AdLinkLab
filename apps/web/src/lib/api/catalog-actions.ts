@@ -117,6 +117,8 @@ export interface CatalogProduct {
   approvalRatePct?: number | null;
   /** 补强 #4：返款/结算周期天数（null = 未知）。 */
   payoutCycleDays?: number | null;
+  /** 商品级测试优先分（后端与 Offer 侧同构公式现算）：分数 0–100 + 理由短标签。 */
+  testPriority?: { score: number; reasons: string[] } | null;
   /** 一键筛选结论（未筛 → null）：pass | kill | review。 */
   screenVerdict?: string | null;
   screenReason?: string | null;

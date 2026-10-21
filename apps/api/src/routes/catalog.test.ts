@@ -564,6 +564,148 @@ describe("GET /api/v1/catalog/products 广告数过滤（minAdCount / hasAds）"
   });
 });
 
+describe("GET /api/v1/catalog/products 测试优先分（行字段 + sort=priority）", () => {
+  function setup() {
+    const { ctx } = makeCatalogFakePrisma();
+    ctx.affiliateNetwork.push(testNetwork());
+    // 分数逐项验算（初筛 + 广告 + 佣金）：
+    // high: pass 30 + adCount 10 sweet 40 + 佣金金额 60 → 30 = 100
+    // mid:  review 18 + adCount 3 small 30 + 费率换算 100×15% = 15 → 16 = 64
+    // none: 未筛 5 + 未计算 12 + 佣金金额 20 → 16 = 33
+    // low:  kill 0 + adCount 0 none 4 + 佣金未知 → 8 = 12
+    ctx.networkProduct.push(
+      funnelProduct({
+        externalId: "p-high",
+        screenVerdict: "pass",
+        adCount: 10,
+        commissionAmount: 60,
+        countryCode: "CA",
+      }),
+      funnelProduct({
+        externalId: "p-mid",
+        screenVerdict: "review",
+        adCount: 3,
+        commissionAmount: null,
+        commissionRate: 15,
+        price: 100,
+        countryCode: "US",
+      }),
+      funnelProduct({
+        externalId: "p-none",
+        commissionAmount: 20,
+        countryCode: "US",
+      }),
+      funnelProduct({
+        externalId: "p-low",
+        screenVerdict: "kill",
+        adCount: 0,
+        commissionAmount: null,
+        commissionRate: null,
+        countryCode: "US",
+      })
+    );
+    return ctx;
+  }
+
+  it("默认排序下每行也带 testPriority（score + reasons）", async () => {
+    const ctx = setup();
+    const { app } = buildApp(ctx, "member");
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/catalog/products",
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    const mid = body.items.find((p: any) => p.externalId === "p-mid");
+    expect(mid.testPriority.score).toBe(64);
+    expect(mid.testPriority.reasons).toContain("初筛谨慎");
+    const high = body.items.find((p: any) => p.externalId === "p-high");
+    expect(high.testPriority.score).toBe(100);
+    expect(high.testPriority.reasons).toContain("初筛通过");
+  });
+
+  it("sort=priority 与 priority_desc：按分数降序，total 不变", async () => {
+    for (const sort of ["priority", "priority_desc"]) {
+      const ctx = setup();
+      const { app } = buildApp(ctx, "member");
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/v1/catalog/products?sort=${sort}`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.total).toBe(4);
+      expect(body.items.map((p: any) => p.externalId)).toEqual([
+        "p-high",
+        "p-mid",
+        "p-none",
+        "p-low",
+      ]);
+      expect(body.items.map((p: any) => p.testPriority.score)).toEqual([
+        100, 64, 33, 12,
+      ]);
+    }
+  });
+
+  it("sort=priority_asc：分数升序", async () => {
+    const ctx = setup();
+    const { app } = buildApp(ctx, "member");
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/catalog/products?sort=priority_asc",
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.total).toBe(4);
+    expect(body.items.map((p: any) => p.externalId)).toEqual([
+      "p-low",
+      "p-none",
+      "p-mid",
+      "p-high",
+    ]);
+  });
+
+  it("priority 排序分页：先全序再切片，total 为过滤后总数", async () => {
+    const ctx = setup();
+    const { app } = buildApp(ctx, "member");
+    const page1 = await app.inject({
+      method: "GET",
+      url: "/api/v1/catalog/products?sort=priority&pageSize=2&page=1",
+    });
+    expect(page1.json().total).toBe(4);
+    expect(page1.json().items.map((p: any) => p.externalId)).toEqual([
+      "p-high",
+      "p-mid",
+    ]);
+    const page2 = await app.inject({
+      method: "GET",
+      url: "/api/v1/catalog/products?sort=priority&pageSize=2&page=2",
+    });
+    expect(page2.json().total).toBe(4);
+    expect(page2.json().items.map((p: any) => p.externalId)).toEqual([
+      "p-none",
+      "p-low",
+    ]);
+  });
+
+  it("与 country 过滤叠加：先过滤后算分排序（CA 的高分商品被排除）", async () => {
+    const ctx = setup();
+    const { app } = buildApp(ctx, "member");
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/catalog/products?sort=priority&country=US",
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.total).toBe(3);
+    expect(body.items.map((p: any) => p.externalId)).toEqual([
+      "p-mid",
+      "p-none",
+      "p-low",
+    ]);
+  });
+});
+
 describe("GET /api/v1/catalog/funnel（可投流漏斗）", () => {
   it("六段计数口径：total/passedGate/recommended/launchable/withAds/offersCreated", async () => {
     const { ctx } = makeCatalogFakePrisma();

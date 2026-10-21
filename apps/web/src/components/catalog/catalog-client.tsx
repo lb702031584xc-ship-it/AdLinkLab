@@ -64,6 +64,7 @@ import {
 } from "@/lib/api/catalog-actions";
 import { adCountTier } from "../../../../../packages/shared/src/ad-count-tier";
 import { PaidDataBillingNote } from "@/components/paid-data/billing-note";
+import { OfferTestPriorityCell } from "@/components/offers/offer-test-priority-cell";
 import { LaunchHistoryModal } from "./launch-history-modal";
 import {
   AdTrendMark,
@@ -79,7 +80,11 @@ import {
   localDayRangeToIso,
   localTodayString,
 } from "./added-date-range";
-import { resolveStoredSort, selectableProducts } from "./list-helpers";
+import {
+  priorityRankFor,
+  resolveStoredSort,
+  selectableProducts,
+} from "./list-helpers";
 import Link from "next/link";
 
 type Dict = typeof catalogZh;
@@ -3177,12 +3182,12 @@ export function CatalogClient({
           <table
             className="table-fixed border-collapse text-sm"
             style={{
-              width: "2748px",
+              width: "2844px",
               fontFamily:
                 '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif',
             }}
           >
-            {/* 固定布局：26 列宽由此唯一决定（合计 2748 = 表宽），auto 布局下
+            {/* 固定布局：27 列宽由此唯一决定（合计 2844 = 表宽），auto 布局下
                 各列 min-content 总和过约束会把广告格压成逐字竖排、盖住操作列。
                 左右 sticky 偏移与此严格对应：序号列 left-[36px] = 复选列宽 36，
                 操作列 right-0 自身宽 164。改列宽必须同步改这两处。 */}
@@ -3203,6 +3208,7 @@ export function CatalogClient({
               <col className="w-[104px]" />
               <col className="w-[112px]" />
               <col className="w-[100px]" />
+              <col className="w-[96px]" />
               <col className="w-[190px]" />
               <col className="w-[230px]" />
               <col className="w-[84px]" />
@@ -3249,6 +3255,7 @@ export function CatalogClient({
                 <th className="px-3 py-2.5 ">{d.products.colLandingType}</th>
                 {sortTh("reviews", d.products.colReviews)}
                 {sortTh("score", d.products.colScore)}
+                {sortTh("priority", d.products.colTestPriority)}
                 <th className="w-[190px] px-3 py-2.5">{d.products.colAds}</th>
                 <th className="min-w-[220px] max-w-[280px] px-3 py-2.5 ">
                   {d.products.colName}
@@ -3391,6 +3398,16 @@ export function CatalogClient({
                       ) : (
                         "—"
                       )}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2">
+                      {/* 测试优先分（后端与 Offer 侧同构现算）：分数 + 首条理由小字，
+                          全部理由在 title 悬停；仅 priority_desc 时按全局序号点亮
+                          前 5 名「先测」徽标（与 Offer 页同一组件、同一口径）。 */}
+                      <OfferTestPriorityCell
+                        priority={p.testPriority ?? null}
+                        rank={priorityRankFor(sort, seq)}
+                        dict={{ testFirst: d.products.testFirst }}
+                      />
                     </td>
                     <td className="w-[190px] min-w-[170px] max-w-[210px] px-3 py-2">
                       {p.adCount == null && probe.longtail == null ? (
