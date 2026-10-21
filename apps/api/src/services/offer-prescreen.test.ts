@@ -152,3 +152,197 @@ describe("prescreenOffers", () => {
     expect(outcomes[0].verdict).toBe("go");
   });
 });
+
+describe("prescreenOffers adStoppedCount（疑似停投计数）", () => {
+  function makeWorldWithProducts(
+    products: Array<Record<string, unknown>>,
+    profiles: Array<Record<string, unknown>> = []
+  ): PrismaClient {
+    return {
+      catalogBlacklist: { findMany: async () => [] },
+      catalogScreeningPreset: { findUnique: async () => null },
+      aiSetting: { findUnique: async () => null },
+      networkProduct: { findMany: async () => products },
+      brandProfile: { findMany: async () => profiles },
+      offer: { update: async () => ({}) },
+      adminGrantAudit: { create: async () => ({}) },
+    } as unknown as PrismaClient;
+  }
+  const gateOk = async () =>
+    ({
+      passed: true,
+      reason: "ok",
+      officialSite: null,
+      signals: [],
+    }) as TrafficGateResult;
+
+  it("上次有广告、本次 0 的商品计数；同品牌多 Offer 不重复计；无关品牌不计", async () => {
+    const prisma = makeWorldWithProducts([
+      { id: "np-s1", brand: "StoppedBrand", adCount: 0, lastAdCount: 4 },
+      { id: "np-s2", brand: "StoppedBrand", adCount: 0, lastAdCount: 2 },
+      { id: "np-s3", brand: "StoppedBrand", adCount: 3, lastAdCount: 1 },
+      { id: "np-o1", brand: "OtherBrand", adCount: 0, lastAdCount: 5 },
+    ]);
+    const { counts } = await prescreenOffers(
+      { prisma, gateEvaluator: gateOk, gatewayResolve: gatewayOk },
+      {
+        tenantId: "t1",
+        actorId: "u1",
+        userRole: "owner",
+        offers: [
+          offer({ id: "o-a", brandName: "StoppedBrand" }),
+          offer({ id: "o-b", brandName: "StoppedBrand" }),
+        ],
+      }
+    );
+    // np-s1/np-s2 停投（2 件）；np-s3 持续在投不计；OtherBrand 无 Offer 引用不计。
+    expect(counts.adStoppedCount).toBe(2);
+  });
+
+  it("网关拒绝 → adStoppedCount = 0", async () => {
+    const prisma = makeWorldWithProducts([
+      { id: "np-s1", brand: "StoppedBrand", adCount: 0, lastAdCount: 4 },
+    ]);
+    const { counts, skippedPaidLayer } = await prescreenOffers(
+      {
+        prisma,
+        gateEvaluator: gateOk,
+        gatewayResolve: async () => ({
+          allowed: false,
+          feature: "catalog-ad-count" as const,
+          reason: "no_grant" as const,
+        }),
+      },
+      {
+        tenantId: "t1",
+        actorId: "u2",
+        userRole: "member",
+        offers: [offer({ id: "o-a", brandName: "StoppedBrand" })],
+      }
+    );
+    expect(skippedPaidLayer).toBe(true);
+    expect(counts.adStoppedCount).toBe(0);
+  });
+});
+
+describe("prescreenOffers 广告层投放方式分流（promoMode）", () => {
+  function makeWorldWithProducts(
+    products: Array<Record<string, unknown>>,
+    profiles: Array<Record<string, unknown>> = []
+  ): PrismaClient {
+    return {
+      catalogBlacklist: { findMany: async () => [] },
+      catalogScreeningPreset: { findUnique: async () => null },
+      aiSetting: { findUnique: async () => null },
+      networkProduct: { findMany: async () => products },
+      brandProfile: { findMany: async () => profiles },
+      offer: { update: async () => ({}) },
+      adminGrantAudit: { create: async () => ({}) },
+    } as unknown as PrismaClient;
+  }
+  const gateOk = async () =>
+    ({
+      passed: true,
+      reason: "ok",
+      officialSite: null,
+      signals: [],
+    }) as TrafficGateResult;
+  const zeroProduct = (brand: string) => ({
+    id: `np-${brand}`,
+    brand,
+    networkId: "net-1",
+    countryCode: "US",
+    adCount: 0,
+    lastAdCount: null,
+  });
+  const profile = (brandKey: string, promoMode: string) => ({
+    networkId: "net-1",
+    brandKey,
+    countryCode: "US",
+    promoMode,
+  });
+
+  it("promoMode=product 品牌广告数 0 → 不判停 + adReferenceOnly + adWaivedCount", async () => {
+    const prisma = makeWorldWithProducts(
+      [zeroProduct("SoloBrand")],
+      [profile("solobrand", "product")]
+    );
+    const { outcomes, counts } = await prescreenOffers(
+      { prisma, gateEvaluator: gateOk, gatewayResolve: gatewayOk },
+      {
+        tenantId: "t1",
+        actorId: "u1",
+        userRole: "owner",
+        offers: [
+          offer({ id: "o-a", brandName: "SoloBrand" }),
+          offer({ id: "o-b", brandName: "SoloBrand" }),
+        ],
+      }
+    );
+    expect(counts.stop).toBe(0);
+    expect(counts.go).toBe(2);
+    expect(counts.adWaivedCount).toBe(2);
+    expect(outcomes.every((o) => o.adReferenceOnly === true)).toBe(true);
+  });
+
+  it("promoMode=brand 与未标注品牌：广告数 0 照旧判停，无豁免", async () => {
+    const prisma = makeWorldWithProducts(
+      [zeroProduct("BrandMode"), zeroProduct("PlainBrand")],
+      [profile("brandmode", "brand")]
+    );
+    const { outcomes, counts } = await prescreenOffers(
+      { prisma, gateEvaluator: gateOk, gatewayResolve: gatewayOk },
+      {
+        tenantId: "t1",
+        actorId: "u1",
+        userRole: "owner",
+        offers: [
+          offer({ id: "o-brand", brandName: "BrandMode" }),
+          offer({ id: "o-plain", brandName: "PlainBrand" }),
+        ],
+      }
+    );
+    expect(counts.stop).toBe(2);
+    expect(counts.adWaivedCount).toBe(0);
+    expect(outcomes.every((o) => o.adReferenceOnly === undefined)).toBe(true);
+    expect(outcomes.every((o) => o.reason.includes("广告数为 0"))).toBe(true);
+  });
+
+  it("promoMode=product 品牌广告数 ≥1 → 正常 pass，不加 adReferenceOnly", async () => {
+    const prisma = makeWorldWithProducts(
+      [{ ...zeroProduct("SoloBrand"), adCount: 4 }],
+      [profile("solobrand", "product")]
+    );
+    const { outcomes, counts } = await prescreenOffers(
+      { prisma, gateEvaluator: gateOk, gatewayResolve: gatewayOk },
+      {
+        tenantId: "t1",
+        actorId: "u1",
+        userRole: "owner",
+        offers: [offer({ id: "o-a", brandName: "SoloBrand" })],
+      }
+    );
+    expect(outcomes[0].verdict).toBe("go");
+    expect(outcomes[0].adReferenceOnly).toBeUndefined();
+    expect(counts.adWaivedCount).toBe(0);
+  });
+
+  it("promoMode=product 品牌被其他层（$8 门槛）判停 → 不受豁免影响", async () => {
+    const prisma = makeWorldWithProducts(
+      [zeroProduct("SoloBrand")],
+      [profile("solobrand", "product")]
+    );
+    const { outcomes, counts } = await prescreenOffers(
+      { prisma, gateEvaluator: gateOk, gatewayResolve: gatewayOk },
+      {
+        tenantId: "t1",
+        actorId: "u1",
+        userRole: "owner",
+        offers: [offer({ id: "o-low", brandName: "SoloBrand", commissionValue: 3 })],
+      }
+    );
+    expect(outcomes[0].verdict).toBe("stop");
+    expect(outcomes[0].reason).toContain("8");
+    expect(counts.adWaivedCount).toBe(0);
+  });
+});

@@ -62,6 +62,11 @@ import {
 import { adCountTier } from "../../../../../packages/shared/src/ad-count-tier";
 import { PaidDataBillingNote } from "@/components/paid-data/billing-note";
 import { LaunchHistoryModal } from "./launch-history-modal";
+import {
+  AdTrendMark,
+  CatalogBrandView,
+  adLandingSplitText,
+} from "./catalog-brand-view";
 import { selectableProducts } from "./list-helpers";
 import Link from "next/link";
 
@@ -1259,6 +1264,8 @@ export function CatalogClient({
   const [tab, setTab] = useState<"products" | "blacklist" | "whitelist">(
     "products"
   );
+  /** 商品表 / 品牌视图切换（品牌视图按品牌聚合，决策单位是品牌）。 */
+  const [viewMode, setViewMode] = useState<"products" | "brands">("products");
 
   // ---- network selection / sync ----
   const [networks, setNetworks] = useState(initialNetworks);
@@ -2632,6 +2639,30 @@ export function CatalogClient({
             </p>
           </div>
         )}
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <div className="inline-flex overflow-hidden rounded-lg border border-ink/15">
+            <button
+              className={
+                viewMode === "products"
+                  ? "bg-signal px-3 py-1.5 text-sm font-medium text-white"
+                  : "px-3 py-1.5 text-sm text-ink/70 transition hover:bg-ink/5"
+              }
+              onClick={() => setViewMode("products")}
+            >
+              {d.products.viewModeProducts}
+            </button>
+            <button
+              className={
+                viewMode === "brands"
+                  ? "bg-signal px-3 py-1.5 text-sm font-medium text-white"
+                  : "px-3 py-1.5 text-sm text-ink/70 transition hover:bg-ink/5"
+              }
+              onClick={() => setViewMode("brands")}
+            >
+              {d.products.viewModeBrands}
+            </button>
+          </div>
+        </div>
         <div className="mt-4 flex flex-wrap gap-2">
           {(["", "inbox", "pool", "testing", "live"] as const).map((st) => (
             <button
@@ -2784,6 +2815,15 @@ export function CatalogClient({
           </span>
         </div>
 
+        {viewMode === "brands" ? (
+          <CatalogBrandView
+            d={d}
+            networkId={selectedId}
+            country={countryFilter}
+            q={q}
+          />
+        ) : (
+          <>
         <p className="mt-3 text-xs text-ink/40">{d.products.dragHint}</p>
         <div
           ref={tableWrapRef}
@@ -3011,6 +3051,12 @@ export function CatalogClient({
                               </span>
                             );
                           })()}
+                          <AdTrendMark
+                            trend={p.adTrend ?? null}
+                            lastAdCount={p.lastAdCount ?? null}
+                            lastAdCountAt={p.lastAdCountAt ?? null}
+                            d={d.products}
+                          />
                           {p.adCountCheckedAt &&
                             Date.now() -
                               new Date(p.adCountCheckedAt).getTime() >
@@ -3027,6 +3073,18 @@ export function CatalogClient({
                                   .replace("{o}", String(p.adCountOthers))}
                               </span>
                             )}
+                          {(() => {
+                            const split = adLandingSplitText(
+                              p.adCountHome,
+                              p.adCountProduct,
+                              d.products
+                            );
+                            return split ? (
+                              <span className="block text-[11px] text-ink/50">
+                                {split}
+                              </span>
+                            ) : null;
+                          })()}
                         </span>
                       )}
                     </td>
@@ -3291,6 +3349,9 @@ export function CatalogClient({
           )}
         </div>
 
+          </>
+        )}
+
         {batchResult && (
           <div className="mt-3 space-y-2">
             <p className="rounded-lg bg-emerald-50 px-4 py-2 text-sm text-emerald-900">
@@ -3360,6 +3421,12 @@ export function CatalogClient({
               <span>{d.products.oneClickKilledTrafficGate.replace("{n}", String(screenReport.killedTrafficGate))}</span>
               <span>{d.products.oneClickReview.replace("{n}", String(screenReport.review))}</span>
               <span>{d.products.oneClickPassed.replace("{n}", String(screenReport.passed))}</span>
+              {typeof screenReport.adStoppedCount === "number" && (
+                <span>{d.products.oneClickAdStopped.replace("{n}", String(screenReport.adStoppedCount))}</span>
+              )}
+              {typeof screenReport.adWaivedCount === "number" && (
+                <span>{d.products.oneClickAdWaived.replace("{n}", String(screenReport.adWaivedCount))}</span>
+              )}
             </p>
             <p className="mt-1">
               {d.products.oneClickOffers

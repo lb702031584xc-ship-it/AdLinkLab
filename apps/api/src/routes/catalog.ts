@@ -9,6 +9,8 @@
  *   GET    /api/v1/catalog/sync-jobs               最近 20 条同步任务（?networkId）
  *   GET    /api/v1/catalog/sync-jobs/:id           单条同步任务（轮询进度/结果）
  *   GET    /api/v1/catalog/funnel                  ?networkId → 可投流漏斗计数
+ *   GET    /api/v1/catalog/brands                  品牌榜（品牌聚合 + brandScore；?networkId&country&q）
+ *   PUT    /api/v1/catalog/brands/landing-url      品牌档案写入（落地页链接 + promoMode 标注，部分更新）
  *   GET    /api/v1/catalog/products                商品分页（白名单置顶标记；sort=id_desc 默认主键倒序；?poolStage=inbox|pool|testing/live 过滤；recommended=true 时排除黑名单，与漏斗口径一致）
  *   PATCH  /api/v1/catalog/products/:id/pool-stage {poolStage} 单条移动备选池阶段（B6 catalog-sync 门禁+审计）
  *   POST   /api/v1/catalog/products/pool-stage     {ids[], poolStage} 批量移动阶段（B6 catalog-sync 门禁+审计）
@@ -33,7 +35,11 @@
  */
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
-import { NotFoundError, ValidationError } from "@adlinklab/shared";
+import {
+  estimateCommissionFigure,
+  NotFoundError,
+  ValidationError,
+} from "@adlinklab/shared";
 import type { PrismaClient } from "@adlinklab/database";
 import { requireAdmin, requireSession } from "./auth.js";
 import {
@@ -53,7 +59,13 @@ import {
   evaluateProduct,
   type ScreeningPreset,
 } from "../services/catalog-screening.js";
-import { calcBrandAdCounts } from "../services/brand-ad-count.js";
+import {
+  adBandOf,
+  calcBrandAdCounts,
+  deriveAdTrend,
+  type AdBand,
+  type AdTrend,
+} from "../services/brand-ad-count.js";
 import {
   forceSelectProducts,
   runOneClickScreen,
@@ -208,9 +220,21 @@ function serializeProduct(r: Record<string, unknown>, whitelisted: boolean) {
     adCount: numOrNull(r.adCount),
     adCountSelf: numOrNull(r.adCountSelf),
     adCountOthers: numOrNull(r.adCountOthers),
+    /** 广告落地拆分：落首页/旗舰店 vs 落商品页的条数（other 不计入两者）。 */
+    adCountHome: numOrNull(r.adCountHome),
+    adCountProduct: numOrNull(r.adCountProduct),
     adCountCheckedAt:
       (r.adCountCheckedAt as Date)?.toISOString?.() ??
       (typeof r.adCountCheckedAt === "string" ? r.adCountCheckedAt : null),
+    /** 上一次广告数快照（重算时由旧 adCount 挪入）与快照时间；趋势现算不落库：
+     * first（首次）/ new（新投）/ stopped（疑似停投）/ active（持续）/ none / null（未计算）。 */
+    lastAdCount: numOrNull(r.lastAdCount),
+    lastAdCountAt:
+      (r.lastAdCountCheckedAt as Date)?.toISOString?.() ??
+      (typeof r.lastAdCountCheckedAt === "string"
+        ? r.lastAdCountCheckedAt
+        : null),
+    adTrend: deriveAdTrend(numOrNull(r.adCount), numOrNull(r.lastAdCount)),
     syncStreak: r.syncStreak ?? 0,
     whitelisted,
     /** 一键筛选结论（未筛 → null）：pass | kill | review + 原因 + 时间。 */
@@ -222,6 +246,47 @@ function serializeProduct(r: Record<string, unknown>, whitelisted: boolean) {
     syncedAt: (r.syncedAt as Date)?.toISOString?.() ?? null,
     createdAt: (r.createdAt as Date)?.toISOString?.() ?? null,
   };
+}
+
+/** 品牌归一化键：trim + 小写 + 连续空白折叠（品牌聚合与 BrandProfile 共用同一口径）。 */
+export function normalizeBrandKey(brand: string): string {
+  return brand.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/**
+ * 品牌投放分（0–100，确定性，全部真实输入；公式见 GET /catalog/brands）：
+ * 广告分 0–40 + 佣金分 0–30 + 价格分 0–20 + 丰富分 0–10。
+ */
+function computeBrandScore(args: {
+  adCount: number | null;
+  adBand: AdBand | null;
+  adTrend: AdTrend | null;
+  maxCommissionUsd: number | null;
+  ge80Count: number;
+  productCount: number;
+}): number {
+  let adScore: number;
+  if (args.adCount === null || args.adBand === null) adScore = 10;
+  else
+    adScore = { none: 5, small: 30, sweet: 40, hot: 30, redocean: 15 }[
+      args.adBand
+    ];
+  // 疑似停投：曾经投、现在停了，广告分封顶到「无人投放」档。
+  if (args.adTrend === "stopped") adScore = Math.min(adScore, 5);
+  let commissionScore: number;
+  const c = args.maxCommissionUsd;
+  if (c === null) commissionScore = 5;
+  else if (c >= 50) commissionScore = 30;
+  else if (c >= 25) commissionScore = 24;
+  else if (c >= 8) commissionScore = 16;
+  else if (c > 0) commissionScore = 8;
+  else commissionScore = 0;
+  const priceScore =
+    args.productCount > 0
+      ? Math.round((20 * args.ge80Count) / args.productCount)
+      : 0;
+  const richnessScore = Math.min(args.productCount, 10);
+  return adScore + commissionScore + priceScore + richnessScore;
 }
 
 async function findNetwork(prisma: PrismaClient, tenantId: string, id: string) {
@@ -976,6 +1041,349 @@ export async function registerCatalogRoutes(
       .sort();
     return { countries };
   });
+
+  /* ── 品牌榜（按品牌聚合：投放决策单位是品牌，不是单品） ──
+   * 分组键 = 归一化品牌名（brandKey）× 国家（countryCode，空 = 单独成组）× 网络。
+   * brandScore（0–100，确定性）：广告分 0–40（未计算 10 / none 5 / small 30 /
+   * sweet 40 / hot 30 / redocean 15；疑似停投封顶 5）+ 佣金分 0–30
+   * （maxCommissionUsd：未知 5 / ≥50→30 / ≥25→24 / ≥8→16 / >0→8 / 0→0）
+   * + 价格分 0–20（≥$80 件数占比 ×20，价格按原始数字直比不换汇）
+   * + 丰富分 0–10（min(商品数, 10)）。
+   * landingUrl / promoMode 来自 BrandProfile（品牌级落地页链接 + 投放方式
+   * 显式标注）；无行 → 都为 null，表示该品牌未标注投放方式、走单品投放
+   * ——中性状态，不是缺失（有些联盟品牌没有品牌级投放链接）。 */
+  app.get("/api/v1/catalog/brands", async (request) => {
+    const info = await requireSession(deps, request);
+    const query = request.query as Record<string, unknown>;
+    const where: Record<string, unknown> = { tenantId: info.tenantId };
+    if (query.networkId)
+      where.networkId = assertId(query.networkId, "networkId");
+    if (typeof query.country === "string" && query.country.trim())
+      where.countryCode = query.country.trim().toUpperCase();
+    const rows = (await prisma.networkProduct.findMany({
+      where,
+      select: {
+        id: true,
+        name: true,
+        brand: true,
+        countryCode: true,
+        networkId: true,
+        price: true,
+        commissionAmount: true,
+        commissionRate: true,
+        recommendationScore: true,
+        promoUrl: true,
+        poolStage: true,
+        adCount: true,
+        adCountSelf: true,
+        adCountOthers: true,
+        adCountHome: true,
+        adCountProduct: true,
+        lastAdCount: true,
+      },
+    })) as Array<Record<string, unknown>>;
+    const q =
+      typeof query.q === "string" ? query.q.trim().toLowerCase() : "";
+
+    interface BrandGroup {
+      brand: string;
+      brandCounts: Map<string, number>;
+      brandKey: string;
+      countryCode: string | null;
+      networkId: string;
+      productCount: number;
+      priceMin: number | null;
+      priceMax: number | null;
+      maxRatePct: number | null;
+      maxCommissionUsd: number | null;
+      ge80Count: number;
+      adCount: number | null;
+      adCountSelf: number | null;
+      adCountOthers: number | null;
+      adCountHome: number | null;
+      adCountProduct: number | null;
+      lastAdCount: number | null;
+      products: Array<Record<string, unknown>>;
+    }
+    const groups = new Map<string, BrandGroup>();
+    for (const r of rows) {
+      const rawBrand = typeof r.brand === "string" ? r.brand.trim() : "";
+      if (!rawBrand) continue;
+      if (q && !rawBrand.toLowerCase().includes(q)) continue;
+      const brandKey = normalizeBrandKey(rawBrand);
+      const countryCode =
+        typeof r.countryCode === "string" && r.countryCode.trim()
+          ? r.countryCode.trim().toUpperCase()
+          : null;
+      const networkId = (r.networkId as string) ?? "";
+      const key = `${networkId}${brandKey}${countryCode ?? ""}`;
+      let g = groups.get(key);
+      if (!g) {
+        g = {
+          brand: rawBrand,
+          brandCounts: new Map(),
+          brandKey,
+          countryCode,
+          networkId,
+          productCount: 0,
+          priceMin: null,
+          priceMax: null,
+          maxRatePct: null,
+          maxCommissionUsd: null,
+          ge80Count: 0,
+          adCount: null,
+          adCountSelf: null,
+          adCountOthers: null,
+          adCountHome: null,
+          adCountProduct: null,
+          lastAdCount: null,
+          products: [],
+        };
+        groups.set(key, g);
+      }
+      g.brandCounts.set(rawBrand, (g.brandCounts.get(rawBrand) ?? 0) + 1);
+      g.productCount += 1;
+      const price = numOrNull(r.price);
+      if (price !== null) {
+        g.priceMin = g.priceMin === null ? price : Math.min(g.priceMin, price);
+        g.priceMax = g.priceMax === null ? price : Math.max(g.priceMax, price);
+        if (price >= 80) g.ge80Count += 1;
+      }
+      const ratePct = numOrNull(r.commissionRate);
+      if (ratePct !== null)
+        g.maxRatePct =
+          g.maxRatePct === null ? ratePct : Math.max(g.maxRatePct, ratePct);
+      // 单品佣金金额沿用全站口径：固定佣金优先，否则 价格 × 佣金率估算；算不出不参与。
+      const fig = estimateCommissionFigure({
+        amount: r.commissionAmount,
+        ratePct: r.commissionRate,
+        price: r.price,
+      });
+      if (fig.figure !== null)
+        g.maxCommissionUsd =
+          g.maxCommissionUsd === null
+            ? fig.figure
+            : Math.max(g.maxCommissionUsd, fig.figure);
+      // 广告数是组级统一写入的，取第一个非 null 即组值。
+      if (g.adCount === null) g.adCount = numOrNull(r.adCount);
+      if (g.adCountSelf === null) g.adCountSelf = numOrNull(r.adCountSelf);
+      if (g.adCountOthers === null)
+        g.adCountOthers = numOrNull(r.adCountOthers);
+      if (g.adCountHome === null) g.adCountHome = numOrNull(r.adCountHome);
+      if (g.adCountProduct === null)
+        g.adCountProduct = numOrNull(r.adCountProduct);
+      if (g.lastAdCount === null) g.lastAdCount = numOrNull(r.lastAdCount);
+      g.products.push({
+        id: r.id,
+        name: r.name,
+        price,
+        ratePct,
+        commissionUsd: fig.figure,
+        score: numOrNull(r.recommendationScore),
+        promoUrl: (r.promoUrl as string) ?? null,
+        poolStage: (r.poolStage as string) ?? null,
+      });
+    }
+
+    // 品牌落地页链接 + 投放方式标注：一次查全租户 BrandProfile，按 网络×品牌×国家 对号。
+    const profiles = (await prisma.brandProfile.findMany({
+      where: { tenantId: info.tenantId },
+      select: {
+        networkId: true,
+        brandKey: true,
+        countryCode: true,
+        landingUrl: true,
+        promoMode: true,
+      },
+    })) as Array<Record<string, unknown>>;
+    const profileByKey = new Map<
+      string,
+      { landingUrl: string; promoMode: string | null }
+    >();
+    for (const p of profiles) {
+      profileByKey.set(
+        `${(p.networkId as string) ?? ""}${(p.brandKey as string) ?? ""}${(p.countryCode as string) ?? ""}`,
+        {
+          landingUrl: (p.landingUrl as string) ?? "",
+          promoMode: (p.promoMode as string) ?? null,
+        }
+      );
+    }
+
+    const brands = [...groups.values()].map((g) => {
+      // 展示名 = 组内最常见的原始 brand 写法（并列取先出现者）。
+      let display = g.brand;
+      let best = 0;
+      for (const [name, count] of g.brandCounts) {
+        if (count > best) {
+          best = count;
+          display = name;
+        }
+      }
+      const adTrend = deriveAdTrend(g.adCount, g.lastAdCount);
+      const adBand = adBandOf(g.adCount);
+      const brandScore = computeBrandScore({
+        adCount: g.adCount,
+        adBand,
+        adTrend,
+        maxCommissionUsd: g.maxCommissionUsd,
+        ge80Count: g.ge80Count,
+        productCount: g.productCount,
+      });
+      const topProducts = [...g.products]
+        .sort((a, b) => {
+          const sa = (a.score as number | null) ?? null;
+          const sb = (b.score as number | null) ?? null;
+          if (sa === null && sb === null) return 0;
+          if (sa === null) return 1;
+          if (sb === null) return -1;
+          return sb - sa;
+        })
+        .slice(0, 5);
+      const profile = profileByKey.get(
+        `${g.networkId}${g.brandKey}${g.countryCode ?? ""}`
+      );
+      return {
+        brand: display,
+        brandKey: g.brandKey,
+        countryCode: g.countryCode,
+        networkId: g.networkId,
+        productCount: g.productCount,
+        priceMin: g.priceMin,
+        priceMax: g.priceMax,
+        maxRatePct: g.maxRatePct,
+        maxCommissionUsd: g.maxCommissionUsd,
+        ge80Count: g.ge80Count,
+        adCount: g.adCount,
+        adCountSelf: g.adCountSelf,
+        adCountOthers: g.adCountOthers,
+        adCountHome: g.adCountHome,
+        adCountProduct: g.adCountProduct,
+        lastAdCount: g.lastAdCount,
+        adTrend,
+        adBand,
+        brandScore,
+        // landingUrl 存 "" = 无链接（只有 promoMode 标注的行）→ 对外归 null。
+        landingUrl: profile?.landingUrl ? profile.landingUrl : null,
+        promoMode: profile?.promoMode ?? null,
+        topProducts,
+      };
+    });
+    brands.sort(
+      (a, b) =>
+        b.brandScore - a.brandScore ||
+        b.productCount - a.productCount ||
+        a.brandKey.localeCompare(b.brandKey)
+    );
+    return { brands: brands.slice(0, 200), total: brands.length };
+  });
+
+  /* ── 品牌档案写入（PUT）：落地页链接 + 投放方式标注，部分更新 ──
+   * landingUrl 省略 = 不改；"" = 清除链接；非空须 http(s) 且 ≤2000。
+   * promoMode 省略 = 不改；null = 清回未标注；"brand"/"product" = 设置；其余 400。
+   * 两者至少给一个。链接与标注都清空的行直接删除（无行 = 未标注 + 无链接）。 */
+  app.put<{ Body: Record<string, unknown> }>(
+    "/api/v1/catalog/brands/landing-url",
+    async (request) => {
+      const info = await requireSession(deps, request);
+      const body = request.body ?? {};
+      const networkId = assertId(body.networkId, "networkId");
+      const brandKey =
+        typeof body.brandKey === "string"
+          ? normalizeBrandKey(body.brandKey)
+          : "";
+      if (!brandKey) throw new ValidationError("brandKey 不能为空");
+      const countryCode =
+        typeof body.countryCode === "string"
+          ? body.countryCode.trim().toUpperCase()
+          : "";
+      const hasLanding = body.landingUrl !== undefined;
+      const hasMode = body.promoMode !== undefined;
+      if (!hasLanding && !hasMode)
+        throw new ValidationError("landingUrl 与 promoMode 至少提供一个");
+      let landingPatch: string | undefined;
+      if (hasLanding) {
+        if (typeof body.landingUrl !== "string")
+          throw new ValidationError("landingUrl 必须是字符串");
+        const v = body.landingUrl.trim();
+        if (v !== "") {
+          if (v.length > 2000)
+            throw new ValidationError("landingUrl 过长（上限 2000 字符）");
+          let parsed: URL;
+          try {
+            parsed = new URL(v);
+          } catch {
+            throw new ValidationError("landingUrl 不是合法 URL");
+          }
+          if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+            throw new ValidationError("landingUrl 必须是 http(s) URL");
+        }
+        landingPatch = v;
+      }
+      let modePatch: string | null | undefined;
+      if (hasMode) {
+        if (
+          body.promoMode !== null &&
+          body.promoMode !== "brand" &&
+          body.promoMode !== "product"
+        )
+          throw new ValidationError(
+            "promoMode 只能是 \"brand\" / \"product\" / null"
+          );
+        modePatch = body.promoMode as string | null;
+      }
+      const existing = (await prisma.brandProfile.findFirst({
+        where: {
+          tenantId: info.tenantId,
+          networkId,
+          brandKey,
+          countryCode,
+        },
+        select: { id: true, landingUrl: true, promoMode: true },
+      })) as {
+        id: string;
+        landingUrl: string;
+        promoMode: string | null;
+      } | null;
+      const nextLanding = hasLanding
+        ? (landingPatch as string)
+        : (existing?.landingUrl ?? "");
+      const nextMode = hasMode
+        ? modePatch
+        : (existing?.promoMode ?? null);
+      if (!existing && nextLanding === "" && nextMode === null) {
+        // 无行且无任何可存内容（只做了清除动作）→ 不建空行。
+        return { ok: true, landingUrl: null, promoMode: null };
+      }
+      if (existing && nextLanding === "" && nextMode === null) {
+        // 链接与标注都清空 → 删行（回到「无品牌档案」状态）。
+        await prisma.brandProfile.delete({ where: { id: existing.id } });
+        return { ok: true, landingUrl: null, promoMode: null };
+      }
+      if (existing) {
+        await prisma.brandProfile.update({
+          where: { id: existing.id },
+          data: { landingUrl: nextLanding, promoMode: nextMode },
+        });
+      } else {
+        await prisma.brandProfile.create({
+          data: {
+            tenantId: info.tenantId,
+            networkId,
+            brandKey,
+            countryCode,
+            landingUrl: nextLanding,
+            promoMode: nextMode,
+          },
+        });
+      }
+      return {
+        ok: true,
+        landingUrl: nextLanding === "" ? null : nextLanding,
+        promoMode: nextMode,
+      };
+    }
+  );
 
   /* ── 可投流漏斗计数 ──
    * 口径（用现有字段能算的最合理近似，逐项注明）：

@@ -60,6 +60,9 @@ export interface CatalogNetwork {
   sessionExpiresAt?: string | null;
 }
 
+/** 广告趋势：first 首次计算 | new 新投 | stopped 疑似停投 | active 持续在投 | none 无信息量（0→0）；null = 未计算。 */
+export type AdTrend = "first" | "new" | "stopped" | "active" | "none";
+
 export interface CatalogProduct {
   id: string;
   networkId: string;
@@ -90,6 +93,15 @@ export interface CatalogProduct {
   adCountSelf?: number | null;
   adCountOthers?: number | null;
   adCountCheckedAt?: string | null;
+  /** 上次广告数快照（趋势对比用；null = 无上次记录）。 */
+  lastAdCount?: number | null;
+  lastAdCountAt?: string | null;
+  /** 广告趋势标记（后端按 lastAdCount vs adCount 算出；null = 未计算）。 */
+  adTrend?: AdTrend | null;
+  /** 广告落地类型拆分：落地页为品牌首页/旗舰店的条数（null = 未知/未拆分）。 */
+  adCountHome?: number | null;
+  /** 广告落地类型拆分：落地页为单个商品页的条数；判不了类型的不计入，total 不变。 */
+  adCountProduct?: number | null;
   /** Optional for forward-compat: the backend list-flag batch is still landing. */
   blacklisted?: boolean;
   whitelisted?: boolean;
@@ -744,6 +756,100 @@ export async function listCatalogCountriesAction(networkId?: string) {
   );
 }
 
+/* ── 品牌视图（按品牌聚合：品牌分排序 + Top 商品 + 品牌落地页） ── */
+
+/** 品牌广告分档（与后端 brands 接口契约一致；注意 redocean 无下划线）。 */
+export type AdBandKey = "none" | "small" | "sweet" | "hot" | "redocean";
+
+/** 品牌投放方式显式标注：brand 品牌页投放 / product 单品投放；null = 未标注。 */
+export type BrandPromoMode = "brand" | "product";
+
+export interface CatalogBrandTopProduct {
+  id: string;
+  name: string;
+  price: number | null;
+  ratePct: number | null;
+  commissionUsd: number | null;
+  score: number | null;
+  promoUrl: string | null;
+  poolStage: string | null;
+}
+
+export interface CatalogBrand {
+  brand: string;
+  brandKey: string;
+  countryCode: string | null;
+  networkId: string;
+  productCount: number;
+  priceMin: number | null;
+  priceMax: number | null;
+  maxRatePct: number | null;
+  maxCommissionUsd: number | null;
+  ge80Count: number;
+  adCount: number | null;
+  adCountSelf: number | null;
+  adCountOthers: number | null;
+  /** 广告落地类型拆分：落品牌首页/旗舰店条数、落单个商品页条数（null = 未知）。 */
+  adCountHome: number | null;
+  adCountProduct: number | null;
+  lastAdCount: number | null;
+  adTrend: AdTrend | null;
+  adBand: AdBandKey | null;
+  brandScore: number;
+  /** 品牌落地页链接（旗舰店/官网首页）；null = 未填链接（不代表单品，投放方式看 promoMode）。 */
+  landingUrl: string | null;
+  /** 投放方式显式标注（用户在品牌行手动标）：brand/product；null = 未标注。 */
+  promoMode: BrandPromoMode | null;
+  topProducts: CatalogBrandTopProduct[];
+}
+
+/** 品牌榜：后端已按 brandScore 降序，前端不要重排。 */
+export async function listCatalogBrandsAction(params?: {
+  networkId?: string;
+  country?: string;
+  q?: string;
+}) {
+  const qs = new URLSearchParams();
+  if (params?.networkId) qs.set("networkId", params.networkId);
+  if (params?.country) qs.set("country", params.country);
+  if (params?.q) qs.set("q", params.q);
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return attempt(
+    () =>
+      apiFetch<{ brands: CatalogBrand[]; total: number }>(
+        `/api/v1/catalog/brands${suffix}`
+      ),
+    []
+  );
+}
+
+/**
+ * 保存品牌落地页链接 / 投放方式标注（同一端点）：
+ * landingUrl="" = 清除链接；promoMode 省略 = 不改、null = 清回未标注；
+ * landingUrl 与 promoMode 至少给一个。
+ */
+export async function saveBrandLandingUrlAction(input: {
+  networkId: string;
+  brandKey: string;
+  countryCode: string | null;
+  landingUrl?: string;
+  promoMode?: BrandPromoMode | null;
+}) {
+  return attempt(
+    () =>
+      apiFetch<{
+        ok: boolean;
+        landingUrl: string | null;
+        promoMode: BrandPromoMode | null;
+      }>("/api/v1/catalog/brands/landing-url", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      }),
+    ["/catalog"]
+  );
+}
+
 /** 从 rawData 回填 brand/asin/price/reviewCount（只补空，不覆盖）。 */
 export async function backfillCatalogProductsAction(networkId?: string) {
   return attempt(
@@ -847,6 +953,10 @@ export interface OneClickScreenReport {
     hot: number;
     red_ocean: number;
   };
+  /** 疑似停投数（上次有广告、本次查为 0 的品牌组）；后端未给时缺省，前端有值才渲染。 */
+  adStoppedCount?: number;
+  /** 广告层豁免数（所属品牌标了「单品投放」、初筛广告层被豁免的件数）；有值才渲染。 */
+  adWaivedCount?: number;
   outcomes: Array<{
     productId: string;
     outcome: "pass" | "kill" | "review";

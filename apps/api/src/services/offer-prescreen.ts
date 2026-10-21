@@ -11,7 +11,11 @@
  *    按预设既有口径参与；佣金未知时金额维度置 0 不判死）
  * 4. 广告数（品牌级，经付费数据网关）：以同租户同品牌商品的 adCount 为据；
  *    未知时经网关增量计算；网关拒绝 → 整层跳过（skippedPaidLayer）；
- *    已知全为 0 → stop；仍未知 → unknown 标记
+ *    已知全为 0 → stop；仍未知 → unknown 标记。
+ *    例外（投放方式分流）：品牌被显式标注 promoMode="product"（没有品牌级
+ *    链接、只能走单品）时，品牌词广告数只作参考——全为 0 也不判 stop，
+ *    结果加 adReferenceOnly 标记并计入 adWaivedCount；标注 "brand" 或
+ *    未标注维持原口径。标注按 网络×品牌×国家 查 BrandProfile。
  * 5. 流量门免费档（evaluateTrafficGate）：false → stop；null → unknown 标记
  *
  * 合成：任一 stop → "stop"；无 stop 但有 unknown 标记 → "unknown"；
@@ -34,6 +38,7 @@ import type { TrafficGateResult } from "../traffic/types.js";
 import { writeCatalogAudit } from "./catalog-blacklist.js";
 import {
   calcBrandAdCounts,
+  deriveAdTrend,
   type BrandAdCountResult,
 } from "./brand-ad-count.js";
 import {
@@ -52,6 +57,8 @@ export interface OfferPrescreenOutcome {
   offerId: string;
   verdict: OfferPrescreenVerdict;
   reason: string;
+  /** 广告层被 promoMode="product" 分流豁免（广告数仅作参考，未参与判停）。 */
+  adReferenceOnly?: boolean;
 }
 
 export interface OfferPrescreenDeps {
@@ -134,7 +141,16 @@ export async function prescreenOffers(
 ): Promise<{
   outcomes: OfferPrescreenOutcome[];
   skippedPaidLayer: boolean;
-  counts: { go: number; unknown: number; stop: number; notFound: number };
+  counts: {
+    go: number;
+    unknown: number;
+    stop: number;
+    notFound: number;
+    /** 本次评估涉及的商品中「疑似停投」（上次有广告、本次 0）的件数。 */
+    adStoppedCount: number;
+    /** 本次被 promoMode="product" 分流豁免广告层判停的 Offer 件数。 */
+    adWaivedCount: number;
+  };
 }> {
   const { prisma } = deps;
   const { tenantId, offers } = input;
@@ -159,6 +175,7 @@ export async function prescreenOffers(
     stopReason?: string;
     flags: string[];
     needsAdData: boolean;
+    adReferenceOnly?: boolean;
   }
   const works: Work[] = offers.map((o) => ({ o, flags: [], needsAdData: false }));
 
@@ -223,6 +240,8 @@ export async function prescreenOffers(
 
   /* ── 4) 广告数（品牌级，付费层经网关） ── */
   let skippedPaidLayer = false;
+  let adStoppedCount = 0;
+  let adWaivedCount = 0;
   const adCandidates = works.filter((w) => !w.stopReason && w.needsAdData);
   if (adCandidates.length > 0) {
     const access = await gatewayResolve(prisma, {
@@ -234,18 +253,75 @@ export async function prescreenOffers(
     if (!access.allowed) {
       skippedPaidLayer = true;
     } else {
+      // 品牌投放方式标注（BrandProfile）：按 网络×品牌键×国家 预加载成 map。
+      // brandKey 归一化与 routes/catalog.ts normalizeBrandKey 同口径
+      // （trim + 小写 + 空白折叠）；商品 countryCode 为 null 时用 "" 查。
+      const brandKeyOf = (s: string | null): string =>
+        (s ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+      const profileRows =
+        (await prisma.brandProfile?.findMany({
+          where: { tenantId },
+          select: {
+            networkId: true,
+            brandKey: true,
+            countryCode: true,
+            promoMode: true,
+          },
+        })) ?? [];
+      const promoModeByKey = new Map<string, string | null>();
+      for (const p of profileRows as Array<{
+        networkId: string;
+        brandKey: string;
+        countryCode: string;
+        promoMode: string | null;
+      }>) {
+        promoModeByKey.set(
+          `${p.networkId}${p.brandKey}${p.countryCode}`,
+          p.promoMode ?? null
+        );
+      }
       // 同品牌商品（品牌名归一化后精确匹配）的广告数即品牌级广告数。
       const allProducts = (await prisma.networkProduct.findMany({
         where: { tenantId },
-        select: { id: true, brand: true, adCount: true },
-      })) as Array<{ id: string; brand: string | null; adCount: number | null }>;
+        select: {
+          id: true,
+          brand: true,
+          networkId: true,
+          countryCode: true,
+          adCount: true,
+          lastAdCount: true,
+        },
+      })) as Array<{
+        id: string;
+        brand: string | null;
+        networkId: string | null;
+        countryCode: string | null;
+        adCount: number | null;
+        lastAdCount: number | null;
+      }>;
       const norm = (s: string | null) => (s ?? "").trim().toLowerCase();
-      const byBrand = new Map<string, Array<{ id: string; adCount: number | null }>>();
+      const byBrand = new Map<
+        string,
+        Array<{
+          id: string;
+          adCount: number | null;
+          lastAdCount: number | null;
+          promoMode: string | null;
+        }>
+      >();
       for (const p of allProducts) {
         const key = norm(p.brand);
         if (!key) continue;
         const arr = byBrand.get(key) ?? [];
-        arr.push({ id: p.id, adCount: p.adCount });
+        arr.push({
+          id: p.id,
+          adCount: p.adCount,
+          lastAdCount: p.lastAdCount,
+          promoMode:
+            promoModeByKey.get(
+              `${p.networkId ?? ""}${brandKeyOf(p.brand)}${(p.countryCode ?? "").trim().toUpperCase()}`
+            ) ?? null,
+        });
         byBrand.set(key, arr);
       }
       // 先给「品牌有商品但广告数全未知」的品牌做一次增量计算。
@@ -272,13 +348,26 @@ export async function prescreenOffers(
           });
           const refreshed = (await prisma.networkProduct.findMany({
             where: { tenantId, id: { in: [...new Set(calcIds)] } },
-            select: { id: true, brand: true, adCount: true },
-          })) as Array<{ id: string; brand: string | null; adCount: number | null }>;
+            select: {
+              id: true,
+              brand: true,
+              adCount: true,
+              lastAdCount: true,
+            },
+          })) as Array<{
+            id: string;
+            brand: string | null;
+            adCount: number | null;
+            lastAdCount: number | null;
+          }>;
           for (const p of refreshed) {
             const key = norm(p.brand);
             const arr = byBrand.get(key) ?? [];
             const hit = arr.find((r) => r.id === p.id);
-            if (hit) hit.adCount = p.adCount;
+            if (hit) {
+              hit.adCount = p.adCount;
+              hit.lastAdCount = p.lastAdCount;
+            }
           }
         }
       }
@@ -290,7 +379,27 @@ export async function prescreenOffers(
         if (known.length === 0) {
           w.flags.push("品牌广告数无数据，待人工复核");
         } else if (known.every((v) => v === 0)) {
-          w.stopReason = "广告数为 0：该品牌暂无人在投放";
+          // 投放方式分流：组内有 promoMode="product" 标注且无 "brand" 标注
+          // → 该品牌只能走单品，品牌词广告数只作参考，全 0 不判停。
+          const modes = new Set(rows.map((r) => r.promoMode));
+          if (modes.has("product") && !modes.has("brand")) {
+            w.adReferenceOnly = true;
+            adWaivedCount += 1;
+          } else {
+            w.stopReason = "广告数为 0：该品牌暂无人在投放";
+          }
+        }
+      }
+      // 疑似停投计数：本次评估涉及的品牌商品里，上次有广告、本次归 0 的件数
+      // （同一商品被多个 Offer 引用只计一次；趋势由 adCount/lastAdCount 现算）。
+      const countedIds = new Set<string>();
+      for (const w of adCandidates) {
+        const rows = byBrand.get(norm(w.o.brandName)) ?? [];
+        for (const r of rows) {
+          if (countedIds.has(r.id)) continue;
+          countedIds.add(r.id);
+          if (deriveAdTrend(r.adCount, r.lastAdCount) === "stopped")
+            adStoppedCount += 1;
         }
       }
     }
@@ -298,7 +407,14 @@ export async function prescreenOffers(
 
   /* ── 5) 流量门免费档 + 落账 ── */
   const outcomes: OfferPrescreenOutcome[] = [];
-  const counts = { go: 0, unknown: 0, stop: 0, notFound: 0 };
+  const counts = {
+    go: 0,
+    unknown: 0,
+    stop: 0,
+    notFound: 0,
+    adStoppedCount,
+    adWaivedCount,
+  };
   const now = new Date();
   for (const w of works) {
     const o = w.o;
@@ -324,7 +440,12 @@ export async function prescreenOffers(
         : "go";
     const reason = w.stopReason ?? w.flags.join("；") ?? "";
     counts[verdict] += 1;
-    outcomes.push({ offerId: o.id, verdict, reason });
+    outcomes.push({
+      offerId: o.id,
+      verdict,
+      reason,
+      ...(w.adReferenceOnly ? { adReferenceOnly: true } : {}),
+    });
     await prisma.offer.update({
       where: { id: o.id },
       data: {
@@ -344,6 +465,8 @@ export async function prescreenOffers(
       go: counts.go,
       unknown: counts.unknown,
       stop: counts.stop,
+      adStoppedCount: counts.adStoppedCount,
+      adWaivedCount: counts.adWaivedCount,
       skippedPaidLayer,
     },
   });

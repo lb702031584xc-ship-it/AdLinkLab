@@ -6,9 +6,13 @@
  *   加密存储）。凭证缺失 → 抛错（明确提示未配置），不静默返回假数据。
  * - 口径：keyword = 品牌名，数 SERP items 里 type === "paid" 的条数。
  *   广告落地页域名含品牌名 → 自投（self）；其余 → 他投（others）。
+ *   另按落地页 URL 分类累计 adCountHome（落首页/旗舰店）/ adCountProduct
+ *   （落商品页），other 不计入——用来看同行在用哪种打法投这个品牌。
  *   落地页是 Amazon 的商品分不清自投/他投（谁投落地页都是 amazon.com），
  *   只记 total，self/others 记 null。
  * - 缓存：同一（品牌，国家）组内任一商品 14 天内查过 → 整组跳过，不重复花钱。
+ * - 历史快照：重算写入新值前，把组内旧 adCount/adCountCheckedAt 挪到
+ *   lastAdCount/lastAdCountCheckedAt，趋势（deriveAdTrend）由新旧两值现算。
  * - 单组 SERP 失败不中断整批：跳过该组并把原因记入返回值 errors。
  */
 import type { PrismaClient } from "@adlinklab/database";
@@ -53,6 +57,40 @@ export interface AdCountClassification {
   others: number;
 }
 
+/** 广告数趋势（本次 adCount vs 上次快照 lastAdCount 现算，不落库）。 */
+export type AdTrend = "first" | "new" | "stopped" | "active" | "none";
+
+/**
+ * 由本次广告数与上次快照派生趋势：
+ * - adCount 未计算（null）→ null（无从判断）
+ * - 没有上次快照（lastAdCount 为 null）→ "first"（首次计算）
+ * - 上次 0、本次 >0 → "new"（新投）；上次 >0、本次 0 → "stopped"（疑似停投）
+ * - 两次都 >0 → "active"（持续在投）；两次都 0 → "none"（持续无人投）
+ */
+export function deriveAdTrend(
+  adCount: number | null,
+  lastAdCount: number | null
+): AdTrend | null {
+  if (adCount == null) return null;
+  if (lastAdCount == null) return "first";
+  if (lastAdCount === 0 && adCount > 0) return "new";
+  if (lastAdCount > 0 && adCount === 0) return "stopped";
+  if (lastAdCount > 0 && adCount > 0) return "active";
+  return "none";
+}
+
+/** 广告数分档（品牌+国家观测广告数，经验口径；null = 未计算）。 */
+export type AdBand = "none" | "small" | "sweet" | "hot" | "redocean";
+
+export function adBandOf(adCount: number | null): AdBand | null {
+  if (adCount == null) return null;
+  if (adCount === 0) return "none";
+  if (adCount <= 5) return "small";
+  if (adCount <= 20) return "sweet";
+  if (adCount <= 50) return "hot";
+  return "redocean";
+}
+
 /** 品牌名归一化：小写 + 只留字母数字（去空格/符号），用于域名包含判断。 */
 function normalizeBrand(brand: string): string {
   return brand.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -91,6 +129,70 @@ export function classifyAds(
   return { total: ads.length, self, others };
 }
 
+/** 广告落地页类型：home（首页/旗舰店）| product（商品页）| other（判不了）。 */
+export type AdLandingType = "home" | "product" | "other";
+
+/**
+ * 按落地页 URL 启发式分类广告落在哪里（纯函数）：
+ * - Amazon 站：/dp/、/gp/product/、/product/ → product；
+ *   /stores/、/store/、/shop/ 或根路径 → home；其余 other。
+ * - 其他站：根路径 → home；/product、/products/、/item、/p/、/dp/ → product；
+ *   其余 other。
+ * 判不了的一律 other，绝不硬凑（这是看同行打法的参考信号，不是精确归因）。
+ */
+export function classifyLandingType(rawUrl: string): AdLandingType {
+  let u: URL;
+  try {
+    u = new URL(rawUrl);
+  } catch {
+    return "other";
+  }
+  const host = u.hostname.toLowerCase();
+  const path = u.pathname.toLowerCase();
+  if (host.includes("amazon.")) {
+    if (
+      path.includes("/dp/") ||
+      path.includes("/gp/product/") ||
+      path.includes("/product/")
+    )
+      return "product";
+    if (
+      path.includes("/stores/") ||
+      path.includes("/store/") ||
+      path.includes("/shop/") ||
+      path === "/" ||
+      path === ""
+    )
+      return "home";
+    return "other";
+  }
+  if (path === "/" || path === "") return "home";
+  if (
+    path.includes("/product") ||
+    path.includes("/products/") ||
+    path.includes("/item") ||
+    path.includes("/p/") ||
+    path.includes("/dp/")
+  )
+    return "product";
+  return "other";
+}
+
+/** 一组广告 URL 的落地类型计数（other 不计入 home/product 两数）。 */
+export function countLandingTypes(urls: Array<string | undefined>): {
+  home: number;
+  product: number;
+} {
+  let home = 0;
+  let product = 0;
+  for (const u of urls) {
+    const t = classifyLandingType(u ?? "");
+    if (t === "home") home += 1;
+    else if (t === "product") product += 1;
+  }
+  return { home, product };
+}
+
 export interface BrandAdCountResult {
   groupsQueried: number;
   groupsSkippedCache: number;
@@ -113,6 +215,7 @@ interface ProductRow {
   brand: string | null;
   countryCode: string | null;
   landingPageType: string | null;
+  adCount: number | null;
   adCountCheckedAt: Date | null;
 }
 
@@ -135,13 +238,17 @@ function itemDomain(item: SerpItem): string {
   return "";
 }
 
-/** 调一次 DataForSEO SERP，返回付费广告的域名列表。失败抛错（调用方捕获跳组）。 */
-async function fetchPaidAdDomains(
+function itemUrl(item: SerpItem): string {
+  return typeof item.url === "string" ? item.url.trim() : "";
+}
+
+/** 调一次 DataForSEO SERP，返回付费广告的 {域名, 落地页 URL} 列表。失败抛错（调用方捕获跳组）。 */
+async function fetchPaidAds(
   fetchImpl: typeof fetch,
   creds: { login: string; password: string },
   keyword: string,
   countryCode: string | null
-): Promise<string[]> {
+): Promise<Array<{ domain: string; url: string }>> {
   const cc = (countryCode ?? "").trim().toUpperCase();
   const auth = Buffer.from(`${creds.login}:${creds.password}`).toString(
     "base64"
@@ -182,7 +289,7 @@ async function fetchPaidAdDomains(
   const items = task.result?.[0]?.items ?? [];
   return items
     .filter((it) => it?.type === "paid")
-    .map((it) => itemDomain(it));
+    .map((it) => ({ domain: itemDomain(it), url: itemUrl(it) }));
 }
 
 /**
@@ -221,6 +328,7 @@ export async function calcBrandAdCounts(
       brand: true,
       countryCode: true,
       landingPageType: true,
+      adCount: true,
       adCountCheckedAt: true,
     },
   })) as ProductRow[];
@@ -260,9 +368,9 @@ export async function calcBrandAdCounts(
       continue;
     }
 
-    let domains: string[];
+    let ads: Array<{ domain: string; url: string }>;
     try {
-      domains = await fetchPaidAdDomains(
+      ads = await fetchPaidAds(
         fetchImpl,
         { login, password },
         g.brand,
@@ -286,15 +394,24 @@ export async function calcBrandAdCounts(
     );
     const counts = classifyAds(
       g.brand,
-      domains.map((domain) => ({ domain }))
+      ads.map((a) => ({ domain: a.domain }))
     );
+    // 落地类型拆分：同行这批广告是落首页/旗舰店还是落商品页（other 不计入）。
+    const landing = countLandingTypes(ads.map((a) => a.url));
+    // 快照：把组内代表行（组级统一写入，任一行即组值）的旧广告数/旧查询时间
+    // 挪到 last* 字段，供下次计算时派生趋势（新投/停投/持续）。
+    const representative = g.items[0];
     const res = await prisma.networkProduct.updateMany({
       where: { id: { in: g.items.map((p) => p.id) }, tenantId },
       data: {
         adCount: counts.total,
         adCountSelf: isAmazonGroup ? null : counts.self,
         adCountOthers: isAmazonGroup ? null : counts.others,
+        adCountHome: landing.home,
+        adCountProduct: landing.product,
         adCountCheckedAt: new Date(),
+        lastAdCount: representative?.adCount ?? null,
+        lastAdCountCheckedAt: representative?.adCountCheckedAt ?? null,
       },
     });
     result.productsUpdated += res.count;

@@ -34,6 +34,7 @@ function product(over: Partial<OneClickProductRow> = {}): OneClickProductRow {
     poolStage: "inbox",
     adCount: 8,
     adCountCheckedAt: new Date(),
+    lastAdCount: null,
     ...over,
   };
 }
@@ -49,6 +50,7 @@ interface FakeWorld {
 function makeWorld(opts: {
   blacklist?: Array<Record<string, unknown>>;
   refreshedAdCounts?: Map<string, number | null>;
+  brandProfiles?: Array<Record<string, unknown>>;
 }): FakeWorld {
   const productUpdates: FakeWorld["productUpdates"] = [];
   const offerUpdates: FakeWorld["offerUpdates"] = [];
@@ -62,6 +64,7 @@ function makeWorld(opts: {
       findMany: async () => opts.blacklist ?? [],
     },
     catalogScreeningPreset: { findUnique: async () => null },
+    brandProfile: { findMany: async () => opts.brandProfiles ?? [] },
     aiSetting: { findUnique: async () => null },
     merchant: { findMany: async () => [] },
     networkProduct: {
@@ -73,6 +76,7 @@ function makeWorld(opts: {
         [...(opts.refreshedAdCounts ?? new Map()).entries()].map(([id, adCount]) => ({
           id,
           adCount,
+          lastAdCount: null,
         })),
     },
     offer: {
@@ -274,6 +278,133 @@ describe("runOneClickScreen 全流程", () => {
     expect(report.review).toBe(1);
     expect(report.passed).toBe(0);
     expect(report.killedTrafficGate).toBe(0);
+  });
+});
+
+describe("runOneClickScreen 广告趋势与单品豁免", () => {
+  const allowedGateway = async () => ({
+    allowed: true,
+    feature: "catalog-ad-count",
+    keySource: "owner" as const,
+    credentials: null,
+    grantId: null,
+    remainingCalls: null,
+  });
+  const noCalc = async () => ({
+    groupsQueried: 0,
+    groupsSkippedCache: 0,
+    productsUpdated: 0,
+    errors: [],
+  });
+
+  it("疑似停投计数：上次 >0、本次 =0 计入 adStoppedCount（未标注品牌照旧被杀）", async () => {
+    const world = makeWorld({});
+    const report = await runOneClickScreen(
+      {
+        prisma: world.prisma,
+        createOfferImpl: makeCreateOfferImpl(world),
+        gateEvaluator: async () => PASS_GATE,
+        gatewayResolve: allowedGateway,
+        adCountCalc: noCalc,
+      },
+      {
+        tenantId: TENANT,
+        actorId: "u1",
+        userRole: "owner",
+        products: [
+          product({ id: "p-stopped", externalId: "e1", adCount: 0, lastAdCount: 6 }),
+          product({ id: "p-active", externalId: "e2", adCount: 4, lastAdCount: 9 }),
+          product({ id: "p-first", externalId: "e3", adCount: 0, lastAdCount: null }),
+        ],
+      }
+    );
+    // 只有 p-stopped 是上次有、本次无 → 停投 1 件
+    expect(report.adStoppedCount).toBe(1);
+    // 未标注品牌广告数 0 照旧杀（p-stopped、p-first）
+    expect(report.killedAdCount).toBe(2);
+    expect(report.adWaivedCount).toBe(0);
+    expect(report.passed).toBe(1);
+  });
+
+  it("单品品牌豁免：promoMode=product 的品牌广告数 0 不杀、标 adReferenceOnly、计 adWaivedCount", async () => {
+    const world = makeWorld({
+      brandProfiles: [
+        {
+          networkId: NETWORK,
+          brandKey: "widgetco",
+          countryCode: "US",
+          promoMode: "product",
+        },
+      ],
+    });
+    const report = await runOneClickScreen(
+      {
+        prisma: world.prisma,
+        createOfferImpl: makeCreateOfferImpl(world),
+        gateEvaluator: async () => PASS_GATE,
+        gatewayResolve: allowedGateway,
+        adCountCalc: noCalc,
+      },
+      {
+        tenantId: TENANT,
+        actorId: "u1",
+        userRole: "owner",
+        products: [
+          product({ id: "p-waived", externalId: "e1", adCount: 0, lastAdCount: 5 }),
+          product({ id: "p-other", externalId: "e2", brand: "OtherBrand", adCount: 0 }),
+        ],
+      }
+    );
+    expect(report.adWaivedCount).toBe(1);
+    expect(report.killedAdCount).toBe(1); // OtherBrand 未标注，照旧杀
+    expect(report.passed).toBe(1);
+    // 趋势是事实统计：被豁免的停投品牌仍计入 adStoppedCount
+    expect(report.adStoppedCount).toBe(1);
+    const waived = report.outcomes.find((o) => o.productId === "p-waived");
+    expect(waived?.outcome).toBe("pass");
+    expect(waived?.adReferenceOnly).toBe(true);
+    const killed = report.outcomes.find((o) => o.productId === "p-other");
+    expect(killed?.outcome).toBe("kill");
+    expect(killed?.adReferenceOnly).toBeUndefined();
+  });
+
+  it("单品品牌豁免只限广告层：$8 门槛照旧杀", async () => {
+    const world = makeWorld({
+      brandProfiles: [
+        {
+          networkId: NETWORK,
+          brandKey: "widgetco",
+          countryCode: "US",
+          promoMode: "product",
+        },
+      ],
+    });
+    const report = await runOneClickScreen(
+      {
+        prisma: world.prisma,
+        createOfferImpl: makeCreateOfferImpl(world),
+        gateEvaluator: async () => PASS_GATE,
+        gatewayResolve: allowedGateway,
+        adCountCalc: noCalc,
+      },
+      {
+        tenantId: TENANT,
+        actorId: "u1",
+        userRole: "owner",
+        products: [
+          product({
+            id: "p-cheap",
+            externalId: "e1",
+            adCount: 0,
+            commissionAmount: 5,
+            commissionRate: 5,
+          }),
+        ],
+      }
+    );
+    expect(report.killedCommission).toBe(1);
+    expect(report.adWaivedCount).toBe(0);
+    expect(report.passed).toBe(0);
   });
 });
 

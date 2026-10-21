@@ -5,7 +5,14 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "@adlinklab/database";
 import { encryptSecret, TEST_AI_SETTINGS_PEPPER } from "../ai/crypto.js";
-import { classifyAds, calcBrandAdCounts } from "./brand-ad-count.js";
+import {
+  adBandOf,
+  classifyAds,
+  classifyLandingType,
+  countLandingTypes,
+  calcBrandAdCounts,
+  deriveAdTrend,
+} from "./brand-ad-count.js";
 
 function enc(plain: string): string {
   return encryptSecret(plain, TEST_AI_SETTINGS_PEPPER);
@@ -20,6 +27,10 @@ interface FakeProduct {
   adCount?: number | null;
   adCountSelf?: number | null;
   adCountOthers?: number | null;
+  adCountHome?: number | null;
+  adCountProduct?: number | null;
+  lastAdCount?: number | null;
+  lastAdCountCheckedAt?: Date | null;
 }
 
 function makeFakePrisma(products: FakeProduct[], withCreds = true) {
@@ -90,6 +101,95 @@ function serpFetch(paidDomains: string[]): typeof fetch {
     }),
   })) as unknown as typeof fetch;
 }
+
+describe("deriveAdTrend", () => {
+  it("全分支：null / first / new / stopped / active / none", () => {
+    expect(deriveAdTrend(null, null)).toBeNull();
+    expect(deriveAdTrend(null, 5)).toBeNull();
+    expect(deriveAdTrend(5, null)).toBe("first");
+    expect(deriveAdTrend(0, null)).toBe("first");
+    expect(deriveAdTrend(3, 0)).toBe("new");
+    expect(deriveAdTrend(0, 7)).toBe("stopped");
+    expect(deriveAdTrend(2, 9)).toBe("active");
+    expect(deriveAdTrend(0, 0)).toBe("none");
+  });
+});
+
+describe("adBandOf", () => {
+  it("分档边界：null / 0 / 1–5 / 6–20 / 21–50 / 51+", () => {
+    expect(adBandOf(null)).toBeNull();
+    expect(adBandOf(0)).toBe("none");
+    expect(adBandOf(1)).toBe("small");
+    expect(adBandOf(5)).toBe("small");
+    expect(adBandOf(6)).toBe("sweet");
+    expect(adBandOf(20)).toBe("sweet");
+    expect(adBandOf(21)).toBe("hot");
+    expect(adBandOf(50)).toBe("hot");
+    expect(adBandOf(51)).toBe("redocean");
+    expect(adBandOf(300)).toBe("redocean");
+  });
+});
+
+describe("classifyLandingType", () => {
+  it("Amazon：商品页 /dp/、/gp/product/ → product", () => {
+    expect(classifyLandingType("https://www.amazon.com/dp/B0C1234567")).toBe(
+      "product"
+    );
+    expect(
+      classifyLandingType("https://www.amazon.com/gp/product/B0C1234567")
+    ).toBe("product");
+    expect(
+      classifyLandingType("https://www.amazon.co.uk/Some-Thing/product/B0C1")
+    ).toBe("product");
+  });
+
+  it("Amazon：旗舰店 /stores/、/shop/、根路径 → home", () => {
+    expect(
+      classifyLandingType("https://www.amazon.com/stores/Roborock/page/9F3A")
+    ).toBe("home");
+    expect(classifyLandingType("https://www.amazon.com/shop/roborock")).toBe(
+      "home"
+    );
+    expect(classifyLandingType("https://www.amazon.com/")).toBe("home");
+  });
+
+  it("其他站：根路径 → home；/products/、/product、/item、/p/ → product", () => {
+    expect(classifyLandingType("https://senix.com/")).toBe("home");
+    expect(classifyLandingType("https://senix.com")).toBe("home");
+    expect(classifyLandingType("https://senix.com/products/chainsaw-20v")).toBe(
+      "product"
+    );
+    expect(classifyLandingType("https://shop.example.com/product/123")).toBe(
+      "product"
+    );
+    expect(classifyLandingType("https://shop.example.com/item/9")).toBe(
+      "product"
+    );
+    expect(classifyLandingType("https://shop.example.com/p/9")).toBe("product");
+  });
+
+  it("判不了 → other（搜索页/关于页/坏 URL/空）", () => {
+    expect(classifyLandingType("https://www.amazon.com/s?k=roborock")).toBe(
+      "other"
+    );
+    expect(classifyLandingType("https://senix.com/about-us")).toBe("other");
+    expect(classifyLandingType("not a url")).toBe("other");
+    expect(classifyLandingType("")).toBe("other");
+  });
+});
+
+describe("countLandingTypes", () => {
+  it("home/product 分别计数，other 不计入", () => {
+    const r = countLandingTypes([
+      "https://www.amazon.com/dp/B0C1",
+      "https://www.amazon.com/stores/X/page/1",
+      "https://senix.com/",
+      "https://www.amazon.com/s?k=x",
+      undefined,
+    ]);
+    expect(r).toEqual({ home: 2, product: 1 });
+  });
+});
 
 describe("classifyAds", () => {
   it("品牌域名命中 → self；他域 → others", () => {
@@ -220,6 +320,85 @@ describe("calcBrandAdCounts", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(r.productsUpdated).toBe(1);
     expect(store.get("p2")?.adCount).toBeUndefined();
+  });
+
+  it("重算时把旧广告数/旧查询时间写入 last* 快照（整组统一）", async () => {
+    const stale = new Date(Date.now() - 15 * 24 * 3600 * 1000);
+    const { prisma, store } = makeFakePrisma([
+      base({ id: "p1", adCount: 5, adCountCheckedAt: stale }),
+      base({ id: "p2", adCount: 5, adCountCheckedAt: stale }),
+    ]);
+    const r = await calcBrandAdCounts(prisma, "t1", undefined, {
+      fetchImpl: serpFetch([]),
+    });
+    expect(r.productsUpdated).toBe(2);
+    // 本次查到 0 条 → 新值 0，旧值 5 进快照 → 趋势 = stopped（疑似停投）
+    expect(store.get("p1")?.adCount).toBe(0);
+    expect(store.get("p1")?.lastAdCount).toBe(5);
+    expect(store.get("p1")?.lastAdCountCheckedAt).toBe(stale);
+    expect(store.get("p2")?.lastAdCount).toBe(5);
+    expect(
+      deriveAdTrend(
+        store.get("p1")?.adCount ?? null,
+        store.get("p1")?.lastAdCount ?? null
+      )
+    ).toBe("stopped");
+  });
+
+  it("首次计算（旧值为空）→ 快照仍为空，趋势 first", async () => {
+    const { prisma, store } = makeFakePrisma([base({ id: "p1" })]);
+    await calcBrandAdCounts(prisma, "t1", undefined, {
+      fetchImpl: serpFetch(["senix.com"]),
+    });
+    expect(store.get("p1")?.adCount).toBe(1);
+    expect(store.get("p1")?.lastAdCount ?? null).toBeNull();
+    expect(store.get("p1")?.lastAdCountCheckedAt ?? null).toBeNull();
+  });
+
+  it("落地类型拆分写入 adCountHome/adCountProduct（total 不变，other 不计入）", async () => {
+    const { prisma, store } = makeFakePrisma([base({ id: "p1" })]);
+    const fetchImpl = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        tasks: [
+          {
+            status_code: 20000,
+            result: [
+              {
+                items: [
+                  {
+                    type: "paid",
+                    domain: "amazon.com",
+                    url: "https://www.amazon.com/dp/B0C1234567",
+                  },
+                  {
+                    type: "paid",
+                    domain: "amazon.com",
+                    url: "https://www.amazon.com/stores/SENIX/page/9F3A",
+                  },
+                  {
+                    type: "paid",
+                    domain: "senix.com",
+                    url: "https://senix.com/",
+                  },
+                  {
+                    type: "paid",
+                    domain: "senix.com",
+                    url: "https://senix.com/about-us",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    })) as unknown as typeof fetch;
+    const r = await calcBrandAdCounts(prisma, "t1", undefined, { fetchImpl });
+    expect(r.productsUpdated).toBe(1);
+    expect(store.get("p1")?.adCount).toBe(4);
+    expect(store.get("p1")?.adCountHome).toBe(2);
+    expect(store.get("p1")?.adCountProduct).toBe(1);
   });
 
   it("单组 SERP 失败不中断其他组，错误记入 errors", async () => {

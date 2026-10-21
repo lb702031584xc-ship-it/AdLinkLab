@@ -252,6 +252,8 @@ model Tenant {
   tenantSettings        TenantSetting[]
   /// 付费数据网关用量台账 back-reference (additive)
   paidDataUsages        PaidDataUsage[]
+  /// 品牌落地页链接 back-reference (additive)
+  brandProfiles         BrandProfile[]
   /// 创意管理库 back-references (additive)
   creatives             Creative[]
 
@@ -1179,8 +1181,15 @@ model NetworkProduct {
   adCountSelf     Int?     @map("ad_count_self")
   /// 他投广告数（联盟客/同行在投）。
   adCountOthers   Int?     @map("ad_count_others")
+  /// 落首页/旗舰店的广告条数（落地页 URL 启发式分类，other 不计入；看同行用哪种打法）。
+  adCountHome     Int?     @map("ad_count_home")
+  /// 落商品页的广告条数（同上分类口径）。
+  adCountProduct  Int?     @map("ad_count_product")
   /// 广告投放数量上次查询时间（14 天缓存期内跳过重查）。
   adCountCheckedAt DateTime? @map("ad_count_checked_at") @db.Timestamptz(3)
+  /// 广告投放数量上一次计算值快照（重算时把旧 adCount/adCountCheckedAt 挪到这里，供趋势对比：新投/停投/持续；null = 还没重算过）。
+  lastAdCount         Int?     @map("last_ad_count")
+  lastAdCountCheckedAt DateTime? @map("last_ad_count_checked_at") @db.Timestamptz(3)
   promoUrl          String?  @map("promo_url")
   rawData           Json     @map("raw_data") @db.JsonB
   syncedAt          DateTime @map("synced_at") @db.Timestamptz(3)
@@ -2705,6 +2714,30 @@ model PaidDataUsage {
   @@unique([tenantId, feature, usageDate, keySource], name: "paid_data_usage_tenant_feature_date_source_unique")
   @@index([tenantId, usageDate])
   @@map("paid_data_usage")
+}
+
+/// 品牌落地页链接（品牌级投放落地页，如品牌旗舰店/官网首页链接）：
+/// 按 租户 × 网络 × 品牌（brandKey = 归一化品牌名：trim + 小写 + 空白折叠）×
+/// 国家（countryCode，空串 = 未指定）存一行；没有行 = 该品牌走单品投放
+/// （中性状态，不是缺失——有些联盟品牌没有品牌级投放链接）。
+/// promoMode 是投放方式的显式标注："brand"（有品牌级链接、走品牌页投放）|
+/// "product"（没有品牌级链接、只能走单品）| null（未标注）——不能用
+/// landingUrl 是否填写来冒充这个状态。
+model BrandProfile {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  networkId   String   @map("network_id") @db.Uuid
+  brandKey    String   @map("brand_key")
+  countryCode String   @default("") @map("country_code")
+  landingUrl  String   @map("landing_url")
+  promoMode   String?  @map("promo_mode")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, networkId, brandKey, countryCode])
+  @@map("brand_profiles")
 }
 
 /// 每租户系统设置（对标 autoads 系统设置）：key = ai | ads | proxies | system，
