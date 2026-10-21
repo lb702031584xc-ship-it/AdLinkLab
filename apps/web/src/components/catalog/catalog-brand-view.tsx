@@ -7,6 +7,7 @@ import {
   listCatalogBrandsAction,
   saveBrandLandingUrlAction,
   type AdBandKey,
+  type AdProbeDetailEntry,
   type AdTrend,
   type BrandPromoMode,
   type CatalogBrand,
@@ -113,7 +114,54 @@ export function adProbeFields(x: unknown): {
   };
 }
 
-/** 长尾探针广告数后缀：「· 长尾探针 约 {n} 条」；未探（null）→ null（不显示）。 */
+/**
+ * 探针明细的防御式读取：必须是数组且每条形状合格（q 字符串、kind 三值、
+ * paid/shopping/total 有限数）才整体采用；任一条不合格 → null（不展示
+ * 半真半假的明细）。null/缺失 = 尚未按明细口径计算过。
+ */
+export function adProbeDetailOf(x: unknown): AdProbeDetailEntry[] | null {
+  const o = (
+    typeof x === "object" && x !== null ? x : {}
+  ) as { adProbeDetail?: unknown };
+  if (!Array.isArray(o.adProbeDetail)) return null;
+  const out: AdProbeDetailEntry[] = [];
+  for (const e of o.adProbeDetail) {
+    if (typeof e !== "object" || e === null) return null;
+    const r = e as Record<string, unknown>;
+    if (typeof r.q !== "string") return null;
+    if (r.kind !== "bare" && r.kind !== "model" && r.kind !== "category")
+      return null;
+    if (
+      typeof r.paid !== "number" ||
+      !Number.isFinite(r.paid) ||
+      typeof r.shopping !== "number" ||
+      !Number.isFinite(r.shopping) ||
+      typeof r.total !== "number" ||
+      !Number.isFinite(r.total)
+    )
+      return null;
+    out.push({
+      q: r.q,
+      kind: r.kind,
+      paid: r.paid,
+      shopping: r.shopping,
+      total: r.total,
+    });
+  }
+  return out;
+}
+
+/** 探针类型短标签（裸词/型号/类目）。 */
+export function probeKindLabel(
+  kind: AdProbeDetailEntry["kind"],
+  d: ProductsDict
+): string {
+  if (kind === "bare") return d.probeKindBare;
+  if (kind === "model") return d.probeKindModel;
+  return d.probeKindCategory;
+}
+
+/** 长尾探针广告数后缀：「· 长尾探针 约 {n} 条·快照」；未探（null）→ null（不显示）。 */
 export function adLongtailSuffix(
   longtail: number | null | undefined,
   d: ProductsDict
@@ -229,6 +277,7 @@ export function CatalogBrandView({
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [probeOpen, setProbeOpen] = useState<Set<string>>(new Set());
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [savingKey, setSavingKey] = useState<string | null>(null);
@@ -264,6 +313,15 @@ export function CatalogBrandView({
 
   function toggleExpand(key: string) {
     setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function toggleProbe(key: string) {
+    setProbeOpen((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
@@ -439,6 +497,8 @@ export function CatalogBrandView({
               ? adLandingSplitText(b.adCountHome, b.adCountProduct, p)
               : null;
           const mode = effectivePromoMode(b);
+          const probeDetail = adProbeDetailOf(b);
+          const probeIsOpen = probeOpen.has(key);
           const isOpen = expanded.has(key);
           const isEditing = editingKey === key;
           const priceBand =
@@ -673,11 +733,53 @@ export function CatalogBrandView({
                 )}
                 <button
                   className={`${btnGhostSm} ml-auto`}
+                  onClick={() => toggleProbe(key)}
+                >
+                  {probeIsOpen ? p.probeDetailHide : p.probeDetailShow}
+                </button>
+                <button
+                  className={btnGhostSm}
                   onClick={() => toggleExpand(key)}
                 >
                   {isOpen ? p.brandHideTop : p.brandShowTop}
                 </button>
               </div>
+
+              {probeIsOpen && (
+                <div className="mt-2 border-t border-ink/5 pt-2">
+                  <p className="text-xs font-medium text-ink/60">
+                    {p.probeDetailTitle}
+                  </p>
+                  {probeDetail === null ? (
+                    <p className="mt-1 text-xs text-ink/40">
+                      {p.probeDetailEmpty}
+                    </p>
+                  ) : (
+                    <ul className="mt-1 divide-y divide-ink/5">
+                      {probeDetail.map((e, i) => (
+                        <li
+                          key={`${e.q}-${i}`}
+                          className="flex flex-wrap items-center gap-x-3 gap-y-0.5 py-1 text-xs text-ink/70"
+                        >
+                          <span className="font-medium text-ink">{e.q}</span>
+                          <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
+                            {probeKindLabel(e.kind, p)}
+                          </span>
+                          <span className="tabular-nums">
+                            {p.probePaid.replace("{n}", String(e.paid))}
+                          </span>
+                          <span className="tabular-nums">
+                            {p.probeShopping.replace("{n}", String(e.shopping))}
+                          </span>
+                          <span className="font-medium tabular-nums text-ink">
+                            {p.probeTotal.replace("{n}", String(e.total))}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
 
               {isOpen && (
                 <div className="mt-2 divide-y divide-ink/5 border-t border-ink/5">

@@ -196,6 +196,7 @@ export interface CatalogFakeCtx {
   adminGrant: Row[];
   adminGrantAudit: Row[];
   networkProduct: Row[];
+  brandProfile: Row[];
   catalogBlacklist: Row[];
   catalogWhitelist: Row[];
   catalogScreeningPreset: Row[];
@@ -220,6 +221,7 @@ export function makeCatalogFakePrisma(
     adminGrant: [],
     adminGrantAudit: [],
     networkProduct: [],
+    brandProfile: [],
     catalogBlacklist: [],
     catalogWhitelist: [],
     catalogScreeningPreset: [],

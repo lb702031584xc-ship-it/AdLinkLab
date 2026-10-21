@@ -16,6 +16,9 @@ import {
   extractProductCategory,
   groupAdPolicyRisk,
   hasAdPolicyRisk,
+  MAX_LONGTAIL_PROBES,
+  MAX_QUERIES_PER_GROUP,
+  modelCandidatesOf,
   modelTokensOf,
   previewBrandAdCounts,
   tallySerpAds,
@@ -37,6 +40,7 @@ interface FakeProduct {
   adCountHome?: number | null;
   adCountProduct?: number | null;
   adCountLongtail?: number | null;
+  adProbeDetail?: unknown;
   adPolicyRisk?: boolean;
   lastAdCount?: number | null;
   lastAdCountCheckedAt?: Date | null;
@@ -286,7 +290,12 @@ describe("calcBrandAdCounts", () => {
   it("14 天缓存内的组整组跳过，不调 SERP", async () => {
     const recent = new Date(Date.now() - 3 * 24 * 3600 * 1000);
     const { prisma } = makeFakePrisma([
-      base({ id: "p1", adCountCheckedAt: recent }),
+      // 已按明细口径算过（detail 非 null）+ 无可派生探针 → 终局新鲜
+      base({
+        id: "p1",
+        adCountCheckedAt: recent,
+        adProbeDetail: [{ q: "SENIX", kind: "bare", paid: 0, shopping: 0, total: 0 }],
+      }),
       base({ id: "p2", adCountCheckedAt: null }),
     ]);
     const fetchImpl = vi.fn(serpFetch(["senix.com"]));
@@ -539,17 +548,19 @@ describe("previewBrandAdCounts", () => {
   const recent = new Date(Date.now() - 3 * 24 * 3600 * 1000);
   const stale = new Date(Date.now() - 15 * 24 * 3600 * 1000);
 
+  const detailStamp = [{ q: "X", kind: "bare", paid: 0, shopping: 0, total: 0 }];
+
   function seedFourGroups() {
     return makeFakePrisma(
       [
-        // FreshAlive/US：新鲜 + 活
-        base({ id: "a1", brand: "FreshAlive", adCountCheckedAt: recent }),
+        // FreshAlive/US：新鲜（已落 detail）+ 活
+        base({ id: "a1", brand: "FreshAlive", adCountCheckedAt: recent, adProbeDetail: detailStamp }),
         // StaleAlive/DE：过期 + 活
         base({ id: "b1", brand: "StaleAlive", countryCode: "DE", adCountCheckedAt: stale }),
         // DeadStale/FR：过期 + 整组死（kill）
         base({ id: "c1", brand: "DeadStale", countryCode: "FR", adCountCheckedAt: stale, screenVerdict: "kill" }),
-        // DeadFresh/ES：新鲜 + 整组死（下线）
-        base({ id: "d1", brand: "DeadFresh", countryCode: "ES", adCountCheckedAt: recent, status: "inactive" }),
+        // DeadFresh/ES：新鲜（已落 detail）+ 整组死（下线）
+        base({ id: "d1", brand: "DeadFresh", countryCode: "ES", adCountCheckedAt: recent, status: "inactive", adProbeDetail: detailStamp }),
         // 无品牌商品不入组
         base({ id: "e1", brand: null }),
       ],
@@ -558,7 +569,7 @@ describe("previewBrandAdCounts", () => {
     );
   }
 
-  it("scope=all：总数 = 新鲜 + 过期，死组不单独计", async () => {
+  it("scope=all：总数 = 新鲜 + 过期，死组不单独计；带每组最坏查询数（深度 12）", async () => {
     const { prisma } = seedFourGroups();
     const p = await previewBrandAdCounts(prisma, "t1");
     expect(p).toEqual({
@@ -566,6 +577,7 @@ describe("previewBrandAdCounts", () => {
       groupsFresh: 2,
       groupsStale: 2,
       deadGroupsSkipped: 0,
+      maxQueriesPerGroup: 12,
     });
   });
 
@@ -577,6 +589,7 @@ describe("previewBrandAdCounts", () => {
       groupsFresh: 2,
       groupsStale: 2,
       deadGroupsSkipped: 2,
+      maxQueriesPerGroup: 12,
     });
   });
 
@@ -620,7 +633,7 @@ describe("tallySerpAds（文字广告＋购物广告统一计数）", () => {
   });
 });
 
-describe("modelTokensOf / deriveLongtailProbes（长尾探针派生）", () => {
+describe("modelTokensOf / deriveLongtailProbes（长尾探针派生 v2）", () => {
   it("型号 token = 同 token 内字母+数字相邻；纯数字/纯字母不算", () => {
     expect(modelTokensOf("Roborock S8 Pro Ultra")).toEqual(["s8"]);
     expect(modelTokensOf("Robot Vacuum 3000 Pro")).toEqual([]);
@@ -629,16 +642,19 @@ describe("modelTokensOf / deriveLongtailProbes（长尾探针派生）", () => {
     expect(modelTokensOf("OLIGHT Baton 4 Mini")).toEqual([]);
   });
 
-  it("P1 = 排序第一件带型号商品的首个型号；P2 = 另一件商品的不同型号", () => {
+  it("逐件按排序抽型号：第一件的型号先入队，后件的不同型号续入队", () => {
     const probes = deriveLongtailProbes("Roborock", [
       { name: "Roborock Q7 Max", recommendationScore: 80, reviewCount: 50 },
       { name: "Roborock S8 Pro", recommendationScore: 90, reviewCount: 100 },
       { name: "Roborock Dock", recommendationScore: 70, reviewCount: 10 },
     ]);
-    expect(probes).toEqual(["Roborock s8", "Roborock q7"]);
+    expect(probes).toEqual([
+      { q: "Roborock s8", kind: "model" },
+      { q: "Roborock q7", kind: "model" },
+    ]);
   });
 
-  it("无第二个型号 → P2 退 Top 商品类目；无型号有类目 → 类目作唯一探针", () => {
+  it("型号探针不足 4 条 → 补 1 条类目探针；无型号有类目 → 类目作唯一探针", () => {
     expect(
       deriveLongtailProbes("Roborock", [
         {
@@ -648,7 +664,10 @@ describe("modelTokensOf / deriveLongtailProbes（长尾探针派生）", () => {
           category: "Robot Vacuums",
         },
       ])
-    ).toEqual(["Roborock s8", "Roborock Robot Vacuums"]);
+    ).toEqual([
+      { q: "Roborock s8", kind: "model" },
+      { q: "Roborock Robot Vacuums", kind: "category" },
+    ]);
     expect(
       deriveLongtailProbes("SENIX", [
         {
@@ -658,7 +677,18 @@ describe("modelTokensOf / deriveLongtailProbes（长尾探针派生）", () => {
           category: "Chainsaws",
         },
       ])
-    ).toEqual(["SENIX Chainsaws"]);
+    ).toEqual([{ q: "SENIX Chainsaws", kind: "category" }]);
+  });
+
+  it("型号探针 ≥4 条 → 不补类目探针", () => {
+    const probes = deriveLongtailProbes("Roborock", [
+      { name: "Roborock S8", recommendationScore: 90, reviewCount: 1, category: "Robot Vacuums" },
+      { name: "Roborock Q7", recommendationScore: 80, reviewCount: 1 },
+      { name: "Roborock X40", recommendationScore: 70, reviewCount: 1 },
+      { name: "Roborock Z1", recommendationScore: 60, reviewCount: 1 },
+    ]);
+    expect(probes).toHaveLength(4);
+    expect(probes.every((p) => p.kind === "model")).toBe(true);
   });
 
   it("无型号无类目 → 无探针（空数组，adCountLongtail 终局为 null）", () => {
@@ -670,6 +700,68 @@ describe("modelTokensOf / deriveLongtailProbes（长尾探针派生）", () => {
     expect(
       deriveLongtailProbes("", [{ name: "X9", recommendationScore: 1, reviewCount: 1 }])
     ).toEqual([]);
+  });
+
+  it("粘连型号双形态：baton4 原文 + baton 4 带空格各入队一条（都算 model、都占预算）", () => {
+    const probes = deriveLongtailProbes("OLIGHT", [
+      { name: "OLIGHT Baton4 Pro", recommendationScore: 90, reviewCount: 10 },
+    ]);
+    expect(probes).toEqual([
+      { q: "OLIGHT baton4", kind: "model" },
+      { q: "OLIGHT baton 4", kind: "model" },
+    ]);
+  });
+
+  it("非粘连型号（字母段 <2，如 s8）只有原文一条，不拆空格形态", () => {
+    expect(modelCandidatesOf("Roborock S8 Pro", "Roborock")).toEqual([
+      { token: "s8", spaced: null },
+    ]);
+    expect(modelCandidatesOf("OLIGHT Baton4 Pro", "OLIGHT")).toEqual([
+      { token: "baton4", spaced: "baton 4" },
+    ]);
+  });
+
+  it("纯数字型号：3–4 位纯数字 token 紧跟品牌 token 之后才算（Anker 737）", () => {
+    expect(modelCandidatesOf("Anker 737 PowerBank", "Anker")).toEqual([
+      { token: "737", spaced: null },
+    ]);
+    expect(
+      deriveLongtailProbes("Anker", [
+        { name: "Anker 737 PowerBank", recommendationScore: 90, reviewCount: 5 },
+      ])
+    ).toEqual([{ q: "Anker 737", kind: "model" }]);
+    // 数字不在品牌之后（或位数不对）→ 不算型号
+    expect(modelCandidatesOf("Anker PowerBank 737", "Anker")).toEqual([]);
+    expect(modelCandidatesOf("Anker 73 PowerBank", "Anker")).toEqual([]);
+    expect(modelCandidatesOf("Anker 73700 PowerBank", "Anker")).toEqual([]);
+  });
+
+  it("同一型号多件商品只入队一次（两种形态各一次）", () => {
+    const probes = deriveLongtailProbes("OLIGHT", [
+      { name: "OLIGHT Baton4", recommendationScore: 90, reviewCount: 1 },
+      { name: "OLIGHT Baton4 Premium", recommendationScore: 80, reviewCount: 1 },
+      { name: "OLIGHT Baton4 Mini", recommendationScore: 70, reviewCount: 1 },
+    ]);
+    expect(probes).toEqual([
+      { q: "OLIGHT baton4", kind: "model" },
+      { q: "OLIGHT baton 4", kind: "model" },
+    ]);
+  });
+
+  it("预算上限：长尾最多 11 条（总查询 ≤12），型号再多也截断且不重复", () => {
+    expect(MAX_QUERIES_PER_GROUP).toBe(12);
+    expect(MAX_LONGTAIL_PROBES).toBe(11);
+    const products = Array.from({ length: 8 }, (_, i) => ({
+      name: `BrandX AB${100 + i} Tool`,
+      recommendationScore: 100 - i,
+      reviewCount: 1,
+    }));
+    const probes = deriveLongtailProbes("BrandX", products);
+    // 每件 1 个粘连型号 × 2 形态 = 16 个候选 → 截到 11
+    expect(probes).toHaveLength(11);
+    expect(new Set(probes.map((p) => p.q)).size).toBe(11);
+    expect(probes[0]).toEqual({ q: "BrandX ab100", kind: "model" });
+    expect(probes[1]).toEqual({ q: "BrandX ab 100", kind: "model" });
   });
 
   it("extractProductCategory：路径取最后一段、长度 2–40、无字段为 null", () => {
@@ -800,6 +892,10 @@ describe("calcBrandAdCounts 多探针", () => {
     expect(store.get("p1")?.adCountOthers).toBe(0);
     // 无型号/类目 → 无长尾探针 → adCountLongtail 写 null（终局）
     expect(store.get("p1")?.adCountLongtail).toBeNull();
+    // 明细：只跑了裸词一条，逐条入 detail（paid/shopping 分开记）
+    expect(store.get("p1")?.adProbeDetail).toEqual([
+      { q: "SENIX", kind: "bare", paid: 1, shopping: 2, total: 3 },
+    ]);
   });
 
   it("长尾探针各自计数取 MAX（含购物口径），写回整组；serpQueries 按实际查询记", async () => {
@@ -838,6 +934,60 @@ describe("calcBrandAdCounts 多探针", () => {
     expect(store.get("p1")?.adCountLongtail).toBe(5); // MAX(2, 4 paid + 1 shopping)
     expect(store.get("p2")?.adCountLongtail).toBe(5);
     expect(store.get("p1")?.adPolicyRisk).toBe(false);
+    // 明细逐条回写整组：裸词 + 每条长尾探针（q/kind/paid/shopping/total）
+    const expectedDetail = [
+      { q: "Roborock", kind: "bare", paid: 0, shopping: 0, total: 0 },
+      { q: "Roborock s8", kind: "model", paid: 2, shopping: 0, total: 2 },
+      { q: "Roborock q7", kind: "model", paid: 4, shopping: 1, total: 5 },
+    ];
+    expect(store.get("p1")?.adProbeDetail).toEqual(expectedDetail);
+    expect(store.get("p2")?.adProbeDetail).toEqual(expectedDetail);
+  });
+
+  it("粘连双形态在 calc 层各查一次：detail 两条都在、记账按实际查询数", async () => {
+    const { prisma, store } = makeFakePrisma([
+      base({
+        id: "p1",
+        brand: "OLIGHT",
+        name: "OLIGHT Baton4 Pro",
+        recommendationScore: 90,
+        reviewCount: 10,
+      }),
+    ]);
+    const fetchImpl = serpFetchByKeyword({
+      OLIGHT: [paid("olight.com"), shoppingBlock(1)],
+      "OLIGHT baton4": [paid("a.example.com"), paid("b.example.com")],
+      "OLIGHT baton 4": [shoppingBlock(3)],
+    });
+    const r = await calcBrandAdCounts(prisma, "t1", undefined, { fetchImpl });
+    expect(r.serpQueries).toBe(3); // 裸词 + 粘连 + 带空格
+    expect(store.get("p1")?.adCountLongtail).toBe(3); // MAX(2, 3)
+    expect(store.get("p1")?.adProbeDetail).toEqual([
+      { q: "OLIGHT", kind: "bare", paid: 1, shopping: 1, total: 2 },
+      { q: "OLIGHT baton4", kind: "model", paid: 2, shopping: 0, total: 2 },
+      { q: "OLIGHT baton 4", kind: "model", paid: 0, shopping: 3, total: 3 },
+    ]);
+  });
+
+  it("深度上限：型号再多每组总查询 ≤12（裸词 1 + 长尾 11），detail 与记账一致", async () => {
+    const products = Array.from({ length: 8 }, (_, i) =>
+      base({
+        id: `p${i}`,
+        brand: "BrandX",
+        name: `BrandX AB${100 + i} Tool`,
+        recommendationScore: 100 - i,
+        reviewCount: 1,
+      })
+    );
+    const { prisma, store } = makeFakePrisma(products);
+    const fetchImpl = vi.fn(serpFetchByKeyword({}));
+    const r = await calcBrandAdCounts(prisma, "t1", undefined, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(12);
+    expect(r.serpQueries).toBe(12);
+    const detail = store.get("p0")?.adProbeDetail as Array<unknown>;
+    expect(detail).toHaveLength(12); // 裸词 1 + 长尾 11
   });
 
   it("政策风险组：Top 商品名命中武器灯 → 整组 adPolicyRisk=true 写回", async () => {
@@ -866,13 +1016,16 @@ describe("calcBrandAdCounts 多探针", () => {
         adCount: 4,
         adCountCheckedAt: recent,
       }),
-      // PlainBrand：同样旧印记但派生不出探针 → null 是终局，算新鲜跳过
+      // PlainBrand：已按明细口径算过（detail 非 null）且派生不出探针 → 终局，算新鲜跳过
       base({
         id: "p2",
         brand: "PlainBrand",
         name: "Plain Towel Set",
         adCount: 2,
         adCountCheckedAt: recent,
+        adProbeDetail: [
+          { q: "PlainBrand", kind: "bare", paid: 2, shopping: 0, total: 2 },
+        ],
       }),
     ]);
     const fetchImpl = vi.fn(
@@ -893,6 +1046,7 @@ describe("calcBrandAdCounts 多探针", () => {
 
   it("preview 新鲜度与 calc 同口径：旧印记 + 有型号 = stale；无探针/已探 = fresh", async () => {
     const recent = new Date(Date.now() - 3 * 24 * 3600 * 1000);
+    const detail = [{ q: "X", kind: "bare", paid: 0, shopping: 0, total: 0 }];
     const { prisma } = makeFakePrisma(
       [
         base({
@@ -906,6 +1060,7 @@ describe("calcBrandAdCounts 多探针", () => {
           brand: "PlainBrand",
           name: "Plain Towel Set",
           adCountCheckedAt: recent,
+          adProbeDetail: detail,
         }),
         base({
           id: "p3",
@@ -913,6 +1068,7 @@ describe("calcBrandAdCounts 多探针", () => {
           name: "DoneBrand Z1 Tool",
           adCountCheckedAt: recent,
           adCountLongtail: 3,
+          adProbeDetail: detail,
         }),
       ],
       false
@@ -921,5 +1077,25 @@ describe("calcBrandAdCounts 多探针", () => {
     expect(p.groupsTotal).toBe(3);
     expect(p.groupsStale).toBe(1);
     expect(p.groupsFresh).toBe(2);
+  });
+
+  it("新鲜度：长尾已探过但 detail 缺失（明细上线前印记）→ 视为待重探（stale）", async () => {
+    const recent = new Date(Date.now() - 3 * 24 * 3600 * 1000);
+    const { prisma } = makeFakePrisma(
+      [
+        base({
+          id: "p1",
+          brand: "LegacyBrand",
+          name: "LegacyBrand Z1 Tool",
+          adCountCheckedAt: recent,
+          adCountLongtail: 3,
+          // adProbeDetail 缺失 = 探针明细上线前算的
+        }),
+      ],
+      false
+    );
+    const p = await previewBrandAdCounts(prisma, "t1", {});
+    expect(p.groupsStale).toBe(1);
+    expect(p.groupsFresh).toBe(0);
   });
 });

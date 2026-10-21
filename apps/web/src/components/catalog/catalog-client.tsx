@@ -1393,6 +1393,14 @@ export function CatalogClient({
   const selected = networks.find((n) => n.id === selectedId) ?? null;
 
   const [msg, setMsg] = useState<string | null>(null);
+  // 操作提示渲染在页面最顶端：表格处操作（建 Offer/下线等）的结果用户
+  // 看不见曾造成连环误诊 → msg 一出现就把提示框滚入视野。
+  const msgRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (msg) {
+      msgRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+    }
+  }, [msg]);
   const [syncing, setSyncing] = useState(false);
   const [syncForbidden, setSyncForbidden] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
@@ -2466,7 +2474,10 @@ export function CatalogClient({
       <EntityPageHeader title={d.page.title} description={d.page.description} />
 
       {msg && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+        <div
+          ref={msgRef}
+          className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
+        >
           {msg}
         </div>
       )}

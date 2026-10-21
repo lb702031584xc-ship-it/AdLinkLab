@@ -706,6 +706,72 @@ describe("GET /api/v1/catalog/products 测试优先分（行字段 + sort=priori
   });
 });
 
+describe("探针明细透传（products 行字段 + brands 聚合）", () => {
+  const DETAIL = [
+    { q: "OLIGHT", kind: "bare", paid: 0, shopping: 0, total: 0 },
+    { q: "OLIGHT baton4", kind: "model", paid: 2, shopping: 1, total: 3 },
+    { q: "OLIGHT baton 4", kind: "model", paid: 0, shopping: 0, total: 0 },
+  ];
+
+  function setup() {
+    const { ctx } = makeCatalogFakePrisma();
+    ctx.affiliateNetwork.push(testNetwork());
+    ctx.networkProduct.push(
+      funnelProduct({
+        externalId: "d1",
+        brand: "OLIGHT",
+        countryCode: "US",
+        adCount: 0,
+        adCountLongtail: 3,
+        adProbeDetail: DETAIL,
+      }),
+      // 同组第二件 detail 为 null（半写状态）：聚合取第一个非 null
+      funnelProduct({
+        externalId: "d2",
+        brand: "OLIGHT",
+        countryCode: "US",
+        adCount: 0,
+        adCountLongtail: 3,
+        adProbeDetail: null,
+      }),
+      // 从未按明细口径算过的品牌组 → null，不编造
+      funnelProduct({ externalId: "d3", brand: "PlainBrand", countryCode: "US" })
+    );
+    return ctx;
+  }
+
+  it("GET products：adProbeDetail 原样透传；缺失/非法形状 → null", async () => {
+    const ctx = setup();
+    const { app } = buildApp(ctx, "member");
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/catalog/products",
+    });
+    expect(res.statusCode).toBe(200);
+    const items = res.json().items as Array<any>;
+    expect(items.find((p) => p.externalId === "d1").adProbeDetail).toEqual(
+      DETAIL
+    );
+    expect(items.find((p) => p.externalId === "d2").adProbeDetail).toBeNull();
+    expect(items.find((p) => p.externalId === "d3").adProbeDetail).toBeNull();
+  });
+
+  it("GET brands：组级取第一个非 null 的 adProbeDetail；无明细组为 null", async () => {
+    const ctx = setup();
+    const { app } = buildApp(ctx, "member");
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/catalog/brands",
+    });
+    expect(res.statusCode).toBe(200);
+    const brands = res.json().brands as Array<any>;
+    const olight = brands.find((b) => b.brand === "OLIGHT");
+    expect(olight.adProbeDetail).toEqual(DETAIL);
+    const plain = brands.find((b) => b.brand === "PlainBrand");
+    expect(plain.adProbeDetail).toBeNull();
+  });
+});
+
 describe("GET /api/v1/catalog/funnel（可投流漏斗）", () => {
   it("六段计数口径：total/passedGate/recommended/launchable/withAds/offersCreated", async () => {
     const { ctx } = makeCatalogFakePrisma();

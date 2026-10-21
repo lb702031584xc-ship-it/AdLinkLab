@@ -231,6 +231,9 @@ function serializeProduct(r: Record<string, unknown>, whitelisted: boolean) {
     adCountProduct: numOrNull(r.adCountProduct),
     /** 长尾探针广告数（品牌+型号/品类词的文字广告＋购物广告数 MAX）；无可派生探针 → null。 */
     adCountLongtail: numOrNull(r.adCountLongtail),
+    /** 探针明细（本次计算实际跑的每条探针：裸词 + 长尾，逐条 {q, kind, paid, shopping, total}）；
+     * 形状不对/未按明细口径计算过 → null，不猜。 */
+    adProbeDetail: Array.isArray(r.adProbeDetail) ? r.adProbeDetail : null,
     /** 政策风险：品牌组 Top 商品命中武器配件类模式（付费广告禁投类目）。 */
     adPolicyRisk: r.adPolicyRisk === true,
     adCountCheckedAt:
@@ -1154,6 +1157,7 @@ export async function registerCatalogRoutes(
         adCountProduct: true,
         adCountLongtail: true,
         adPolicyRisk: true,
+        adProbeDetail: true,
         lastAdCount: true,
       },
     })) as Array<Record<string, unknown>>;
@@ -1179,6 +1183,8 @@ export async function registerCatalogRoutes(
       adCountProduct: number | null;
       adCountLongtail: number | null;
       adPolicyRisk: boolean;
+      /** 探针明细（组级统一写入，取第一个非 null 即组值）；未按明细口径算过 → null。 */
+      adProbeDetail: unknown;
       lastAdCount: number | null;
       products: Array<Record<string, unknown>>;
     }
@@ -1215,6 +1221,7 @@ export async function registerCatalogRoutes(
           adCountProduct: null,
           adCountLongtail: null,
           adPolicyRisk: false,
+          adProbeDetail: null,
           lastAdCount: null,
           products: [],
         };
@@ -1254,6 +1261,9 @@ export async function registerCatalogRoutes(
       // 长尾探针组值同口径（第一个非 null）；政策风险取 any true（组级统一写入）。
       if (g.adCountLongtail === null)
         g.adCountLongtail = numOrNull(r.adCountLongtail);
+      // 探针明细同口径：第一个非 null（且形状为数组）即组值。
+      if (g.adProbeDetail === null && Array.isArray(r.adProbeDetail))
+        g.adProbeDetail = r.adProbeDetail;
       if (r.adPolicyRisk === true) g.adPolicyRisk = true;
       if (g.lastAdCount === null) g.lastAdCount = numOrNull(r.lastAdCount);
       g.products.push({
@@ -1345,6 +1355,7 @@ export async function registerCatalogRoutes(
         adCountProduct: g.adCountProduct,
         adCountLongtail: g.adCountLongtail,
         adPolicyRisk: g.adPolicyRisk,
+        adProbeDetail: g.adProbeDetail,
         lastAdCount: g.lastAdCount,
         adTrend,
         adBand,
@@ -1983,8 +1994,8 @@ export async function registerCatalogRoutes(
           actorId: info.id,
           feature: "catalog-ad-count",
           keySource: access.keySource,
-          // 多探针后一组最多 3 次 SERP 查询：按实际查询次数记账，
-          // 不能再按组数记（会把真实消耗低估到 1/3）。
+          // 深度 12 后一组最多 12 次 SERP 查询：按实际查询次数记账，
+          // 不能再按组数记（会把真实消耗大幅低估）。
           calls: result.serpQueries ?? result.groupsQueried,
           grantId: access.grantId,
         });

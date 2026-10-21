@@ -395,7 +395,7 @@ export async function runOneClickScreen(
             actorId: input.actorId,
             feature: "catalog-ad-count",
             keySource: access.keySource,
-            // 多探针后一组最多 3 次 SERP：按实际查询次数记账。
+            // 深度 12 后一组最多 12 次 SERP：按实际查询次数记账。
             calls: result.serpQueries ?? result.groupsQueried,
             grantId: access.grantId,
           });

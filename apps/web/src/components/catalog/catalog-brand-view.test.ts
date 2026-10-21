@@ -38,8 +38,10 @@ import {
   adLandingSplitText,
   adLongtailActiveVisible,
   adLongtailSuffix,
+  adProbeDetailOf,
   adProbeFields,
   effectivePromoMode,
+  probeKindLabel,
 } from "./catalog-brand-view";
 
 const d = zh.products;
@@ -209,13 +211,15 @@ describe("adProbeFields", () => {
 });
 
 describe("adLongtailSuffix", () => {
-  it("renders the probe count as a suffix with the leading separator", () => {
-    expect(adLongtailSuffix(5, d)).toBe("· 长尾探针 约 5 条");
-    expect(adLongtailSuffix(0, d)).toBe("· 长尾探针 约 0 条");
+  it("renders the probe count as a suffix with the leading separator（带快照措辞）", () => {
+    expect(adLongtailSuffix(5, d)).toBe("· 长尾探针 约 5 条·快照");
+    expect(adLongtailSuffix(0, d)).toBe("· 长尾探针 约 0 条·快照");
   });
 
   it("renders in English with the en template", () => {
-    expect(adLongtailSuffix(5, en.products)).toBe("· Longtail probe ~5 ads");
+    expect(adLongtailSuffix(5, en.products)).toBe(
+      "· Longtail probe ~5 ads · snapshot"
+    );
   });
 
   it("returns null when not probed yet (line hidden)", () => {
@@ -237,6 +241,66 @@ describe("adLongtailActiveVisible", () => {
     expect(adLongtailActiveVisible(null, null)).toBe(false);
     expect(adLongtailActiveVisible(0, null)).toBe(false);
     expect(adLongtailActiveVisible(undefined, undefined)).toBe(false);
+  });
+});
+
+describe("adProbeDetailOf", () => {
+  const detail = [
+    { q: "OLIGHT", kind: "bare", paid: 1, shopping: 2, total: 3 },
+    { q: "OLIGHT baton4", kind: "model", paid: 0, shopping: 0, total: 0 },
+    { q: "OLIGHT baton 4", kind: "model", paid: 5, shopping: 1, total: 6 },
+  ];
+
+  it("passes a well-formed detail array through", () => {
+    expect(adProbeDetailOf({ adProbeDetail: detail })).toEqual(detail);
+    expect(adProbeDetailOf({ adProbeDetail: [] })).toEqual([]);
+  });
+
+  it("returns null when missing or not an array (never guessed)", () => {
+    expect(adProbeDetailOf({})).toBeNull();
+    expect(adProbeDetailOf({ adProbeDetail: null })).toBeNull();
+    expect(adProbeDetailOf({ adProbeDetail: "x" })).toBeNull();
+    expect(adProbeDetailOf(null)).toBeNull();
+  });
+
+  it("returns null when any entry is malformed (no half-valid detail)", () => {
+    expect(
+      adProbeDetailOf({ adProbeDetail: [{ q: "X", kind: "weird", paid: 0, shopping: 0, total: 0 }] })
+    ).toBeNull();
+    expect(
+      adProbeDetailOf({ adProbeDetail: [{ q: "X", kind: "bare", paid: "1", shopping: 0, total: 1 }] })
+    ).toBeNull();
+    expect(adProbeDetailOf({ adProbeDetail: [null] })).toBeNull();
+  });
+
+  it("kind labels come from the dict in both languages", () => {
+    expect(probeKindLabel("bare", d)).toBe("裸词");
+    expect(probeKindLabel("model", d)).toBe("型号");
+    expect(probeKindLabel("category", d)).toBe("类目");
+    expect(probeKindLabel("bare", en.products)).toBe("Bare");
+  });
+});
+
+describe("probe detail dict keys", () => {
+  it("exist in both languages with template placeholders intact", () => {
+    for (const dict of [zh, en]) {
+      const p = dict.products;
+      expect(p.probeDetailShow.length).toBeGreaterThan(0);
+      expect(p.probeDetailHide.length).toBeGreaterThan(0);
+      expect(p.probeDetailTitle.length).toBeGreaterThan(0);
+      expect(p.probeDetailEmpty.length).toBeGreaterThan(0);
+      expect(p.probeKindBare.length).toBeGreaterThan(0);
+      expect(p.probeKindModel.length).toBeGreaterThan(0);
+      expect(p.probeKindCategory.length).toBeGreaterThan(0);
+      expect(p.probePaid).toContain("{n}");
+      expect(p.probeShopping).toContain("{n}");
+      expect(p.probeTotal).toContain("{n}");
+    }
+    // 快照措辞：约数表述必须带快照限定，防被误读为广告总量
+    expect(zh.products.adsApprox).toContain("快照");
+    expect(zh.products.adsLongtailApprox).toContain("快照");
+    expect(en.products.adsApprox).toContain("snapshot");
+    expect(en.products.adsLongtailApprox).toContain("snapshot");
   });
 });
 

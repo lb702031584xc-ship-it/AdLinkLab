@@ -389,7 +389,7 @@ export async function prescreenOffers(
             actorId: input.actorId,
             feature: "catalog-ad-count",
             keySource: access.keySource,
-            // 多探针后一组最多 3 次 SERP：按实际查询次数记账（旧 fake 无此字段时退回组数）。
+            // 深度 12 后一组最多 12 次 SERP：按实际查询次数记账（旧 fake 无此字段时退回组数）。
             calls: result.serpQueries ?? result.groupsQueried,
             grantId: access.grantId,
           });

@@ -207,7 +207,7 @@ describe("Phase 9.1 migration command availability", () => {
     expect(compose).not.toMatch(/prisma db push/);
   });
 
-  it("15. migration count is 61 (… + launch archives + P0 security/observability: api_keys/ip_bans/token_revocations/ai_usage_daily/error_reports + P1 batch 1 offer fields + P1/P2 batches 2–6 + catalog product library + catalog blacklist/whitelist + catalog merchant lists + offer affiliate_url + catalog session credentials + merchant_id uuid fix + network_product_enrich + tenant_settings + creatives + brand_ad_count + offer_application_status + catalog_sync_jobs + network_api_products_path + strengthen checklist fields + paid data gateway + brand ad history + ad count longtail)", () => {
+  it("15. migration count is 62 (… + launch archives + P0 security/observability: api_keys/ip_bans/token_revocations/ai_usage_daily/error_reports + P1 batch 1 offer fields + P1/P2 batches 2–6 + catalog product library + catalog blacklist/whitelist + catalog merchant lists + offer affiliate_url + catalog session credentials + merchant_id uuid fix + network_product_enrich + tenant_settings + creatives + brand_ad_count + offer_application_status + catalog_sync_jobs + network_api_products_path + strengthen checklist fields + paid data gateway + brand ad history + ad count longtail + ad probe detail)", () => {
     const migrationsDir = join(
       REPO_ROOT,
       "packages/database/prisma/migrations"
@@ -216,7 +216,8 @@ describe("Phase 9.1 migration command availability", () => {
     const names = readdirSync(migrationsDir).filter((n) =>
       existsSync(join(migrationsDir, n, "migration.sql"))
     );
-    expect(names.length).toBe(61);
+    expect(names.length).toBe(62);
+    expect(names).toContain("20261021150000_ad_probe_detail");
     expect(names).toContain("20261021140000_ad_count_longtail");
     expect(names).toContain("20261021130000_brand_ad_history");
     expect(names).toContain("20261021120000_paid_data_gateway");

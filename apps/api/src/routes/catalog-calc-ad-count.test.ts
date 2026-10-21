@@ -71,6 +71,7 @@ function setup(role: "owner" | "member") {
     groupsFresh: 4,
     groupsStale: 6,
     deadGroupsSkipped: 2,
+    maxQueriesPerGroup: 12,
   });
   return { ctx, app: buildApp(ctx, role).app };
 }
@@ -150,6 +151,8 @@ describe("POST /catalog/products/calc-ad-count/preview", () => {
       groupsFresh: 4,
       groupsStale: 6,
       deadGroupsSkipped: 2,
+      // 每组最坏查询数口径（深度 12）随预估一并带出，供确认框估算。
+      maxQueriesPerGroup: 12,
     });
     expect(mocks.preview).toHaveBeenCalledWith(
       expect.anything(),

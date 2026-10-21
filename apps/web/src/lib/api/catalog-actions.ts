@@ -119,6 +119,8 @@ export interface CatalogProduct {
   payoutCycleDays?: number | null;
   /** 商品级测试优先分（后端与 Offer 侧同构公式现算）：分数 0–100 + 理由短标签。 */
   testPriority?: { score: number; reasons: string[] } | null;
+  /** 探针明细（组级，本次计算实际跑的全部探针逐条）；null = 未按明细口径计算过。 */
+  adProbeDetail?: AdProbeDetailEntry[] | null;
   /** 一键筛选结论（未筛 → null）：pass | kill | review。 */
   screenVerdict?: string | null;
   screenReason?: string | null;
@@ -765,6 +767,20 @@ export async function listCatalogCountriesAction(networkId?: string) {
 /** 品牌广告分档（与后端 brands 接口契约一致；注意 redocean 无下划线）。 */
 export type AdBandKey = "none" | "small" | "sweet" | "hot" | "redocean";
 
+/**
+ * 探针明细一条（与后端 adProbeDetail 契约一致）：一次广告数计算实际跑的
+ * 一条探针——q 查询词、kind 类型（bare 裸品牌词 / model 型号 / category
+ * 类目）、paid 文字广告数、shopping 购物广告数、total 合计。
+ * 这是单次搜索快照，不是该品牌广告总量。
+ */
+export interface AdProbeDetailEntry {
+  q: string;
+  kind: "bare" | "model" | "category";
+  paid: number;
+  shopping: number;
+  total: number;
+}
+
 /** 品牌投放方式显式标注：brand 品牌页投放 / product 单品投放；null = 未标注。 */
 export type BrandPromoMode = "brand" | "product";
 
@@ -800,6 +816,8 @@ export interface CatalogBrand {
   adTrend: AdTrend | null;
   adBand: AdBandKey | null;
   brandScore: number;
+  /** 探针明细（品牌+国家组级，取组内第一个非 null；null = 未按明细口径计算过）。 */
+  adProbeDetail?: AdProbeDetailEntry[] | null;
   /** 品牌落地页链接（旗舰店/官网首页）；null = 未填链接（不代表单品，投放方式看 promoMode）。 */
   landingUrl: string | null;
   /** 投放方式显式标注（用户在品牌行手动标）：brand/product；null = 未标注。 */
