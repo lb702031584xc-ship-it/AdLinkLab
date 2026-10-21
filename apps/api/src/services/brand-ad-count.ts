@@ -41,6 +41,16 @@
  *   preview 用本地派生（零 API）预估实际查询数 expectedQueries，
  *   并按 SERP_QUERY_PRICE_USD 估算费用——确认框签的是看得见的钱，
  *   不是盲签的最坏值。
+ * - 透明中心旁证 TC（2026-10-21 四批）：SERP 快照只能证"有"不能证
+ *   "无"（实证：SERP 对 olight 反复抓 0，Google 广告透明中心有 11 家
+ *   广告主）。故仅当一组 SERP 裸词+长尾双 0（都已知）时，才补查
+ *   DataForSEO Ads Advertisers（透明中心数据源，fetchTcAdvertisers）
+ *   做旁证：TC ≥ 1 = 实际有人在投（tcRescued）；TC = 0 才与 SERP
+ *   合并判"无人投放"；TC 未知（未查/失败）绝不当 0。省钱口径：
+ *   SERP 已 >0 的组 presence 已证，不查 TC；TC 有自己的 14 天新鲜度
+ *   （tcCheckedAt），SERP 侧新鲜但 TC 过期且存量双 0 时可单独补查
+ *   TC 一腿（不重跑 SERP）。TC 查询失败不抛错、不拖垮整轮 calc，
+ *   计入 tcFailed 并记 errors，下次计算自动重试。
  */
 import type { PrismaClient } from "@adlinklab/database";
 import {
@@ -64,6 +74,23 @@ const SERP_API_URL =
  * 按估算口径标注，不当作精确账单。
  */
 export const SERP_QUERY_PRICE_USD = 0.002;
+
+const TC_TASK_POST_URL =
+  "https://api.dataforseo.com/v3/serp/google/ads_advertisers/task_post";
+const TC_TASK_GET_BASE =
+  "https://api.dataforseo.com/v3/serp/google/ads_advertisers/task_get/advanced";
+
+/**
+ * 透明中心旁证（Ads Advertisers）单次查询单价（美元）：2026-10-21
+ * 实测 cost $0.0006/次（task_post 一次的价格，轮询 task_get 不另计）。
+ * 与 SERP_QUERY_PRICE_USD 分开：两种查询计价口径不同，记账与预估
+ * 都按各自单价走，不混淆。
+ */
+export const TC_QUERY_PRICE_USD = 0.0006;
+
+/** TC 轮询默认间隔（15s，规格 10–20s）与最大轮询次数（13 次 ≈ 上限约 3 分钟）。 */
+export const TC_POLL_INTERVAL_MS = 15000;
+export const TC_POLL_MAX_ATTEMPTS = 13;
 
 /** 国家 → DataForSEO location_code。未知国家默认美国。 */
 const LOCATION_CODES: Record<string, number> = {
@@ -501,6 +528,17 @@ export interface BrandAdCountResult {
    * 兼容旧 fake）。可选字段同 skippedDeadGroups 的兼容口径。
    */
   serpQueries?: number;
+  /** 本次发起 TC（透明中心旁证）查询的组数（每组至多查一次）。 */
+  tcChecked?: number;
+  /** TC 查询失败/超时的组数（这些组 TC 维持未知，绝不当 0）。 */
+  tcFailed?: number;
+  /** SERP 双 0 但 TC ≥ 1 的组数（快照未捕获、实际有人投，被旁证翻案）。 */
+  tcRescued?: number;
+  /**
+   * 实际发出的 TC task_post 次数（付费记账口径，单价 TC_QUERY_PRICE_USD；
+   * 与 serpQueries 分开记，两个价格不同不得混算）。
+   */
+  tcQueries?: number;
   productsUpdated: number;
   errors: Array<{ brand: string; countryCode: string | null; message: string }>;
 }
@@ -532,6 +570,10 @@ export interface BrandAdCountDeps {
    * 的内部增量调用不传 → 默认 12，行为不变。
    */
   depth?: number;
+  /** TC 轮询间隔覆盖（测试注入 0 加速；生产默认 TC_POLL_INTERVAL_MS）。 */
+  tcPollIntervalMs?: number;
+  /** TC 轮询次数上限覆盖（测试注入小值模拟超时；生产默认 TC_POLL_MAX_ATTEMPTS）。 */
+  tcPollMaxAttempts?: number;
 }
 
 /** calc 的只读预估（不调 DataForSEO、不需要凭证）：提交付费计算前的数字。 */
@@ -559,8 +601,22 @@ export interface BrandAdCountPreview {
   worstCaseQueries: number;
   /** 单次 SERP 查询单价（美元，= SERP_QUERY_PRICE_USD，估算单价）。 */
   unitPriceUsd: number;
-  /** 预计费用（美元）= expectedQueries × unitPriceUsd（4 位小数）。 */
+  /**
+   * 预计费用（美元，4 位小数）= SERP 部分（expectedQueries ×
+   * unitPriceUsd）+ TC 部分（tcEstimatedCostUsd）。构成可拆分展示，
+   * 总数只有一个，不另造第二口径。
+   */
   estimatedCostUsd: number;
+  /**
+   * 预计补查 TC 的组数（下限估算）：非死组、存量 SERP 双 0 已知且 TC
+   * 未查/过期 → 本轮会补查。用存量值预测：从未算过的组（SERP 值未知）
+   * 无法预判双 0，不计入——实际可能略多于此数，注释与文案按预估口径。
+   */
+  tcChecksExpected: number;
+  /** TC 单次查询单价（美元，= TC_QUERY_PRICE_USD，2026-10-21 实测 cost）。 */
+  tcUnitPriceUsd: number;
+  /** 预计 TC 费用（美元，4 位小数）= tcChecksExpected × tcUnitPriceUsd。 */
+  tcEstimatedCostUsd: number;
 }
 
 interface ProductRow {
@@ -573,6 +629,12 @@ interface ProductRow {
   adCountLongtail: number | null;
   /** 探针明细（Json 原样；null = 尚未按明细口径计算过，新鲜度视为待重探）。 */
   adProbeDetail: unknown;
+  /** 透明中心广告主数（组级印记；null = 从未查过，绝不当 0 用）。 */
+  tcAdvertisersCount: number | null;
+  /** 透明中心头部广告主（Json 原样，仅展示）。 */
+  tcTopAdvertisers: unknown;
+  /** TC 上次查询时间（TC 专用新鲜度，14 天）。 */
+  tcCheckedAt: Date | null;
   adCountCheckedAt: Date | null;
   screenVerdict: string | null;
   status: string;
@@ -610,6 +672,9 @@ async function loadAdCountRows(
       adCount: true,
       adCountLongtail: true,
       adProbeDetail: true,
+      tcAdvertisersCount: true,
+      tcTopAdvertisers: true,
+      tcCheckedAt: true,
       adCountCheckedAt: true,
       screenVerdict: true,
       status: true,
@@ -628,6 +693,10 @@ async function loadAdCountRows(
     adCountLongtail:
       typeof r.adCountLongtail === "number" ? r.adCountLongtail : null,
     adProbeDetail: r.adProbeDetail ?? null,
+    tcAdvertisersCount:
+      typeof r.tcAdvertisersCount === "number" ? r.tcAdvertisersCount : null,
+    tcTopAdvertisers: r.tcTopAdvertisers ?? null,
+    tcCheckedAt: r.tcCheckedAt instanceof Date ? r.tcCheckedAt : null,
     adCountCheckedAt:
       r.adCountCheckedAt instanceof Date ? r.adCountCheckedAt : null,
     screenVerdict: (r.screenVerdict as string | null) ?? null,
@@ -692,6 +761,33 @@ function isGroupFresh(
  */
 function isDeadGroup(items: ProductRow[]): boolean {
   return items.every((p) => p.screenVerdict === "kill" || p.status !== "active");
+}
+
+/** 组级数值读取（组级统一写入，取第一个非 null 即组值；全 null → null）。 */
+function firstGroupNumber(values: Array<number | null>): number | null {
+  for (const v of values) if (v != null) return v;
+  return null;
+}
+
+/** SERP 双 0 已知判定：裸词与长尾都已知（非 null）且都为 0。任一未知 → false（"无"未证）。 */
+function serpDoubleZeroKnown(
+  bare: number | null,
+  longtail: number | null
+): boolean {
+  return bare === 0 && longtail === 0;
+}
+
+/**
+ * TC 是否需要（补）查：组内无任一 tcCheckedAt 在 14 天内 → 需要。
+ * TC 的新鲜度独立于 SERP：SERP 新鲜的组 TC 可能从未查过/已过期，
+ * 反之亦然（SERP 重跑时 TC 新鲜则沿用存量，不重复花钱）。
+ */
+function tcNeedsCheck(items: ProductRow[], now: number): boolean {
+  return !items.some(
+    (p) =>
+      p.tcCheckedAt instanceof Date &&
+      now - p.tcCheckedAt.getTime() < AD_COUNT_CACHE_TTL_MS
+  );
 }
 
 interface SerpItem {
@@ -801,6 +897,139 @@ async function fetchSerpAdTally(
   return tallySerpAds(items);
 }
 
+/** 透明中心头部广告主一条（tcTopAdvertisers 的元素形状，仅展示）。 */
+export interface TcAdvertiserEntry {
+  name: string;
+  /** 该广告主在透明中心的广告条数近似值；接口没给数值 → null（不臆造）。 */
+  approxAds: number | null;
+}
+
+/** 一次 TC 查询的解析结果：广告主总数（权威计数）+ 头部广告主（展示）。 */
+export interface TcAdvertisersResult {
+  count: number;
+  top: TcAdvertiserEntry[];
+}
+
+/** 广告主条目的名称候选字段（实测首条为 title，其余条目字段名可能不一 → 防御式取）。 */
+function tcEntryName(item: Record<string, unknown>): string | null {
+  for (const key of ["title", "advertiser_name", "advertiserName", "name"]) {
+    const v = item[key];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return null;
+}
+
+/** 广告主条目的广告数近似值候选字段：只取数值型，非数值一律 null。 */
+function tcEntryApproxAds(item: Record<string, unknown>): number | null {
+  for (const key of [
+    "approx_ads_count",
+    "approxAds",
+    "ads_count",
+    "adsCount",
+  ]) {
+    const v = item[key];
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+  }
+  return null;
+}
+
+interface TcTaskEnvelope {
+  tasks?: Array<{
+    id?: unknown;
+    status_code?: number;
+    status_message?: string;
+    result?: Array<{
+      items_count?: unknown;
+      items?: Array<Record<string, unknown>>;
+    }>;
+  }>;
+}
+
+/**
+ * 查一次透明中心旁证（Ads Advertisers，Google 广告透明中心数据源）：
+ * 该接口只有 Standard 排队版（无 /live）：task_post 建任务 →
+ * 轮询 task_get/advanced（40601/40602 = 排队中）直到完成。
+ * - 权威计数 = result[0].items_count；头部广告主从 items 防御式解析
+ *   （名称/近似广告数候选字段见上），最多取 3 条，仅展示。
+ * - 任何失败（HTTP 非 2xx、任务异常状态、轮询超时、响应形状不符）
+ *   → 返回 null（未知），**绝不抛错、绝不当 0**：调用方据此保持
+ *   "TC 未知"口径，下次计算重试。device/os 由服务端默认
+ *   （desktop/windows），与 SERP 口径一致。
+ */
+export async function fetchTcAdvertisers(
+  fetchImpl: typeof fetch,
+  creds: { login: string; password: string },
+  keyword: string,
+  countryCode: string | null,
+  poll: { intervalMs?: number; maxAttempts?: number } = {}
+): Promise<TcAdvertisersResult | null> {
+  const intervalMs = poll.intervalMs ?? TC_POLL_INTERVAL_MS;
+  const maxAttempts = poll.maxAttempts ?? TC_POLL_MAX_ATTEMPTS;
+  const cc = (countryCode ?? "").trim().toUpperCase();
+  const auth = Buffer.from(`${creds.login}:${creds.password}`).toString(
+    "base64"
+  );
+  try {
+    const postRes = await fetchImpl(TC_TASK_POST_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${auth}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify([
+        { keyword, location_code: LOCATION_CODES[cc] ?? 2840 },
+      ]),
+    });
+    if (!postRes.ok) return null;
+    const postData = (await postRes.json()) as TcTaskEnvelope;
+    const created = postData?.tasks?.[0];
+    if (
+      !created ||
+      (created.status_code !== 20000 && created.status_code !== 20100) ||
+      typeof created.id !== "string" ||
+      !created.id
+    ) {
+      return null;
+    }
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      if (attempt > 0 && intervalMs > 0) {
+        await new Promise((r) => setTimeout(r, intervalMs));
+      }
+      const getRes = await fetchImpl(
+        `${TC_TASK_GET_BASE}/${created.id}`,
+        { method: "GET", headers: { Authorization: `Basic ${auth}` } }
+      );
+      if (!getRes.ok) return null;
+      const data = (await getRes.json()) as TcTaskEnvelope;
+      const task = data?.tasks?.[0];
+      if (!task) return null;
+      // 40601 = Task Handed，40602 = Task In Queue：继续轮询。
+      if (task.status_code === 40601 || task.status_code === 40602) continue;
+      if (task.status_code !== 20000) return null;
+      const result0 = task.result?.[0];
+      if (!result0) return null;
+      const count =
+        typeof result0.items_count === "number" &&
+        Number.isFinite(result0.items_count)
+          ? result0.items_count
+          : null;
+      if (count === null) return null;
+      const top: TcAdvertiserEntry[] = [];
+      for (const raw of result0.items ?? []) {
+        if (top.length >= 3) break;
+        if (!raw || typeof raw !== "object") continue;
+        const name = tcEntryName(raw);
+        if (!name) continue;
+        top.push({ name, approxAds: tcEntryApproxAds(raw) });
+      }
+      return { count, top };
+    }
+    return null; // 轮询用尽仍未完成 → 超时，未知
+  } catch {
+    return null;
+  }
+}
+
 /**
  * 批量计算广告投放数量（增量）：按（品牌，国家）分组，每组查一次 SERP，
  * 结果写回组内全部商品。productIds 为空/缺省 → 该 tenant 全部商品（仍受
@@ -835,10 +1064,49 @@ export async function calcBrandAdCounts(
     groupsSkippedCache: 0,
     skippedDeadGroups: 0,
     serpQueries: 0,
+    tcChecked: 0,
+    tcFailed: 0,
+    tcRescued: 0,
+    tcQueries: 0,
     productsUpdated: 0,
     errors: [],
   };
   const now = Date.now();
+
+  /**
+   * 对一组执行一次 TC 查询并统一记账/计数：task_post 发出即计 1 次
+   * tcQueries（付费口径）；失败计入 tcFailed + errors 并返回 null
+   * （TC 维持未知，不写任何 tc 字段，下次计算重试）；成功且 ≥1 家
+   * 计入 tcRescued。失败绝不抛错、不拖垮整轮 calc。
+   */
+  const runTcQuery = async (
+    g: AdCountGroup
+  ): Promise<TcAdvertisersResult | null> => {
+    result.tcQueries = (result.tcQueries ?? 0) + 1;
+    result.tcChecked = (result.tcChecked ?? 0) + 1;
+    const tc = await fetchTcAdvertisers(
+      fetchImpl,
+      { login, password },
+      g.brand,
+      g.countryCode,
+      {
+        intervalMs: deps.tcPollIntervalMs,
+        maxAttempts: deps.tcPollMaxAttempts,
+      }
+    );
+    if (tc == null) {
+      result.tcFailed = (result.tcFailed ?? 0) + 1;
+      result.errors.push({
+        brand: g.brand,
+        countryCode: g.countryCode,
+        message:
+          "透明中心旁证查询失败/超时（TC 未知，不影响 SERP 结果，下次计算重试）",
+      });
+      return null;
+    }
+    if (tc.count >= 1) result.tcRescued = (result.tcRescued ?? 0) + 1;
+    return tc;
+  };
 
   for (const g of groups.values()) {
     // 活口径（aliveOnly）：整组判死 → 跳过（单独计数，不与缓存跳过混淆）。
@@ -850,7 +1118,34 @@ export async function calcBrandAdCounts(
     // 14 天缓存：组内任一商品在缓存期内查过 → 整组跳过。
     // force=true 时不跳过（用户显式要求忽略缓存重新计费查询）。
     if (!deps.force && isGroupFresh(g.brand, g.items, now)) {
-      result.groupsSkippedCache += 1;
+      // TC 单独补查：SERP 侧新鲜，但存量 SERP 双 0（都已知）且 TC
+      // 未查/已过期 → 只补 TC 这一腿：不重跑 SERP、不动 SERP 印记
+      // 与 last* 快照，只写 tc 三字段。补查失败同样不影响跳过口径
+      // 之外的任何东西（runTcQuery 已记 errors/tcFailed）。
+      const storedBare = firstGroupNumber(g.items.map((p) => p.adCount));
+      const storedLongtail = firstGroupNumber(
+        g.items.map((p) => p.adCountLongtail)
+      );
+      if (
+        serpDoubleZeroKnown(storedBare, storedLongtail) &&
+        tcNeedsCheck(g.items, now)
+      ) {
+        const tc = await runTcQuery(g);
+        if (tc) {
+          const res = await prisma.networkProduct.updateMany({
+            where: { id: { in: g.items.map((p) => p.id) }, tenantId },
+            data: {
+              tcAdvertisersCount: tc.count,
+              // Json 字段：纯 JSON 形状（与 adProbeDetail 同惯例）。
+              tcTopAdvertisers: tc.top as never,
+              tcCheckedAt: new Date(),
+            },
+          });
+          result.productsUpdated += res.count;
+        }
+      } else {
+        result.groupsSkippedCache += 1;
+      }
       continue;
     }
 
@@ -943,6 +1238,30 @@ export async function calcBrandAdCounts(
     // 落地类型拆分：同行这批广告是落首页/旗舰店还是落商品页（other 不计入）。
     // 同拆分口径：只看 paid 条目 URL，购物条目不扩展（v1）。
     const landing = countLandingTypes(tally.paidAds.map((a) => a.url));
+    // 透明中心旁证（省钱口径）：仅当本轮 SERP 裸词+长尾双 0（都已知）
+    // 才查 TC——SERP 已 >0 的组 presence 已证，不查；长尾未知（null）
+    // 时"无"未证，同样不查。TC 自身守 14 天新鲜度：新鲜时沿用存量
+    // （不重查、不写回）；force 只绕 SERP 缓存，不绕 TC 新鲜度。
+    // TC 失败 → tcData 保持 null，本次写回不带 tc 字段（维持未知）。
+    let tcData: {
+      tcAdvertisersCount: number;
+      tcTopAdvertisers: TcAdvertiserEntry[];
+      tcCheckedAt: Date;
+    } | null = null;
+    if (
+      serpDoubleZeroKnown(tally.total, longtail) &&
+      tcNeedsCheck(g.items, now)
+    ) {
+      const tc = await runTcQuery(g);
+      if (tc) {
+        tcData = {
+          tcAdvertisersCount: tc.count,
+          tcTopAdvertisers: tc.top,
+          tcCheckedAt: new Date(),
+        };
+      }
+    }
+
     // 快照：把组内代表行（组级统一写入，任一行即组值）的旧广告数/旧查询时间
     // 挪到 last* 字段，供下次计算时派生趋势（新投/停投/持续）。
     const representative = g.items[0];
@@ -958,6 +1277,14 @@ export async function calcBrandAdCounts(
         adPolicyRisk: policyRisk,
         // Json 字段：明细是纯 JSON 形状（与 catalog-sync 写 rawData 同惯例）。
         adProbeDetail: detail as never,
+        // TC 旁证本轮查到才写；未查/失败不带这三个字段（存量 TC 值原样保留）。
+        ...(tcData
+          ? {
+              tcAdvertisersCount: tcData.tcAdvertisersCount,
+              tcTopAdvertisers: tcData.tcTopAdvertisers as never,
+              tcCheckedAt: tcData.tcCheckedAt,
+            }
+          : {}),
         adCountCheckedAt: new Date(),
         lastAdCount: representative?.adCount ?? null,
         lastAdCountCheckedAt: representative?.adCountCheckedAt ?? null,
@@ -981,7 +1308,8 @@ export async function calcBrandAdCounts(
  *   （aliveOnly 先跳死组；force=false 再跳新鲜组；force=true 全跑）。
  *   每组预计查询数 = 1（裸词）+ 本地派生在所选 depth 下的长尾探针数
  *   （deriveLongtailProbes 纯函数零 API，派生多少条就会查多少条）；
- *   estimatedCostUsd = expectedQueries × SERP_QUERY_PRICE_USD。
+ *   estimatedCostUsd = expectedQueries × SERP_QUERY_PRICE_USD + TC 部分
+ *   （tcChecksExpected × TC_QUERY_PRICE_USD，口径见接口字段注释）。
  */
 export async function previewBrandAdCounts(
   prisma: PrismaClient,
@@ -997,6 +1325,7 @@ export async function previewBrandAdCounts(
   let deadGroupsSkipped = 0;
   let billableGroups = 0;
   let expectedQueries = 0;
+  let tcChecksExpected = 0;
   for (const g of groups.values()) {
     const fresh = isGroupFresh(g.brand, g.items, now);
     if (fresh) groupsFresh += 1;
@@ -1005,11 +1334,27 @@ export async function previewBrandAdCounts(
     if (dead) deadGroupsSkipped += 1;
     // 将计费判定与 calc 的跳过顺序一致：死组先跳 → 新鲜组增量跳过。
     if (dead) continue;
+    // TC 补查预估（与 calc 触发同口径，但只能用存量值预测）：非死组、
+    // 存量 SERP 双 0 已知且 TC 未查/过期 → 本轮会补查 TC（含 SERP
+    // 侧新鲜、只补 TC 一腿的组，故此判定在新鲜组跳过之前）。从未算
+    // 过的组 SERP 值未知、无法预判双 0，不计入（下限估算）。
+    const storedBare = firstGroupNumber(g.items.map((p) => p.adCount));
+    const storedLongtail = firstGroupNumber(
+      g.items.map((p) => p.adCountLongtail)
+    );
+    if (
+      serpDoubleZeroKnown(storedBare, storedLongtail) &&
+      tcNeedsCheck(g.items, now)
+    ) {
+      tcChecksExpected += 1;
+    }
     if (!opts.force && fresh) continue;
     billableGroups += 1;
     expectedQueries +=
       1 + deriveLongtailProbes(g.brand, g.items, depth - 1).length;
   }
+  const tcEstimatedCostUsd =
+    Math.round(tcChecksExpected * TC_QUERY_PRICE_USD * 10000) / 10000;
   return {
     groupsTotal: groups.size,
     groupsFresh,
@@ -1020,7 +1365,13 @@ export async function previewBrandAdCounts(
     expectedQueries,
     worstCaseQueries: billableGroups * depth,
     unitPriceUsd: SERP_QUERY_PRICE_USD,
+    // 总费用 = SERP 部分 + TC 部分（构成见 tcEstimatedCostUsd）。
     estimatedCostUsd:
-      Math.round(expectedQueries * SERP_QUERY_PRICE_USD * 10000) / 10000,
+      Math.round(
+        (expectedQueries * SERP_QUERY_PRICE_USD + tcEstimatedCostUsd) * 10000
+      ) / 10000,
+    tcChecksExpected,
+    tcUnitPriceUsd: TC_QUERY_PRICE_USD,
+    tcEstimatedCostUsd,
   };
 }

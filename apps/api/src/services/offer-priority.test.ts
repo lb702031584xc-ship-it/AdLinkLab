@@ -78,6 +78,58 @@ describe("computeTestPriority 广告腿", () => {
     expect(stopped.reasons).toContain("疑似停投");
     expect(stopped.reasons).not.toContain("暂无广告在投");
   });
+
+  it("透明中心地板：SERP 双 0 + TC ≥1 → 按 small（30）计；TC=0 / 未查维持 none", () => {
+    const linked = { ...base, hasProductLink: true };
+    const rescued = computeTestPriority({
+      ...linked,
+      adCount: 0,
+      adCountLongtail: 0,
+      tcAdvertisersCount: 11,
+      lastAdCount: null,
+    });
+    expect(rescued.score).toBe(5 + 30 + 8);
+    expect(rescued.reasons).toContain("透明中心有广告主在投（快照未捕获）");
+    // 长尾未探明（null）+ TC ≥1 同样托底（band=none 已蕴含长尾未 ≥1）
+    expect(
+      computeTestPriority({
+        ...linked,
+        adCount: 0,
+        adCountLongtail: null,
+        tcAdvertisersCount: 3,
+        lastAdCount: null,
+      }).score
+    ).toBe(5 + 30 + 8);
+    // TC = 0 → 维持 none（4）；TC 未查（null/缺省）→ 维持现行不臆造
+    expect(
+      computeTestPriority({
+        ...linked,
+        adCount: 0,
+        adCountLongtail: 0,
+        tcAdvertisersCount: 0,
+        lastAdCount: null,
+      }).score
+    ).toBe(5 + 4 + 8);
+    expect(
+      computeTestPriority({
+        ...linked,
+        adCount: 0,
+        adCountLongtail: 0,
+        tcAdvertisersCount: null,
+        lastAdCount: null,
+      }).score
+    ).toBe(5 + 4 + 8);
+    // SERP 已 ≥1 时 TC 不改变档位（small 本位，文案不换）
+    const serp = computeTestPriority({
+      ...linked,
+      adCount: 3,
+      tcAdvertisersCount: 11,
+      lastAdCount: null,
+    });
+    expect(serp.score).toBe(5 + 30 + 8);
+    expect(serp.reasons).toContain("有广告在投");
+    expect(serp.reasons).not.toContain("透明中心有广告主在投");
+  });
 });
 
 describe("computeTestPriority 佣金腿与 reasons 排序", () => {

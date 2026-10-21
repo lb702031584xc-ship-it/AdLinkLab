@@ -239,6 +239,16 @@ function serializeProduct(r: Record<string, unknown>, whitelisted: boolean) {
     adCountCheckedAt:
       (r.adCountCheckedAt as Date)?.toISOString?.() ??
       (typeof r.adCountCheckedAt === "string" ? r.adCountCheckedAt : null),
+    /** 透明中心广告主数（组级旁证，SERP 双 0 时补查）：null = 从未查过
+     * （前端不显示，绝不拿空冒充 0）；0 = 查过且透明中心无广告主。 */
+    tcAdvertisersCount: numOrNull(r.tcAdvertisersCount),
+    /** 透明中心头部广告主 [{name, approxAds}]（仅展示）；形状不对 → null。 */
+    tcTopAdvertisers: Array.isArray(r.tcTopAdvertisers)
+      ? r.tcTopAdvertisers
+      : null,
+    tcCheckedAt:
+      (r.tcCheckedAt as Date)?.toISOString?.() ??
+      (typeof r.tcCheckedAt === "string" ? r.tcCheckedAt : null),
     /** 上一次广告数快照（重算时由旧 adCount 挪入）与快照时间；趋势现算不落库：
      * first（首次）/ new（新投）/ stopped（疑似停投）/ active（持续）/ none / null（未计算）。 */
     lastAdCount: numOrNull(r.lastAdCount),
@@ -1158,6 +1168,9 @@ export async function registerCatalogRoutes(
         adCountLongtail: true,
         adPolicyRisk: true,
         adProbeDetail: true,
+        tcAdvertisersCount: true,
+        tcTopAdvertisers: true,
+        tcCheckedAt: true,
         lastAdCount: true,
       },
     })) as Array<Record<string, unknown>>;
@@ -1185,6 +1198,12 @@ export async function registerCatalogRoutes(
       adPolicyRisk: boolean;
       /** 探针明细（组级统一写入，取第一个非 null 即组值）；未按明细口径算过 → null。 */
       adProbeDetail: unknown;
+      /** 透明中心广告主数（组级，第一个非 null 即组值）；从未查过 → null。 */
+      tcAdvertisersCount: number | null;
+      /** 透明中心头部广告主（组级，第一个非 null 数组即组值）；仅展示。 */
+      tcTopAdvertisers: unknown;
+      /** TC 上次查询时间（组级，第一个非 null 即组值；ISO 输出）。 */
+      tcCheckedAt: Date | string | null;
       lastAdCount: number | null;
       products: Array<Record<string, unknown>>;
     }
@@ -1222,6 +1241,9 @@ export async function registerCatalogRoutes(
           adCountLongtail: null,
           adPolicyRisk: false,
           adProbeDetail: null,
+          tcAdvertisersCount: null,
+          tcTopAdvertisers: null,
+          tcCheckedAt: null,
           lastAdCount: null,
           products: [],
         };
@@ -1264,6 +1286,13 @@ export async function registerCatalogRoutes(
       // 探针明细同口径：第一个非 null（且形状为数组）即组值。
       if (g.adProbeDetail === null && Array.isArray(r.adProbeDetail))
         g.adProbeDetail = r.adProbeDetail;
+      // 透明中心旁证同口径：计数/头部名单/查询时间都取第一个非 null。
+      if (g.tcAdvertisersCount === null)
+        g.tcAdvertisersCount = numOrNull(r.tcAdvertisersCount);
+      if (g.tcTopAdvertisers === null && Array.isArray(r.tcTopAdvertisers))
+        g.tcTopAdvertisers = r.tcTopAdvertisers;
+      if (g.tcCheckedAt === null && (r.tcCheckedAt ?? null) !== null)
+        g.tcCheckedAt = r.tcCheckedAt as Date | string;
       if (r.adPolicyRisk === true) g.adPolicyRisk = true;
       if (g.lastAdCount === null) g.lastAdCount = numOrNull(r.lastAdCount);
       g.products.push({
@@ -1356,6 +1385,11 @@ export async function registerCatalogRoutes(
         adCountLongtail: g.adCountLongtail,
         adPolicyRisk: g.adPolicyRisk,
         adProbeDetail: g.adProbeDetail,
+        tcAdvertisersCount: g.tcAdvertisersCount,
+        tcTopAdvertisers: g.tcTopAdvertisers,
+        tcCheckedAt:
+          (g.tcCheckedAt as Date)?.toISOString?.() ??
+          (typeof g.tcCheckedAt === "string" ? g.tcCheckedAt : null),
         lastAdCount: g.lastAdCount,
         adTrend,
         adBand,
@@ -2002,7 +2036,13 @@ export async function registerCatalogRoutes(
         }
         throw e;
       }
-      if (result.groupsQueried > 0) {
+      // 记账门槛：SERP 或 TC 任一实际发出查询都记账（TC 单独补查时
+      // groupsQueried 可能为 0，不能漏记）；calls = SERP 实际查询数
+      // + TC task_post 数（合并计数，拆分看审计 detail 的两字段）。
+      const totalCalls =
+        (result.serpQueries ?? result.groupsQueried) +
+        (result.tcQueries ?? 0);
+      if (totalCalls > 0) {
         await recordPaidDataUsage(prisma, {
           tenantId: info.tenantId,
           actorId: info.id,
@@ -2010,7 +2050,7 @@ export async function registerCatalogRoutes(
           keySource: access.keySource,
           // 一组最多 depth 次 SERP 查询（深度可选 4/8/12）：按实际
           // 查询次数记账，不能再按组数记（会把真实消耗大幅低估）。
-          calls: result.serpQueries ?? result.groupsQueried,
+          calls: totalCalls,
           grantId: access.grantId,
         });
       }
@@ -2025,6 +2065,11 @@ export async function registerCatalogRoutes(
           depth: depth ?? 12,
           groupsQueried: result.groupsQueried,
           serpQueries: result.serpQueries ?? result.groupsQueried,
+          // TC 旁证与 SERP 并列记账拆分（单价不同，混算会失真）。
+          tcQueries: result.tcQueries ?? 0,
+          tcChecked: result.tcChecked ?? 0,
+          tcFailed: result.tcFailed ?? 0,
+          tcRescued: result.tcRescued ?? 0,
           groupsSkippedCache: result.groupsSkippedCache,
           skippedDeadGroups: result.skippedDeadGroups ?? 0,
           productsUpdated: result.productsUpdated,

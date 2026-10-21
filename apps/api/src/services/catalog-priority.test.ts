@@ -74,6 +74,37 @@ describe("广告腿：分档 / 长尾地板 / 趋势", () => {
     ).toBe(30 + 4 + 8);
   });
 
+  it("透明中心地板：SERP 双 0 + TC ≥1 → small（30）；TC=0/未查维持 none；fromRow 透传", () => {
+    const base = { ...neutral, screenVerdict: "pass" as const };
+    expect(
+      computeCatalogTestPriority({
+        ...base,
+        adCount: 0,
+        adCountLongtail: 0,
+        tcAdvertisersCount: 11,
+      }).score
+    ).toBe(30 + 30 + 8);
+    expect(
+      computeCatalogTestPriority({
+        ...base,
+        adCount: 0,
+        adCountLongtail: 0,
+        tcAdvertisersCount: 0,
+      }).score
+    ).toBe(30 + 4 + 8);
+    expect(
+      computeCatalogTestPriority({ ...base, adCount: 0, adCountLongtail: 0 }).score
+    ).toBe(30 + 4 + 8);
+    // catalogPriorityInputFromRow 把 tcAdvertisersCount 原样带入（Decimal/字符串归一）
+    expect(
+      catalogPriorityInputFromRow({ tcAdvertisersCount: 11 }).tcAdvertisersCount
+    ).toBe(11);
+    expect(
+      catalogPriorityInputFromRow({ tcAdvertisersCount: "x" }).tcAdvertisersCount
+    ).toBeNull();
+    expect(catalogPriorityInputFromRow({}).tcAdvertisersCount).toBeNull();
+  });
+
   it("疑似停投封顶 4（上次 >0、本次 0），文案替换为「疑似停投」", () => {
     const r = computeCatalogTestPriority({
       ...neutral,

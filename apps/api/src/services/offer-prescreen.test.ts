@@ -34,7 +34,8 @@ function makeWorld(blacklist: Array<Record<string, unknown>> = []) {
     networkProduct: {
       findMany: async () => [
         { id: "np1", brand: "WidgetCo", adCount: 6, adCountLongtail: 3 },
-        { id: "np2", brand: "ZeroBrand", adCount: 0, adCountLongtail: 0 },
+        // 三通道全 0 已知（SERP 裸词/长尾 + 透明中心）→ 判停口径夹具
+        { id: "np2", brand: "ZeroBrand", adCount: 0, adCountLongtail: 0, tcAdvertisersCount: 0 },
       ],
     },
     offer: {
@@ -284,6 +285,8 @@ describe("prescreenOffers 广告层投放方式分流（promoMode）", () => {
     countryCode: "US",
     adCount: 0,
     adCountLongtail: 0,
+    // 三通道全 0 已知才能进判停分支（promoMode 豁免在该分支内判定）
+    tcAdvertisersCount: 0,
     lastAdCount: null,
   });
   const profile = (brandKey: string, promoMode: string) => ({
@@ -426,6 +429,7 @@ describe("prescreenOffers 广告层多探针口径", () => {
         brand: "GunBrand",
         adCount: 0,
         adCountLongtail: 0,
+        tcAdvertisersCount: 0,
         adPolicyRisk: true,
         lastAdCount: null,
       },
@@ -445,17 +449,20 @@ describe("prescreenOffers 广告层多探针口径", () => {
     expect(counts.stop).toBe(1);
   });
 
-  it("长尾未探明（null，旧印记）→ 维持旧口径：只看裸词判停，原因不变", async () => {
+  it("长尾未探明（null，旧印记）→ 新口径不判停：任一维度未知 → unknown 转复核", async () => {
+    // 2026-10-21 透明中心旁证批改判：旧口径"长尾未知只看裸词判停"已废止——
+    // 判停须裸词/长尾/透明中心三通道全 0 已知；长尾未探明 + TC 未查时
+    // "无人投放"未被证实，绝不判停（unknown-never-fail）。
     const prisma = makeWorldWithProducts([
-      // 无 adCountLongtail 字段 = 多探针上线前旧印记
+      // 无 adCountLongtail 字段 = 多探针上线前旧印记；TC 同样从未查过
       { id: "np-old", brand: "OldBrand", adCount: 0, lastAdCount: null },
     ]);
-    const { outcomes } = await prescreenOffers(
+    const { outcomes, counts } = await prescreenOffers(
       {
         prisma,
         gateEvaluator: gateOk,
         gatewayResolve: gatewayOk,
-        // 触发增量计算但组被新鲜度/无探针跳过（groupsQueried=0）→ 长尾仍未知
+        // 触发增量计算但组被新鲜度/无探针跳过（groupsQueried=0）→ 长尾/TC 仍未知
         adCountCalc: async () => ({
           groupsQueried: 0,
           groupsSkippedCache: 1,
@@ -470,8 +477,185 @@ describe("prescreenOffers 广告层多探针口径", () => {
         offers: [offer({ id: "o-old", brandName: "OldBrand" })],
       }
     );
-    expect(outcomes[0].verdict).toBe("stop");
-    expect(outcomes[0].reason).toContain("广告数为 0");
+    expect(outcomes[0].verdict).toBe("unknown");
+    expect(outcomes[0].reason).toContain("待人工复核");
+    expect(counts.stop).toBe(0);
     expect(outcomes[0].adLongtailOnly).toBeUndefined();
+  });
+});
+
+describe("prescreenOffers 广告层透明中心旁证口径", () => {
+  function makeWorldWithProducts(
+    products: Array<Record<string, unknown>>
+  ): PrismaClient {
+    return {
+      catalogBlacklist: { findMany: async () => [] },
+      catalogScreeningPreset: { findUnique: async () => null },
+      aiSetting: { findUnique: async () => null },
+      networkProduct: { findMany: async () => products },
+      brandProfile: { findMany: async () => [] },
+      offer: { update: async () => ({}) },
+      adminGrantAudit: { create: async () => ({}) },
+    } as unknown as PrismaClient;
+  }
+  const gateOk = async () =>
+    ({
+      passed: true,
+      reason: "ok",
+      officialSite: null,
+      signals: [],
+    }) as TrafficGateResult;
+
+  it("SERP 双 0 + TC ≥1 → go + tcRescued 标记/计数 + 旁证原因文案", async () => {
+    const prisma = makeWorldWithProducts([
+      {
+        id: "np-tc1",
+        brand: "OlightLike",
+        adCount: 0,
+        adCountLongtail: 0,
+        tcAdvertisersCount: 11,
+        lastAdCount: null,
+      },
+    ]);
+    const { outcomes, counts } = await prescreenOffers(
+      { prisma, gateEvaluator: gateOk, gatewayResolve: gatewayOk },
+      {
+        tenantId: "t1",
+        actorId: "u1",
+        userRole: "owner",
+        offers: [offer({ id: "o-tc", brandName: "OlightLike" })],
+      }
+    );
+    expect(outcomes[0].verdict).toBe("go");
+    expect(outcomes[0].tcRescued).toBe(true);
+    expect(outcomes[0].tcAdvertisersCount).toBe(11);
+    expect(outcomes[0].reason).toContain(
+      "透明中心有 11 家广告主在投（快照未捕获）"
+    );
+    expect(counts.adTcRescuedCount).toBe(1);
+    expect(counts.stop).toBe(0);
+  });
+
+  it("SERP 双 0 + TC = 0（三通道全 0 已知）→ stop，双通道确认文案", async () => {
+    const prisma = makeWorldWithProducts([
+      {
+        id: "np-tc0",
+        brand: "DeadBrand",
+        adCount: 0,
+        adCountLongtail: 0,
+        tcAdvertisersCount: 0,
+        lastAdCount: null,
+      },
+    ]);
+    const { outcomes, counts } = await prescreenOffers(
+      { prisma, gateEvaluator: gateOk, gatewayResolve: gatewayOk },
+      {
+        tenantId: "t1",
+        actorId: "u1",
+        userRole: "owner",
+        offers: [offer({ id: "o-dead", brandName: "DeadBrand" })],
+      }
+    );
+    expect(outcomes[0].verdict).toBe("stop");
+    expect(outcomes[0].reason).toContain("SERP 与透明中心双通道确认");
+    expect(counts.stop).toBe(1);
+    expect(counts.adTcRescuedCount).toBe(0);
+  });
+
+  it("SERP 双 0 + TC 未查（calc 补查后仍未知）→ unknown 转复核，绝不判停", async () => {
+    const prisma = makeWorldWithProducts([
+      {
+        id: "np-tcn",
+        brand: "UnknownBrand",
+        adCount: 0,
+        adCountLongtail: 0,
+        lastAdCount: null,
+      },
+    ]);
+    const { outcomes, counts } = await prescreenOffers(
+      {
+        prisma,
+        gateEvaluator: gateOk,
+        gatewayResolve: gatewayOk,
+        adCountCalc: async () => ({
+          groupsQueried: 0,
+          groupsSkippedCache: 1,
+          productsUpdated: 0,
+          errors: [],
+        }),
+      },
+      {
+        tenantId: "t1",
+        actorId: "u1",
+        userRole: "owner",
+        offers: [offer({ id: "o-unk", brandName: "UnknownBrand" })],
+      }
+    );
+    expect(outcomes[0].verdict).toBe("unknown");
+    expect(outcomes[0].reason).toContain("待人工复核");
+    expect(counts.stop).toBe(0);
+  });
+
+  it("TC 触发 + 记账：双 0 未查 TC → 送 calc；calc 只补 TC（tcQueries=1）也记账并刷回翻案", async () => {
+    const products: Array<Record<string, unknown>> = [
+      {
+        id: "np-tcb",
+        brand: "LateBrand",
+        adCount: 0,
+        adCountLongtail: 0,
+        lastAdCount: null,
+      },
+    ];
+    const usageCalls: number[] = [];
+    const prisma = {
+      catalogBlacklist: { findMany: async () => [] },
+      catalogScreeningPreset: { findUnique: async () => null },
+      aiSetting: { findUnique: async () => null },
+      networkProduct: { findMany: async () => products },
+      brandProfile: { findMany: async () => [] },
+      offer: { update: async () => ({}) },
+      adminGrantAudit: { create: async () => ({}) },
+      paidDataUsage: {
+        upsert: async (args: { create: { calls: number } }) => {
+          usageCalls.push(args.create.calls);
+          return {};
+        },
+      },
+    } as unknown as PrismaClient;
+    const { outcomes, counts } = await prescreenOffers(
+      {
+        prisma,
+        gateEvaluator: gateOk,
+        gatewayResolve: gatewayOk,
+        // 模拟 calc 的 TC 单独补查：SERP 零查询、TC 1 次，写回 TC=7。
+        adCountCalc: async () => {
+          products[0].tcAdvertisersCount = 7;
+          return {
+            groupsQueried: 0,
+            groupsSkippedCache: 1,
+            serpQueries: 0,
+            tcQueries: 1,
+            tcChecked: 1,
+            tcFailed: 0,
+            tcRescued: 1,
+            productsUpdated: 1,
+            errors: [],
+          };
+        },
+      },
+      {
+        tenantId: "t1",
+        actorId: "u1",
+        userRole: "owner",
+        offers: [offer({ id: "o-late", brandName: "LateBrand" })],
+      }
+    );
+    // 记账：groupsQueried=0 也记（TC 的 1 次不能漏）
+    expect(usageCalls).toEqual([1]);
+    // 刷回后按 TC=7 翻案
+    expect(outcomes[0].verdict).toBe("go");
+    expect(outcomes[0].tcRescued).toBe(true);
+    expect(outcomes[0].tcAdvertisersCount).toBe(7);
+    expect(counts.adTcRescuedCount).toBe(1);
   });
 });

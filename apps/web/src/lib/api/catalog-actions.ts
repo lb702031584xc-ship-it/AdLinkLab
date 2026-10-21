@@ -121,6 +121,12 @@ export interface CatalogProduct {
   testPriority?: { score: number; reasons: string[] } | null;
   /** 探针明细（组级，本次计算实际跑的全部探针逐条）；null = 未按明细口径计算过。 */
   adProbeDetail?: AdProbeDetailEntry[] | null;
+  /** 透明中心广告主数（组级旁证，SERP 双 0 时补查）；null = 从未查过（不显示）。 */
+  tcAdvertisersCount?: number | null;
+  /** 透明中心头部广告主 [{name, approxAds}]（仅展示）；null = 未查/无数据。 */
+  tcTopAdvertisers?: TcAdvertiserEntry[] | null;
+  /** 透明中心上次查询时间（ISO）；null = 从未查过。 */
+  tcCheckedAt?: string | null;
   /** 一键筛选结论（未筛 → null）：pass | kill | review。 */
   screenVerdict?: string | null;
   screenReason?: string | null;
@@ -781,6 +787,16 @@ export interface AdProbeDetailEntry {
   total: number;
 }
 
+/**
+ * 透明中心头部广告主一条（与后端 tcTopAdvertisers 契约一致）：
+ * name 广告主名；approxAds 该广告主在透明中心的广告条数近似值
+ * （接口没给数值时为 null，不臆造）。
+ */
+export interface TcAdvertiserEntry {
+  name: string;
+  approxAds: number | null;
+}
+
 /** 品牌投放方式显式标注：brand 品牌页投放 / product 单品投放；null = 未标注。 */
 export type BrandPromoMode = "brand" | "product";
 
@@ -818,6 +834,12 @@ export interface CatalogBrand {
   brandScore: number;
   /** 探针明细（品牌+国家组级，取组内第一个非 null；null = 未按明细口径计算过）。 */
   adProbeDetail?: AdProbeDetailEntry[] | null;
+  /** 透明中心广告主数（品牌+国家组级旁证）；null = 从未查过（不显示，绝不冒充 0）。 */
+  tcAdvertisersCount?: number | null;
+  /** 透明中心头部广告主（组级，仅展示）；null = 未查/无数据。 */
+  tcTopAdvertisers?: TcAdvertiserEntry[] | null;
+  /** 透明中心上次查询时间（ISO，组级）；null = 从未查过。 */
+  tcCheckedAt?: string | null;
   /** 品牌落地页链接（旗舰店/官网首页）；null = 未填链接（不代表单品，投放方式看 promoMode）。 */
   landingUrl: string | null;
   /** 投放方式显式标注（用户在品牌行手动标）：brand/product；null = 未标注。 */

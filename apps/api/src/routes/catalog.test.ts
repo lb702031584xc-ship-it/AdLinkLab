@@ -772,6 +772,104 @@ describe("探针明细透传（products 行字段 + brands 聚合）", () => {
   });
 });
 
+describe("透明中心旁证透传（products 行字段 + brands 聚合 + 优先分地板）", () => {
+  const TOP = [{ name: "OLIGHTSTORE USA INC", approxAds: 8300 }];
+  const CHECKED = new Date("2026-10-21T08:00:00.000Z");
+
+  function setup() {
+    const { ctx } = makeCatalogFakePrisma();
+    ctx.affiliateNetwork.push(testNetwork());
+    ctx.networkProduct.push(
+      funnelProduct({
+        externalId: "t1",
+        brand: "TcBrand",
+        countryCode: "US",
+        adCount: 0,
+        adCountLongtail: 0,
+        tcAdvertisersCount: 11,
+        tcTopAdvertisers: TOP,
+        tcCheckedAt: CHECKED,
+      }),
+      // 同组第二件 TC 为 null（半写状态）：聚合取第一个非 null
+      funnelProduct({
+        externalId: "t2",
+        brand: "TcBrand",
+        countryCode: "US",
+        adCount: 0,
+        adCountLongtail: 0,
+      }),
+      // TC = 0（查过且无广告主）：与未查（null）严格区分
+      funnelProduct({
+        externalId: "t3",
+        brand: "ZeroTcBrand",
+        countryCode: "US",
+        adCount: 0,
+        adCountLongtail: 0,
+        tcAdvertisersCount: 0,
+        tcCheckedAt: CHECKED,
+      }),
+      // 从未查过 TC 的品牌组 → null，不拿空冒充 0
+      funnelProduct({ externalId: "t4", brand: "PlainBrand", countryCode: "US" })
+    );
+    return ctx;
+  }
+
+  it("GET products：tc 三字段透传（count/top/checkedAt ISO）；未查 → 全 null", async () => {
+    const ctx = setup();
+    const { app } = buildApp(ctx, "member");
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/catalog/products",
+    });
+    expect(res.statusCode).toBe(200);
+    const items = res.json().items as Array<any>;
+    const t1 = items.find((p) => p.externalId === "t1");
+    expect(t1.tcAdvertisersCount).toBe(11);
+    expect(t1.tcTopAdvertisers).toEqual(TOP);
+    expect(t1.tcCheckedAt).toBe("2026-10-21T08:00:00.000Z");
+    const t3 = items.find((p) => p.externalId === "t3");
+    expect(t3.tcAdvertisersCount).toBe(0);
+    const t4 = items.find((p) => p.externalId === "t4");
+    expect(t4.tcAdvertisersCount).toBeNull();
+    expect(t4.tcTopAdvertisers).toBeNull();
+    expect(t4.tcCheckedAt).toBeNull();
+  });
+
+  it("GET products：TC ≥1 给测试优先分广告腿托底（高于 TC=0 的同形商品）", async () => {
+    const ctx = setup();
+    const { app } = buildApp(ctx, "member");
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/catalog/products",
+    });
+    const items = res.json().items as Array<any>;
+    const t1 = items.find((p) => p.externalId === "t1");
+    const t3 = items.find((p) => p.externalId === "t3");
+    // 其余腿同形：广告腿 small(30) vs none(4) → 总分差 26
+    expect(t1.testPriority.score - t3.testPriority.score).toBe(26);
+    expect(t1.testPriority.reasons.join(" ")).toContain("透明中心有广告主在投");
+  });
+
+  it("GET brands：组级取第一个非 null 的 TC 三字段；未查组为 null", async () => {
+    const ctx = setup();
+    const { app } = buildApp(ctx, "member");
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/catalog/brands",
+    });
+    expect(res.statusCode).toBe(200);
+    const brands = res.json().brands as Array<any>;
+    const tc = brands.find((b) => b.brand === "TcBrand");
+    expect(tc.tcAdvertisersCount).toBe(11);
+    expect(tc.tcTopAdvertisers).toEqual(TOP);
+    expect(tc.tcCheckedAt).toBe("2026-10-21T08:00:00.000Z");
+    const plain = brands.find((b) => b.brand === "PlainBrand");
+    expect(plain.tcAdvertisersCount).toBeNull();
+    expect(plain.tcTopAdvertisers).toBeNull();
+    expect(plain.tcCheckedAt).toBeNull();
+  });
+});
+
 describe("GET /api/v1/catalog/funnel（可投流漏斗）", () => {
   it("六段计数口径：total/passedGate/recommended/launchable/withAds/offersCreated", async () => {
     const { ctx } = makeCatalogFakePrisma();

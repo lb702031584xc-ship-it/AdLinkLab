@@ -12,6 +12,7 @@ import {
   type BrandPromoMode,
   type CatalogBrand,
   type CatalogBrandTopProduct,
+  type TcAdvertiserEntry,
 } from "@/lib/api/catalog-actions";
 import { updateOfferAction } from "@/lib/api/entity-actions";
 import { adCountTier } from "../../../../../packages/shared/src/ad-count-tier";
@@ -149,6 +150,56 @@ export function adProbeDetailOf(x: unknown): AdProbeDetailEntry[] | null {
     });
   }
   return out;
+}
+
+/**
+ * 透明中心旁证字段（tcAdvertisersCount / tcTopAdvertisers）的防御式读取：
+ * count 必须是有限数（null = 从未查过，绝不拿空冒充 0）；top 逐条校验
+ * （name 非空字符串才收，approxAds 只取有限数、其余 null），不合格条目
+ * 丢弃而非整表作废（top 仅展示，半真半假比探针明细宽容）。商品 DTO 与
+ * 品牌 DTO 共用同一口径。
+ */
+export function tcAdvertiserFields(x: unknown): {
+  count: number | null;
+  top: TcAdvertiserEntry[];
+} {
+  const o = (
+    typeof x === "object" && x !== null ? x : {}
+  ) as { tcAdvertisersCount?: unknown; tcTopAdvertisers?: unknown };
+  const count =
+    typeof o.tcAdvertisersCount === "number" &&
+    Number.isFinite(o.tcAdvertisersCount)
+      ? o.tcAdvertisersCount
+      : null;
+  const top: TcAdvertiserEntry[] = [];
+  if (Array.isArray(o.tcTopAdvertisers)) {
+    for (const e of o.tcTopAdvertisers) {
+      if (top.length >= 3) break;
+      if (typeof e !== "object" || e === null) continue;
+      const r = e as Record<string, unknown>;
+      if (typeof r.name !== "string" || !r.name) continue;
+      top.push({
+        name: r.name,
+        approxAds:
+          typeof r.approxAds === "number" && Number.isFinite(r.approxAds)
+            ? r.approxAds
+            : null,
+      });
+    }
+  }
+  return { count, top };
+}
+
+/**
+ * 「实际有人投·快照未捕获」标记出现条件：SERP 裸词与长尾都已知为 0，
+ * 但透明中心有 ≥1 家广告主——快照没抓到不等于没人投（SERP 只能证有不能证无）。
+ */
+export function tcRescuedVisible(
+  adCount: number | null | undefined,
+  longtail: number | null | undefined,
+  tcCount: number | null | undefined
+): boolean {
+  return adCount === 0 && longtail === 0 && tcCount != null && tcCount >= 1;
 }
 
 /** 探针类型短标签（裸词/型号/类目）。 */
@@ -498,6 +549,8 @@ export function CatalogBrandView({
               : null;
           const mode = effectivePromoMode(b);
           const probeDetail = adProbeDetailOf(b);
+          const tc = tcAdvertiserFields(b);
+          const tcRescued = tcRescuedVisible(b.adCount, probe.longtail, tc.count);
           const probeIsOpen = probeOpen.has(key);
           const isOpen = expanded.has(key);
           const isEditing = editingKey === key;
@@ -603,6 +656,29 @@ export function CatalogBrandView({
                       {longtailActive && (
                         <span className="ml-1 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-800">
                           {p.adLongtailActive}
+                        </span>
+                      )}
+                      {tc.count != null && (
+                        <span
+                          className="ml-1 tabular-nums text-ink/70"
+                          title={
+                            tc.top.length > 0
+                              ? tc.top
+                                  .map((t) =>
+                                    t.approxAds != null
+                                      ? `${t.name} (~${t.approxAds})`
+                                      : t.name
+                                  )
+                                  .join(" · ")
+                              : undefined
+                          }
+                        >
+                          · {p.tcAdvertisers.replace("{n}", String(tc.count))}
+                        </span>
+                      )}
+                      {tcRescued && (
+                        <span className="ml-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">
+                          {p.tcRescuedBadge}
                         </span>
                       )}
                       {probe.policyRisk && (
@@ -777,6 +853,33 @@ export function CatalogBrandView({
                         </li>
                       ))}
                     </ul>
+                  )}
+                  {tc.top.length > 0 && (
+                    <div className="mt-2">
+                      <p className="text-xs font-medium text-ink/60">
+                        {p.tcTopTitle}
+                      </p>
+                      <ul className="mt-1 divide-y divide-ink/5">
+                        {tc.top.map((t, i) => (
+                          <li
+                            key={`${t.name}-${i}`}
+                            className="flex flex-wrap items-center gap-x-3 gap-y-0.5 py-1 text-xs text-ink/70"
+                          >
+                            <span className="font-medium text-ink">
+                              {t.name}
+                            </span>
+                            {t.approxAds != null && (
+                              <span className="tabular-nums">
+                                {p.tcApproxAds.replace(
+                                  "{n}",
+                                  String(t.approxAds)
+                                )}
+                              </span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
                   )}
                 </div>
               )}

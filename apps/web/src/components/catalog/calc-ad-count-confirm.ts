@@ -55,6 +55,10 @@ export interface CalcAdCountPreviewData {
   worstCaseQueries?: number;
   unitPriceUsd?: number;
   estimatedCostUsd?: number;
+  /** 透明中心旁证补查预估（后端 preview 返回；可选：旧响应缺失时为 undefined）。 */
+  tcChecksExpected?: number;
+  tcUnitPriceUsd?: number;
+  tcEstimatedCostUsd?: number;
 }
 
 export interface CalcAdCountConfirmFacts {
@@ -76,6 +80,12 @@ export interface CalcAdCountConfirmFacts {
   unitPriceUsd: number | null;
   /** 预计费用（美元，后端 = 预计查询数 × 单价；前端只展示不计算）。 */
   estimatedCostUsd: number | null;
+  /** 预计补查透明中心旁证的组数（后端预估；缺失 → null，确认框不展示该行）。 */
+  tcChecksExpected: number | null;
+  /** 透明中心单次查询单价（美元，后端常量；缺失 → null）。 */
+  tcUnitPriceUsd: number | null;
+  /** 预计透明中心费用（美元，已包含在 estimatedCostUsd 总额内；缺失 → null）。 */
+  tcEstimatedCostUsd: number | null;
   keySource: CalcKeySource | null;
   allowed: boolean;
 }
@@ -100,6 +110,9 @@ export function calcAdCountConfirmFacts(
     worstCaseQueries: preview.worstCaseQueries ?? null,
     unitPriceUsd: preview.unitPriceUsd ?? null,
     estimatedCostUsd: preview.estimatedCostUsd ?? null,
+    tcChecksExpected: preview.tcChecksExpected ?? null,
+    tcUnitPriceUsd: preview.tcUnitPriceUsd ?? null,
+    tcEstimatedCostUsd: preview.tcEstimatedCostUsd ?? null,
     keySource: preview.keySource,
     allowed: preview.allowed,
   };

@@ -15,8 +15,12 @@
  *    已知全为 0 → stop；仍未知 → unknown 标记。
  *    多探针口径（2026-10-21）：「在投」= 裸品牌词 ≥1 或长尾探针
  *    （adCountLongtail，品牌+型号/品类词）≥1；仅长尾过关带 adLongtailOnly
- *    标记；判停要求裸词与长尾都已知为 0（长尾为 null 退旧口径只看裸词）；
- *    品牌组命中政策风险（武器配件类）时判停原因用政策口径文案。
+ *    标记；品牌组命中政策风险（武器配件类）时判停原因用政策口径文案。
+ *    透明中心旁证口径（2026-10-21 续）：SERP 快照只能证"有"不能证"无"，
+ *    判停须三通道全 0 已知——裸词 = 0 且长尾 = 0 且透明中心广告主
+ *    （tcAdvertisersCount）= 0；SERP 双 0 但 TC ≥ 1 → 旁证翻案过关
+ *    （tcRescued 标记）；SERP 双 0 且 TC 未知（null）→ unknown 转复核，
+ *    绝不判停（与 unknown-never-fail 同口径）。
  *    例外（投放方式分流）：品牌被显式标注 promoMode="product"（没有品牌级
  *    链接、只能走单品）时，品牌词广告数只作参考——全为 0 也不判 stop，
  *    结果加 adReferenceOnly 标记并计入 adWaivedCount；标注 "brand" 或
@@ -67,6 +71,10 @@ export interface OfferPrescreenOutcome {
   adReferenceOnly?: boolean;
   /** 仅靠长尾探针广告数过关（裸品牌词无广告、品牌+型号/品类词有广告在投）。 */
   adLongtailOnly?: boolean;
+  /** SERP 双 0 但透明中心有广告主在投，经旁证翻案过关（快照未捕获）。 */
+  tcRescued?: boolean;
+  /** 透明中心广告主数（tcRescued 时给出，= 已知最大值）。 */
+  tcAdvertisersCount?: number;
 }
 
 export interface OfferPrescreenDeps {
@@ -160,6 +168,8 @@ export async function prescreenOffers(
     adWaivedCount: number;
     /** 本次仅靠长尾探针过关的 Offer 件数（裸词 0、长尾 ≥1）。 */
     adLongtailOnlyCount: number;
+    /** 本次 SERP 双 0 但透明中心有广告主、经旁证翻案过关的 Offer 件数。 */
+    adTcRescuedCount: number;
   };
 }> {
   const { prisma } = deps;
@@ -188,6 +198,9 @@ export async function prescreenOffers(
     adReferenceOnly?: boolean;
     /** 仅靠长尾探针过关（裸品牌词全 0/未知、长尾 ≥1）：可审计标记。 */
     adLongtailOnly?: boolean;
+    /** SERP 双 0 但透明中心有广告主、旁证翻案过关：可审计标记 + 广告主数。 */
+    tcRescued?: boolean;
+    tcAdvertisersCount?: number;
   }
   const works: Work[] = offers.map((o) => ({ o, flags: [], needsAdData: false }));
 
@@ -274,6 +287,7 @@ export async function prescreenOffers(
   let adStoppedCount = 0;
   let adWaivedCount = 0;
   let adLongtailOnlyCount = 0;
+  let adTcRescuedCount = 0;
   const adCandidates = works.filter((w) => !w.stopReason && w.needsAdData);
   if (adCandidates.length > 0) {
     const access = await gatewayResolve(prisma, {
@@ -322,6 +336,7 @@ export async function prescreenOffers(
           countryCode: true,
           adCount: true,
           adCountLongtail: true,
+          tcAdvertisersCount: true,
           adPolicyRisk: true,
           lastAdCount: true,
         },
@@ -332,6 +347,7 @@ export async function prescreenOffers(
         countryCode: string | null;
         adCount: number | null;
         adCountLongtail: number | null;
+        tcAdvertisersCount: number | null;
         adPolicyRisk: boolean;
         lastAdCount: number | null;
       }>;
@@ -342,6 +358,7 @@ export async function prescreenOffers(
           id: string;
           adCount: number | null;
           adCountLongtail: number | null;
+          tcAdvertisersCount: number | null;
           adPolicyRisk: boolean;
           lastAdCount: number | null;
           promoMode: string | null;
@@ -355,6 +372,7 @@ export async function prescreenOffers(
           id: p.id,
           adCount: p.adCount,
           adCountLongtail: p.adCountLongtail ?? null,
+          tcAdvertisersCount: p.tcAdvertisersCount ?? null,
           adPolicyRisk: p.adPolicyRisk === true,
           lastAdCount: p.lastAdCount,
           promoMode:
@@ -366,14 +384,30 @@ export async function prescreenOffers(
       }
       // 先给「需要重算」的品牌做一次增量计算：广告数全未知，或长尾口径
       // 未落地（adCountLongtail 为 null = 多探针上线前旧印记，calc 内部
-      // 新鲜度规则会决定是否真的重探，派生不出探针的组不花钱）。
+      // 新鲜度规则会决定是否真的重探，派生不出探针的组不花钱），或
+      // SERP 双 0 已知但透明中心从未查过（tcAdvertisersCount 全 null：
+      // calc 内部会按 TC 触发条件补查旁证；TC 的 14 天过期重查由广告
+      // 计算入口负责，本层只补"从未查过"，不为初筛反复烧 TC）。
       const calcIds: string[] = [];
       for (const w of adCandidates) {
         const rows = byBrand.get(norm(w.o.brandName)) ?? [];
+        if (rows.length === 0) continue;
+        const bareKnown = rows
+          .map((r) => r.adCount)
+          .filter((v): v is number => v !== null);
+        const ltKnown = rows
+          .map((r) => r.adCountLongtail)
+          .filter((v): v is number => v !== null);
+        const serpDoubleZeroKnown =
+          bareKnown.length > 0 &&
+          bareKnown.every((v) => v === 0) &&
+          ltKnown.length > 0 &&
+          ltKnown.every((v) => v === 0);
         if (
-          rows.length > 0 &&
-          (rows.every((r) => r.adCount === null) ||
-            rows.some((r) => r.adCountLongtail === null))
+          rows.every((r) => r.adCount === null) ||
+          rows.some((r) => r.adCountLongtail === null) ||
+          (serpDoubleZeroKnown &&
+            rows.every((r) => r.tcAdvertisersCount === null))
         ) {
           calcIds.push(...rows.map((r) => r.id));
         }
@@ -383,44 +417,55 @@ export async function prescreenOffers(
           fetchImpl: deps.fetchImpl,
           credentials: access.credentials ?? undefined,
         });
-        if (result.groupsQueried > 0) {
+        // 记账门槛：SERP 或 TC 任一实际发出查询都要记（TC 单独补查时
+        // groupsQueried 可能为 0，不能漏记）；calls = SERP 实际查询数
+        // + TC task_post 数（两种查询在网关用量里合并计数、审计可拆）。
+        const totalCalls =
+          (result.serpQueries ?? result.groupsQueried) +
+          (result.tcQueries ?? 0);
+        if (totalCalls > 0) {
           await recordPaidDataUsage(prisma, {
             tenantId,
             actorId: input.actorId,
             feature: "catalog-ad-count",
             keySource: access.keySource,
             // 深度 12 后一组最多 12 次 SERP：按实际查询次数记账（旧 fake 无此字段时退回组数）。
-            calls: result.serpQueries ?? result.groupsQueried,
+            calls: totalCalls,
             grantId: access.grantId,
           });
-          const refreshed = (await prisma.networkProduct.findMany({
-            where: { tenantId, id: { in: [...new Set(calcIds)] } },
-            select: {
-              id: true,
-              brand: true,
-              adCount: true,
-              adCountLongtail: true,
-              adPolicyRisk: true,
-              lastAdCount: true,
-            },
-          })) as Array<{
-            id: string;
-            brand: string | null;
-            adCount: number | null;
-            adCountLongtail: number | null;
-            adPolicyRisk: boolean;
-            lastAdCount: number | null;
-          }>;
-          for (const p of refreshed) {
-            const key = norm(p.brand);
-            const arr = byBrand.get(key) ?? [];
-            const hit = arr.find((r) => r.id === p.id);
-            if (hit) {
-              hit.adCount = p.adCount;
-              hit.adCountLongtail = p.adCountLongtail ?? null;
-              hit.adPolicyRisk = p.adPolicyRisk === true;
-              hit.lastAdCount = p.lastAdCount;
-            }
+        }
+        // 回读刷新（含 TC——TC 单独补查 groupsQueried=0 时也要刷回，
+        // 故回读不再挂在记账门槛里，calc 跑过就刷）。
+        const refreshed = (await prisma.networkProduct.findMany({
+          where: { tenantId, id: { in: [...new Set(calcIds)] } },
+          select: {
+            id: true,
+            brand: true,
+            adCount: true,
+            adCountLongtail: true,
+            tcAdvertisersCount: true,
+            adPolicyRisk: true,
+            lastAdCount: true,
+          },
+        })) as Array<{
+          id: string;
+          brand: string | null;
+          adCount: number | null;
+          adCountLongtail: number | null;
+          tcAdvertisersCount: number | null;
+          adPolicyRisk: boolean;
+          lastAdCount: number | null;
+        }>;
+        for (const p of refreshed) {
+          const key = norm(p.brand);
+          const arr = byBrand.get(key) ?? [];
+          const hit = arr.find((r) => r.id === p.id);
+          if (hit) {
+            hit.adCount = p.adCount;
+            hit.adCountLongtail = p.adCountLongtail ?? null;
+            hit.tcAdvertisersCount = p.tcAdvertisersCount ?? null;
+            hit.adPolicyRisk = p.adPolicyRisk === true;
+            hit.lastAdCount = p.lastAdCount;
           }
         }
       }
@@ -432,7 +477,14 @@ export async function prescreenOffers(
         const ltKnown = rows
           .map((r) => r.adCountLongtail)
           .filter((v): v is number => v !== null);
-        if (bareKnown.length === 0 && ltKnown.length === 0) {
+        const tcKnown = rows
+          .map((r) => r.tcAdvertisersCount)
+          .filter((v): v is number => v !== null);
+        if (
+          bareKnown.length === 0 &&
+          ltKnown.length === 0 &&
+          tcKnown.length === 0
+        ) {
           w.flags.push("品牌广告数无数据，待人工复核");
         } else if (bareKnown.some((v) => v >= 1)) {
           // 裸品牌词有广告在投 → 过关。
@@ -440,9 +492,22 @@ export async function prescreenOffers(
           // 仅靠长尾过关：裸词全 0/未知、长尾（型号/品类词）有广告在投。
           w.adLongtailOnly = true;
           adLongtailOnlyCount += 1;
-        } else if (bareKnown.length > 0 && bareKnown.every((v) => v === 0)) {
-          // 判停：裸词已知全 0，且长尾已知全 0 或长尾未知
-          // （adCountLongtail 为 null → 维持旧口径，只看裸词，不臆测）。
+        } else if (tcKnown.some((v) => v >= 1)) {
+          // SERP 双 0/未知但透明中心有广告主在投：快照未捕获（SERP
+          // 只能证"有"不能证"无"），旁证翻案 → 过关并打标。
+          w.tcRescued = true;
+          w.tcAdvertisersCount = Math.max(...tcKnown);
+          adTcRescuedCount += 1;
+        } else if (
+          bareKnown.length > 0 &&
+          bareKnown.every((v) => v === 0) &&
+          ltKnown.length > 0 &&
+          ltKnown.every((v) => v === 0) &&
+          tcKnown.length > 0 &&
+          tcKnown.every((v) => v === 0)
+        ) {
+          // 判停（三通道全 0 已知）：裸词、长尾、透明中心都确认无人
+          // 投放才判停——任一维度未知都不许判停（见下方复核分支）。
           // 投放方式分流：组内有 promoMode="product" 标注且无 "brand" 标注
           // → 该品牌只能走单品，品牌词广告数只作参考，全 0 不判停。
           const modes = new Set(rows.map((r) => r.promoMode));
@@ -454,11 +519,15 @@ export async function prescreenOffers(
             w.stopReason =
               "政策受限类目（武器配件）：付费广告禁投，广告数为 0 是政策限制而非无人投放";
           } else {
-            w.stopReason = "广告数为 0：该品牌暂无人在投放";
+            w.stopReason =
+              "广告数为 0（SERP 与透明中心双通道确认）：该品牌暂无人在投放";
           }
         } else {
-          // 裸词全未知、长尾已知全 0：裸词维度无数据 → 不判死，转人工复核。
-          w.flags.push("品牌广告数无数据，待人工复核");
+          // 任一维度未知（含 SERP 双 0 但 TC 未查/查失败、长尾未探明、
+          // 裸词无数据）→ "无"未证 → 不判死，转人工复核。
+          w.flags.push(
+            "品牌广告数未完全确认（SERP/长尾/透明中心任一待补查），待人工复核"
+          );
         }
       }
       // 疑似停投计数：本次评估涉及的品牌商品里，上次有广告、本次归 0 的件数
@@ -486,6 +555,7 @@ export async function prescreenOffers(
     adStoppedCount,
     adWaivedCount,
     adLongtailOnlyCount,
+    adTcRescuedCount,
   };
   const now = new Date();
   for (const w of works) {
@@ -510,7 +580,13 @@ export async function prescreenOffers(
       : w.flags.length > 0
         ? "unknown"
         : "go";
-    const reason = w.stopReason ?? w.flags.join("；") ?? "";
+    const reason =
+      w.stopReason ??
+      (w.flags.length > 0
+        ? w.flags.join("；")
+        : w.tcRescued
+          ? `透明中心有 ${w.tcAdvertisersCount ?? 0} 家广告主在投（快照未捕获）：SERP 快照双 0 经透明中心旁证翻案过关`
+          : "");
     counts[verdict] += 1;
     outcomes.push({
       offerId: o.id,
@@ -518,6 +594,9 @@ export async function prescreenOffers(
       reason,
       ...(w.adReferenceOnly ? { adReferenceOnly: true } : {}),
       ...(w.adLongtailOnly ? { adLongtailOnly: true } : {}),
+      ...(w.tcRescued
+        ? { tcRescued: true, tcAdvertisersCount: w.tcAdvertisersCount }
+        : {}),
     });
     await prisma.offer.update({
       where: { id: o.id },
@@ -541,6 +620,7 @@ export async function prescreenOffers(
       adStoppedCount: counts.adStoppedCount,
       adWaivedCount: counts.adWaivedCount,
       adLongtailOnlyCount: counts.adLongtailOnlyCount,
+      adTcRescuedCount: counts.adTcRescuedCount,
       skippedPaidLayer,
     },
   });

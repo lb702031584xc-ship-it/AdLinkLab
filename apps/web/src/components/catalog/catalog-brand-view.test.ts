@@ -42,6 +42,8 @@ import {
   adProbeFields,
   effectivePromoMode,
   probeKindLabel,
+  tcAdvertiserFields,
+  tcRescuedVisible,
 } from "./catalog-brand-view";
 
 const d = zh.products;
@@ -241,6 +243,49 @@ describe("adLongtailActiveVisible", () => {
     expect(adLongtailActiveVisible(null, null)).toBe(false);
     expect(adLongtailActiveVisible(0, null)).toBe(false);
     expect(adLongtailActiveVisible(undefined, undefined)).toBe(false);
+  });
+});
+
+describe("tcAdvertiserFields / tcRescuedVisible", () => {
+  it("count: 有限数原样；缺失/null/字符串/NaN → null（从未查过不冒充 0）", () => {
+    expect(tcAdvertiserFields({ tcAdvertisersCount: 11 }).count).toBe(11);
+    expect(tcAdvertiserFields({ tcAdvertisersCount: 0 }).count).toBe(0);
+    expect(tcAdvertiserFields({}).count).toBeNull();
+    expect(tcAdvertiserFields({ tcAdvertisersCount: null }).count).toBeNull();
+    expect(tcAdvertiserFields({ tcAdvertisersCount: "11" }).count).toBeNull();
+    expect(tcAdvertiserFields({ tcAdvertisersCount: Number.NaN }).count).toBeNull();
+    expect(tcAdvertiserFields(null).count).toBeNull();
+  });
+
+  it("top: 逐条防御（无名丢弃、approxAds 只取数值、最多 3 条）", () => {
+    const f = tcAdvertiserFields({
+      tcAdvertisersCount: 11,
+      tcTopAdvertisers: [
+        { name: "OLIGHTSTORE USA INC", approxAds: 8300 },
+        { name: "Seller Two", approxAds: "many" },
+        { approxAds: 5 },
+        { name: "Seller Three", approxAds: 12 },
+        { name: "Seller Four", approxAds: 1 },
+      ],
+    });
+    expect(f.top).toEqual([
+      { name: "OLIGHTSTORE USA INC", approxAds: 8300 },
+      { name: "Seller Two", approxAds: null },
+      { name: "Seller Three", approxAds: 12 },
+    ]);
+    expect(tcAdvertiserFields({ tcTopAdvertisers: "x" }).top).toEqual([]);
+    expect(tcAdvertiserFields({}).top).toEqual([]);
+  });
+
+  it("tcRescuedVisible: 仅 SERP 双 0 已知 + TC ≥1 时为 true", () => {
+    expect(tcRescuedVisible(0, 0, 11)).toBe(true);
+    expect(tcRescuedVisible(0, 0, 1)).toBe(true);
+    expect(tcRescuedVisible(0, 0, 0)).toBe(false);
+    expect(tcRescuedVisible(0, 0, null)).toBe(false);
+    expect(tcRescuedVisible(0, null, 11)).toBe(false);
+    expect(tcRescuedVisible(null, 0, 11)).toBe(false);
+    expect(tcRescuedVisible(2, 0, 11)).toBe(false);
+    expect(tcRescuedVisible(0, 3, 11)).toBe(false);
   });
 });
 

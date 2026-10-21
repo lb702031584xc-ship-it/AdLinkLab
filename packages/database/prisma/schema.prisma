@@ -1200,6 +1200,18 @@ model NetworkProduct {
   /// 计算时间复用 adCountCheckedAt，不另设时间戳。null = 尚未按探针明细
   /// 口径计算过（旧印记，新鲜度判定视为待重探）。
   adProbeDetail   Json?    @map("ad_probe_detail")
+  /// 透明中心广告主数（组级，随组级广告数字段同通道回写组内每个商品）：
+  /// DataForSEO Ads Advertisers（Google 广告透明中心数据源）按品牌词+国家
+  /// 查到的广告主总数。SERP 快照只能证"有"不能证"无"（2026-10-21 实证：
+  /// SERP 对 olight 反复抓 0，透明中心有 11 家广告主）——仅当 SERP 裸词+
+  /// 长尾双 0 时才补查本字段做旁证。null = 从未查过；0 = 查过且无广告主。
+  tcAdvertisersCount Int?  @map("tc_advertisers_count")
+  /// 透明中心头部广告主（组级，仅展示）：[{name, approxAds}] 最多 3 条，
+  /// approxAds 为该广告主在透明中心的广告条数近似值（可为 null）。
+  tcTopAdvertisers Json?   @map("tc_top_advertisers")
+  /// 透明中心上次查询时间（TC 专用新鲜度，14 天，与广告数同周期；
+  /// 与 adCountCheckedAt 分开：TC 可在 SERP 新鲜时单独补查）。
+  tcCheckedAt     DateTime? @map("tc_checked_at") @db.Timestamptz(3)
   /// 广告投放数量上次查询时间（14 天缓存期内跳过重查）。
   adCountCheckedAt DateTime? @map("ad_count_checked_at") @db.Timestamptz(3)
   /// 广告投放数量上一次计算值快照（重算时把旧 adCount/adCountCheckedAt 挪到这里，供趋势对比：新投/停投/持续；null = 还没重算过）。

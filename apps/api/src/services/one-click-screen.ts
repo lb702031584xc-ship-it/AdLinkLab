@@ -14,8 +14,11 @@
  *    商品增量计算（calcBrandAdCounts，14 天缓存），再按「在投」判定：
  *    裸品牌词 adCount >= 1 或长尾探针 adCountLongtail（品牌+型号/品类词
  *    MAX）>= 1 → pass（仅长尾过关标记 adLongtailOnly，计入报告）；
- *    裸词 = 0 且长尾 = 0 或未探明 → kill；裸词仍未知且长尾无广告证据
- *    → 转复核标记。分档只报告不拦截。政策口径：品牌组命中政策风险
+ *    SERP 双 0 但透明中心广告主 tcAdvertisersCount >= 1 → 旁证翻案
+ *    pass（标记 tcRescued，计入报告 tcRescuedCount）——SERP 快照只能
+ *    证"有"不能证"无"；判停须三通道全 0 已知（裸词 = 0 且长尾 = 0
+ *    且 TC = 0）；任一维度未知（含 TC 未查）→ 不杀，转复核标记。
+ *    分档只报告不拦截。政策口径：品牌组命中政策风险
  *    （武器配件类）被判停时，原因写明是类目政策禁投而非无人投放。
  *    例外：品牌在 BrandProfile 标了「单品投放」（promoMode="product"）
  *    的，= 0 不杀（单品打法主信号是单品需求，品牌词广告数仅作参考），
@@ -86,6 +89,10 @@ export interface OneClickProductOutcome {
   adReferenceOnly?: boolean;
   /** 仅靠长尾探针广告数过关（裸品牌词无广告、品牌+型号/品类词有广告在投）。 */
   adLongtailOnly?: boolean;
+  /** SERP 双 0 但透明中心有广告主在投，经旁证翻案过关（快照未捕获）。 */
+  tcRescued?: boolean;
+  /** 透明中心广告主数（tcRescued 时给出）。 */
+  tcAdvertisersCount?: number;
 }
 
 export interface OneClickScreenReport {
@@ -112,6 +119,8 @@ export interface OneClickScreenReport {
   adWaivedCount: number;
   /** 仅靠长尾探针过关的件数（裸品牌词 0/未算、长尾 ≥1）。 */
   adLongtailOnlyCount: number;
+  /** SERP 双 0 但透明中心有广告主、经旁证翻案过关的件数。 */
+  tcRescuedCount: number;
   outcomes: OneClickProductOutcome[];
 }
 
@@ -150,6 +159,8 @@ export interface OneClickProductRow {
   adCount: number | null;
   /** 长尾探针广告数（品牌+型号/品类词 MAX）；null = 尚未探明（旧印记）。 */
   adCountLongtail: number | null;
+  /** 透明中心广告主数（组级旁证）；null/缺省 = 从未查过，绝不当 0。 */
+  tcAdvertisersCount?: number | null;
   /** 所属品牌组政策风险（武器配件类目，付费广告禁投）。 */
   adPolicyRisk: boolean;
   adCountCheckedAt: Date | null;
@@ -259,16 +270,19 @@ export async function runOneClickScreen(
     reviewFlags: string[];
     adCount: number | null;
     adCountLongtail: number | null;
+    tcAdvertisersCount: number | null;
     adPolicyRisk: boolean;
     lastAdCount: number | null;
     adReferenceOnly?: boolean;
     adLongtailOnly?: boolean;
+    tcRescued?: boolean;
   }
   const works: Work[] = products.map((p) => ({
     p,
     reviewFlags: [],
     adCount: p.adCount,
     adCountLongtail: p.adCountLongtail ?? null,
+    tcAdvertisersCount: p.tcAdvertisersCount ?? null,
     adPolicyRisk: p.adPolicyRisk === true,
     lastAdCount: p.lastAdCount,
   }));
@@ -330,6 +344,7 @@ export async function runOneClickScreen(
   let skippedPaidLayer = false;
   let adWaivedCount = 0;
   let adLongtailOnlyCount = 0;
+  let tcRescuedCount = 0;
   let paidKeySource: OneClickScreenReport["paidKeySource"] = null;
   const survivors = works.filter((w) => !w.killedBy);
   if (survivors.length > 0) {
@@ -379,6 +394,12 @@ export async function runOneClickScreen(
             // 长尾口径未落地（多探针上线前旧印记）也要重算——calc 内部
             // 新鲜度规则兜底：派生不出探针的组不真正发查询。
             w.p.adCountLongtail == null ||
+            // SERP 双 0 已知但透明中心从未查过 → 送 calc 补查 TC 旁证
+            // （calc 内部只补 TC 一腿，不重跑新鲜的 SERP；TC 的 14 天
+            // 过期重查由广告计算入口负责，本层只补"从未查过"）。
+            (w.adCount === 0 &&
+              w.adCountLongtail === 0 &&
+              w.tcAdvertisersCount == null) ||
             !(w.p.adCountCheckedAt instanceof Date) ||
             nowMs - (w.p.adCountCheckedAt as Date).getTime() >=
               AD_COUNT_CACHE_TTL_MS
@@ -389,24 +410,30 @@ export async function runOneClickScreen(
           fetchImpl: deps.fetchImpl,
           credentials: access.credentials ?? undefined,
         });
-        if (result.groupsQueried > 0) {
+        // 记账门槛与 prescreen 同口径：SERP 或 TC 任一实际发出查询都
+        // 记账（TC 单独补查 groupsQueried 可能为 0），calls 合并计数。
+        const totalCalls =
+          (result.serpQueries ?? result.groupsQueried) +
+          (result.tcQueries ?? 0);
+        if (totalCalls > 0) {
           await recordPaidDataUsage(prisma, {
             tenantId,
             actorId: input.actorId,
             feature: "catalog-ad-count",
             keySource: access.keySource,
             // 深度 12 后一组最多 12 次 SERP：按实际查询次数记账。
-            calls: result.serpQueries ?? result.groupsQueried,
+            calls: totalCalls,
             grantId: access.grantId,
           });
         }
-        // 计算已写回 DB：重读这批商品的广告数（连同上次快照，供趋势判定）。
+        // 计算已写回 DB：重读这批商品的广告数（连同上次快照与 TC，供趋势/改判判定）。
         const refreshed = (await prisma.networkProduct.findMany({
           where: { tenantId, id: { in: staleIds } },
           select: {
             id: true,
             adCount: true,
             adCountLongtail: true,
+            tcAdvertisersCount: true,
             adPolicyRisk: true,
             lastAdCount: true,
           },
@@ -414,6 +441,7 @@ export async function runOneClickScreen(
           id: string;
           adCount: number | null;
           adCountLongtail: number | null;
+          tcAdvertisersCount: number | null;
           adPolicyRisk: boolean;
           lastAdCount: number | null;
         }>;
@@ -423,6 +451,7 @@ export async function runOneClickScreen(
           if (r) {
             w.adCount = r.adCount ?? null;
             w.adCountLongtail = r.adCountLongtail ?? null;
+            w.tcAdvertisersCount = r.tcAdvertisersCount ?? null;
             w.adPolicyRisk = r.adPolicyRisk === true;
             w.lastAdCount = r.lastAdCount ?? null;
           }
@@ -438,25 +467,39 @@ export async function runOneClickScreen(
             w.adLongtailOnly = true;
             adLongtailOnlyCount += 1;
           }
+        } else if ((w.tcAdvertisersCount ?? 0) >= 1) {
+          // SERP 双 0/未知但透明中心有广告主在投：快照未捕获（SERP
+          // 只能证"有"不能证"无"），旁证翻案 → pass 并打标。
+          w.tcRescued = true;
+          tcRescuedCount += 1;
         } else if (w.adCount === null) {
           w.reviewFlags.push("广告数未计算（品牌缺失或查询失败），待人工复核");
         } else if (w.adCount === 0) {
-          // 判停：裸词 =0 且长尾 =0 或未探明（null → 维持旧口径，不臆测）。
-          const promoMode = promoModeByKey.get(
-            `${w.p.networkId}${brandKeyOf(w.p.brand)}${w.p.countryCode ?? ""}`
-          );
-          if (promoMode === "product") {
-            // 单品品牌豁免：不杀，标记广告数仅作参考（汇总计数）。
-            w.adReferenceOnly = true;
-            adWaivedCount += 1;
-          } else if (w.adPolicyRisk) {
-            // 政策口径：武器配件类类目付费广告禁投，0 是政策墙不是空白。
-            w.killedBy = "ad_count";
-            w.reason =
-              "政策受限类目（武器配件）：付费广告禁投，广告数为 0 是政策限制而非无人投放";
+          if (w.adCountLongtail === 0 && w.tcAdvertisersCount === 0) {
+            // 判停（三通道全 0 已知）：裸词、长尾、透明中心都确认
+            // 无人投放才判停——与 prescreen 同口径。
+            const promoMode = promoModeByKey.get(
+              `${w.p.networkId}${brandKeyOf(w.p.brand)}${w.p.countryCode ?? ""}`
+            );
+            if (promoMode === "product") {
+              // 单品品牌豁免：不杀，标记广告数仅作参考（汇总计数）。
+              w.adReferenceOnly = true;
+              adWaivedCount += 1;
+            } else if (w.adPolicyRisk) {
+              // 政策口径：武器配件类类目付费广告禁投，0 是政策墙不是空白。
+              w.killedBy = "ad_count";
+              w.reason =
+                "政策受限类目（武器配件）：付费广告禁投，广告数为 0 是政策限制而非无人投放";
+            } else {
+              w.killedBy = "ad_count";
+              w.reason =
+                "广告数为 0（SERP 与透明中心双通道确认）：该品牌暂无人在投放";
+            }
           } else {
-            w.killedBy = "ad_count";
-            w.reason = "广告数为 0：该品牌暂无人在投放";
+            // 长尾或透明中心任一未知（null）→ "无"未证 → 不判停，转复核。
+            w.reviewFlags.push(
+              "广告数未完全确认（长尾/透明中心待补查），待人工复核"
+            );
           }
         }
       }
@@ -507,6 +550,7 @@ export async function runOneClickScreen(
     ).length,
     adWaivedCount,
     adLongtailOnlyCount,
+    tcRescuedCount,
     outcomes: [],
   };
   const now = new Date();
@@ -552,15 +596,31 @@ export async function runOneClickScreen(
       continue;
     }
     report.passed += 1;
+    // TC 翻案过关的 pass 把旁证文案留进 screenReason（其余 pass 维持
+    // null）：商品行/备选池能看清这件为什么在 SERP 双 0 下仍过关。
+    const passReason = w.tcRescued
+      ? `透明中心有 ${w.tcAdvertisersCount ?? 0} 家广告主在投（快照未捕获）：SERP 快照双 0 经透明中心旁证翻案过关`
+      : null;
     report.outcomes.push({
       productId: p.id,
       outcome: "pass",
+      ...(passReason ? { reason: passReason } : {}),
       ...(w.adReferenceOnly ? { adReferenceOnly: true } : {}),
       ...(w.adLongtailOnly ? { adLongtailOnly: true } : {}),
+      ...(w.tcRescued
+        ? {
+            tcRescued: true,
+            tcAdvertisersCount: w.tcAdvertisersCount ?? undefined,
+          }
+        : {}),
     });
     await prisma.networkProduct.update({
       where: { id: p.id },
-      data: { screenVerdict: "pass", screenReason: null, screenedAt: now },
+      data: {
+        screenVerdict: "pass",
+        screenReason: passReason,
+        screenedAt: now,
+      },
     });
     const kind = kindOf.get(p.networkId) ?? "unknown";
     try {
@@ -612,6 +672,7 @@ export async function runOneClickScreen(
       adStoppedCount: report.adStoppedCount,
       adWaivedCount: report.adWaivedCount,
       adLongtailOnlyCount: report.adLongtailOnlyCount,
+      tcRescuedCount: report.tcRescuedCount,
       review: report.review,
       passed: report.passed,
       skippedPaidLayer: report.skippedPaidLayer,

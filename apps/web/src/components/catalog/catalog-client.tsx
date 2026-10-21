@@ -71,6 +71,8 @@ import {
   CatalogBrandView,
   adLandingSplitText,
   adProbeFields,
+  tcAdvertiserFields,
+  tcRescuedVisible,
 } from "./catalog-brand-view";
 import {
   CALC_DEPTH_OPTIONS,
@@ -3612,6 +3614,24 @@ export function CatalogClient({
                               )}
                             </span>
                           )}
+                          {(() => {
+                            // SERP 双 0 但透明中心有广告主：小字点破"快照
+                            // 未捕获"，免得把有人投的品牌误读成无人投放。
+                            // TC 未查/为 0 时不显示（不拿空冒充结论）。
+                            const tc = tcAdvertiserFields(p);
+                            return tcRescuedVisible(
+                              p.adCount,
+                              probe.longtail,
+                              tc.count
+                            ) ? (
+                              <span className="block text-[11px] font-medium text-amber-700">
+                                {d.products.adsTcShort.replace(
+                                  "{n}",
+                                  String(tc.count)
+                                )}
+                              </span>
+                            ) : null;
+                          })()}
                         </span>
                       )}
                     </td>
@@ -4049,6 +4069,24 @@ export function CatalogClient({
                         .replace(
                           "{unit}",
                           formatUsdAmount(adCalcConfirm.facts.unitPriceUsd)
+                        )}
+                    </li>
+                  )}
+                {adCalcConfirm.facts.tcChecksExpected !== null &&
+                  adCalcConfirm.facts.tcChecksExpected > 0 && (
+                    <li className="text-xs text-ink/50">
+                      {d.products.calcConfirmTcNote
+                        .replace(
+                          "{n}",
+                          String(adCalcConfirm.facts.tcChecksExpected)
+                        )
+                        .replace(
+                          "{cost}",
+                          adCalcConfirm.facts.tcEstimatedCostUsd !== null
+                            ? formatUsdAmount(
+                                adCalcConfirm.facts.tcEstimatedCostUsd
+                              )
+                            : "0.00"
                         )}
                     </li>
                   )}

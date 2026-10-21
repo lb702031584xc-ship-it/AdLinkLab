@@ -14,6 +14,7 @@ import {
   deriveAdTrend,
   deriveLongtailProbes,
   extractProductCategory,
+  fetchTcAdvertisers,
   groupAdPolicyRisk,
   hasAdPolicyRisk,
   MAX_LONGTAIL_PROBES,
@@ -23,6 +24,7 @@ import {
   previewBrandAdCounts,
   resolveCalcDepth,
   SERP_QUERY_PRICE_USD,
+  TC_QUERY_PRICE_USD,
   tallySerpAds,
 } from "./brand-ad-count.js";
 
@@ -43,6 +45,9 @@ interface FakeProduct {
   adCountProduct?: number | null;
   adCountLongtail?: number | null;
   adProbeDetail?: unknown;
+  tcAdvertisersCount?: number | null;
+  tcTopAdvertisers?: unknown;
+  tcCheckedAt?: Date | null;
   adPolicyRisk?: boolean;
   lastAdCount?: number | null;
   lastAdCountCheckedAt?: Date | null;
@@ -586,6 +591,10 @@ describe("previewBrandAdCounts", () => {
       worstCaseQueries: 24,
       unitPriceUsd: SERP_QUERY_PRICE_USD,
       estimatedCostUsd: 0.004,
+      // 种子组 SERP 值未知（从未算过）→ 无法预判双 0，TC 预估为 0
+      tcChecksExpected: 0,
+      tcUnitPriceUsd: TC_QUERY_PRICE_USD,
+      tcEstimatedCostUsd: 0,
     });
   });
 
@@ -604,6 +613,9 @@ describe("previewBrandAdCounts", () => {
       worstCaseQueries: 12,
       unitPriceUsd: SERP_QUERY_PRICE_USD,
       estimatedCostUsd: 0.002,
+      tcChecksExpected: 0,
+      tcUnitPriceUsd: TC_QUERY_PRICE_USD,
+      tcEstimatedCostUsd: 0,
     });
   });
 
@@ -983,7 +995,7 @@ describe("calcBrandAdCounts 多探针", () => {
     ]);
   });
 
-  it("深度上限：型号再多每组总查询 ≤12（裸词 1 + 长尾 11），detail 与记账一致", async () => {
+  it("深度上限：型号再多每组 SERP 查询 ≤12（裸词 1 + 长尾 11），detail 与记账一致", async () => {
     const products = Array.from({ length: 8 }, (_, i) =>
       base({
         id: `p${i}`,
@@ -994,12 +1006,47 @@ describe("calcBrandAdCounts 多探针", () => {
       })
     );
     const { prisma, store } = makeFakePrisma(products);
-    const fetchImpl = vi.fn(serpFetchByKeyword({}));
+    // 全 SERP 返回空 → 裸词+长尾双 0 → 还会触发 1 次 TC 旁证（task_post
+    // + task_get 各 1 次 HTTP），SERP 预算口径不受 TC 影响（分开记账）。
+    const serpOnly = serpFetchByKeyword({});
+    const fetchImpl = vi.fn(
+      async (url: unknown, init?: { body?: string }) => {
+        const u = String(url);
+        if (u.includes("ads_advertisers/task_post")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              tasks: [{ id: "tc-1", status_code: 20100 }],
+            }),
+          };
+        }
+        if (u.includes("ads_advertisers/task_get")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              tasks: [
+                {
+                  status_code: 20000,
+                  result: [{ items_count: 0, items: [] }],
+                },
+              ],
+            }),
+          };
+        }
+        return serpOnly(url as never, init as never);
+      }
+    );
     const r = await calcBrandAdCounts(prisma, "t1", undefined, {
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
-    expect(fetchImpl).toHaveBeenCalledTimes(12);
+    expect(fetchImpl).toHaveBeenCalledTimes(14); // 12 SERP + TC post/get
     expect(r.serpQueries).toBe(12);
+    expect(r.tcQueries).toBe(1);
+    expect(r.tcChecked).toBe(1);
+    expect(r.tcRescued).toBe(0);
+    expect(store.get("p0")?.tcAdvertisersCount).toBe(0);
     const detail = store.get("p0")?.adProbeDetail as Array<unknown>;
     expect(detail).toHaveLength(12); // 裸词 1 + 长尾 11
   });
@@ -1284,5 +1331,383 @@ describe("previewBrandAdCounts 费用预估", () => {
     await expect(
       previewBrandAdCounts(prisma, "t1", { depth: 6 })
     ).rejects.toThrow(/depth 非法/);
+  });
+});
+
+/* ── 透明中心旁证 TC（2026-10-21 四批）：触发条件 / 轮询 / 补查 / 记账 ── */
+
+describe("透明中心旁证（Ads Advertisers）", () => {
+  const base = (
+    over: Partial<FakeProduct> & { id: string }
+  ): FakeProduct => ({
+    brand: "OLIGHT",
+    countryCode: "US",
+    landingPageType: "dtc",
+    adCountCheckedAt: null,
+    screenVerdict: null,
+    status: "active",
+    ...over,
+  });
+  const recent = new Date(Date.now() - 3 * 24 * 3600 * 1000);
+  const stale = new Date(Date.now() - 15 * 24 * 3600 * 1000);
+  const detailStamp = [
+    { q: "OLIGHT", kind: "bare", paid: 0, shopping: 0, total: 0 },
+  ];
+
+  interface TcFakeOpts {
+    /** SERP 按 keyword 返回的 items（缺省全空）。 */
+    serpMap?: Record<string, Array<Record<string, unknown>>>;
+    /** TC 完成时的广告主总数；"fail" = task_post 直接 HTTP 500。 */
+    tcCount: number | "fail";
+    tcItems?: Array<Record<string, unknown>>;
+    /** task_get 先返回几次 40602（排队中）再完成。 */
+    queuePolls?: number;
+  }
+
+  /** 按 URL 分流的 fake fetch：SERP / TC task_post / TC task_get 三路。 */
+  function makeTcFetch(opts: TcFakeOpts) {
+    const calls: string[] = [];
+    let tcGetCalls = 0;
+    const fetchImpl = (async (url: unknown, init?: { body?: string }) => {
+      const u = String(url);
+      calls.push(u);
+      if (u.includes("ads_advertisers/task_post")) {
+        if (opts.tcCount === "fail") {
+          return { ok: false, status: 500, json: async () => ({}) };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            tasks: [{ id: "tc-task-1", status_code: 20100, cost: 0.0006 }],
+          }),
+        };
+      }
+      if (u.includes("ads_advertisers/task_get")) {
+        tcGetCalls += 1;
+        if (tcGetCalls <= (opts.queuePolls ?? 0)) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ tasks: [{ status_code: 40602 }] }),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            tasks: [
+              {
+                status_code: 20000,
+                result: [
+                  {
+                    items_count: opts.tcCount === "fail" ? 0 : opts.tcCount,
+                    items: opts.tcItems ?? [],
+                  },
+                ],
+              },
+            ],
+          }),
+        };
+      }
+      const body = JSON.parse(init?.body ?? "[]") as Array<{
+        keyword: string;
+      }>;
+      const kw = body[0]?.keyword ?? "";
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          tasks: [
+            {
+              status_code: 20000,
+              result: [{ items: opts.serpMap?.[kw] ?? [] }],
+            },
+          ],
+        }),
+      };
+    }) as unknown as typeof fetch;
+    return { fetchImpl, calls };
+  }
+
+  const tcDeps = { tcPollIntervalMs: 0, tcPollMaxAttempts: 5 };
+
+  it("fetchTcAdvertisers：轮询 40602 → 完成；items_count 权威计数 + 头部防御式解析（最多 3 条）", async () => {
+    const { fetchImpl, calls } = makeTcFetch({
+      tcCount: 11,
+      queuePolls: 2,
+      tcItems: [
+        { title: "OLIGHTSTORE USA INC", approx_ads_count: 8300 },
+        // 字段名不一：advertiser_name / ads_count（字符串非数值 → approxAds null）
+        { advertiser_name: "Seller Two", ads_count: "many" },
+        { name: "Seller Three", approx_ads_count: 12 },
+        { title: "Seller Four（第 4 条应被截断）", approx_ads_count: 1 },
+        { approx_ads_count: 99 }, // 无名称 → 跳过
+      ],
+    });
+    const r = await fetchTcAdvertisers(
+      fetchImpl,
+      { login: "u", password: "p" },
+      "olight",
+      "US",
+      { intervalMs: 0, maxAttempts: 6 }
+    );
+    expect(r?.count).toBe(11);
+    expect(r?.top).toEqual([
+      { name: "OLIGHTSTORE USA INC", approxAds: 8300 },
+      { name: "Seller Two", approxAds: null },
+      { name: "Seller Three", approxAds: 12 },
+    ]);
+    // post 1 次 + get 3 次（2 次排队 + 1 次完成）
+    expect(calls).toHaveLength(4);
+  });
+
+  it("fetchTcAdvertisers：轮询用尽仍排队 → null（超时未知）；HTTP 失败 → null；不抛错", async () => {
+    const slow = makeTcFetch({ tcCount: 3, queuePolls: 99 });
+    await expect(
+      fetchTcAdvertisers(slow.fetchImpl, { login: "u", password: "p" }, "x", "US", {
+        intervalMs: 0,
+        maxAttempts: 3,
+      })
+    ).resolves.toBeNull();
+    const fail = makeTcFetch({ tcCount: "fail" });
+    await expect(
+      fetchTcAdvertisers(fail.fetchImpl, { login: "u", password: "p" }, "x", "US", {
+        intervalMs: 0,
+        maxAttempts: 3,
+      })
+    ).resolves.toBeNull();
+  });
+
+  it("SERP 双 0（裸词 0 + 长尾探针全 0）→ 查 TC 并回写三字段；tcChecked/tcRescued/tcQueries 计数", async () => {
+    const { prisma, store } = makeFakePrisma([
+      base({
+        id: "p1",
+        name: "OLIGHT Baton4 Pro",
+        recommendationScore: 90,
+        reviewCount: 10,
+      }),
+    ]);
+    const { fetchImpl } = makeTcFetch({
+      tcCount: 11,
+      tcItems: [{ title: "OLIGHTSTORE USA INC", approx_ads_count: 8300 }],
+    });
+    const r = await calcBrandAdCounts(prisma, "t1", undefined, {
+      fetchImpl,
+      ...tcDeps,
+    });
+    expect(store.get("p1")?.adCount).toBe(0);
+    expect(store.get("p1")?.adCountLongtail).toBe(0);
+    expect(store.get("p1")?.tcAdvertisersCount).toBe(11);
+    expect(store.get("p1")?.tcTopAdvertisers).toEqual([
+      { name: "OLIGHTSTORE USA INC", approxAds: 8300 },
+    ]);
+    expect(store.get("p1")?.tcCheckedAt).toBeInstanceOf(Date);
+    expect(r.tcChecked).toBe(1);
+    expect(r.tcQueries).toBe(1);
+    expect(r.tcFailed).toBe(0);
+    expect(r.tcRescued).toBe(1);
+    expect(r.errors).toHaveLength(0);
+  });
+
+  it("SERP 已 >0 → presence 已证，不查 TC（零 TC 调用、tc 字段不写）", async () => {
+    const { prisma, store } = makeFakePrisma([base({ id: "p1" })]);
+    const { fetchImpl, calls } = makeTcFetch({
+      serpMap: {
+        OLIGHT: [{ type: "paid", domain: "olight.com", url: "https://olight.com/" }],
+      },
+      tcCount: 11,
+    });
+    const r = await calcBrandAdCounts(prisma, "t1", undefined, {
+      fetchImpl,
+      ...tcDeps,
+    });
+    expect(store.get("p1")?.adCount).toBe(1);
+    expect(calls.some((u) => u.includes("ads_advertisers"))).toBe(false);
+    expect(store.get("p1")?.tcAdvertisersCount).toBeUndefined();
+    expect(r.tcChecked).toBe(0);
+    expect(r.tcQueries).toBe(0);
+  });
+
+  it("长尾 ≥1（裸词 0）→ 已证有人在投，不查 TC", async () => {
+    const { prisma, store } = makeFakePrisma([
+      base({
+        id: "p1",
+        name: "OLIGHT Baton4 Pro",
+        recommendationScore: 90,
+        reviewCount: 10,
+      }),
+    ]);
+    const { fetchImpl, calls } = makeTcFetch({
+      serpMap: {
+        "OLIGHT baton4": [
+          { type: "paid", domain: "a.example.com", url: "https://a.example.com/" },
+        ],
+      },
+      tcCount: 11,
+    });
+    const r = await calcBrandAdCounts(prisma, "t1", undefined, {
+      fetchImpl,
+      ...tcDeps,
+    });
+    expect(store.get("p1")?.adCountLongtail).toBe(1);
+    expect(calls.some((u) => u.includes("ads_advertisers"))).toBe(false);
+    expect(r.tcChecked).toBe(0);
+  });
+
+  it("TC 单独补查：SERP 新鲜 + 存量双 0 + TC 从未查 → 只补 TC 一腿（零 SERP 调用、不动 SERP 印记）", async () => {
+    const { prisma, store } = makeFakePrisma([
+      base({
+        id: "p1",
+        name: "Plain Towel Set",
+        adCount: 0,
+        adCountLongtail: 0,
+        adProbeDetail: detailStamp,
+        adCountCheckedAt: recent,
+      }),
+    ]);
+    const { fetchImpl, calls } = makeTcFetch({ tcCount: 4 });
+    const r = await calcBrandAdCounts(prisma, "t1", undefined, {
+      fetchImpl,
+      ...tcDeps,
+    });
+    expect(calls.some((u) => u.includes("organic/live"))).toBe(false);
+    expect(r.groupsQueried).toBe(0);
+    expect(r.serpQueries).toBe(0);
+    expect(r.tcQueries).toBe(1);
+    expect(r.tcRescued).toBe(1);
+    expect(r.groupsSkippedCache).toBe(0); // 补查不是缓存跳过
+    expect(store.get("p1")?.tcAdvertisersCount).toBe(4);
+    expect(store.get("p1")?.tcCheckedAt).toBeInstanceOf(Date);
+    // SERP 印记原样未动（没重跑就没资格改 adCountCheckedAt/last*）
+    expect(store.get("p1")?.adCountCheckedAt).toBe(recent);
+    expect(store.get("p1")?.adCount).toBe(0);
+  });
+
+  it("TC 单独补查：TC 已过期（15 天前）同样补查；TC 新鲜 → 整组跳过零调用", async () => {
+    const staleTc = makeFakePrisma([
+      base({
+        id: "p1",
+        name: "Plain Towel Set",
+        adCount: 0,
+        adCountLongtail: 0,
+        adProbeDetail: detailStamp,
+        adCountCheckedAt: recent,
+        tcAdvertisersCount: 0,
+        tcCheckedAt: stale,
+      }),
+    ]);
+    const f1 = makeTcFetch({ tcCount: 2 });
+    const r1 = await calcBrandAdCounts(staleTc.prisma, "t1", undefined, {
+      fetchImpl: f1.fetchImpl,
+      ...tcDeps,
+    });
+    expect(r1.tcQueries).toBe(1);
+    expect(staleTc.store.get("p1")?.tcAdvertisersCount).toBe(2);
+
+    const freshTc = makeFakePrisma([
+      base({
+        id: "p1",
+        name: "Plain Towel Set",
+        adCount: 0,
+        adCountLongtail: 0,
+        adProbeDetail: detailStamp,
+        adCountCheckedAt: recent,
+        tcAdvertisersCount: 5,
+        tcCheckedAt: recent,
+      }),
+    ]);
+    const f2 = makeTcFetch({ tcCount: 9 });
+    const r2 = await calcBrandAdCounts(freshTc.prisma, "t1", undefined, {
+      fetchImpl: f2.fetchImpl,
+      ...tcDeps,
+    });
+    expect(f2.calls).toHaveLength(0);
+    expect(r2.groupsSkippedCache).toBe(1);
+    expect(r2.tcQueries).toBe(0);
+  });
+
+  it("TC 失败不拖垮整轮 calc：SERP 结果照常写回，tcFailed=1 + errors 记录，tc 字段维持未查", async () => {
+    const { prisma, store } = makeFakePrisma([
+      base({
+        id: "p1",
+        name: "OLIGHT Baton4 Pro",
+        recommendationScore: 90,
+        reviewCount: 10,
+      }),
+    ]);
+    const { fetchImpl } = makeTcFetch({ tcCount: "fail" });
+    const r = await calcBrandAdCounts(prisma, "t1", undefined, {
+      fetchImpl,
+      ...tcDeps,
+    });
+    expect(r.groupsQueried).toBe(1);
+    expect(store.get("p1")?.adCount).toBe(0);
+    expect(store.get("p1")?.adCountLongtail).toBe(0);
+    expect(store.get("p1")?.tcAdvertisersCount).toBeUndefined();
+    expect(r.tcChecked).toBe(1);
+    expect(r.tcFailed).toBe(1);
+    expect(r.tcRescued).toBe(0);
+    expect(r.errors.some((e) => e.message.includes("透明中心"))).toBe(true);
+  });
+
+  it("TC = 0 → 回写 0（查过且无广告主），tcRescued 不计", async () => {
+    const { prisma, store } = makeFakePrisma([
+      base({
+        id: "p1",
+        name: "OLIGHT Baton4 Pro",
+        recommendationScore: 90,
+        reviewCount: 10,
+      }),
+    ]);
+    const { fetchImpl } = makeTcFetch({ tcCount: 0 });
+    const r = await calcBrandAdCounts(prisma, "t1", undefined, {
+      fetchImpl,
+      ...tcDeps,
+    });
+    expect(store.get("p1")?.tcAdvertisersCount).toBe(0);
+    expect(store.get("p1")?.tcTopAdvertisers).toEqual([]);
+    expect(r.tcChecked).toBe(1);
+    expect(r.tcRescued).toBe(0);
+    expect(r.tcFailed).toBe(0);
+  });
+
+  it("preview：存量双 0 + TC 过期 → tcChecksExpected 计入且费用并入总额；TC 新鲜/未算组不计", async () => {
+    const { prisma } = makeFakePrisma(
+      [
+        // A：SERP 新鲜双 0 + TC 从未查 → 本轮只补 TC（SERP 不计费、TC 计 1）
+        base({
+          id: "a1",
+          brand: "ZeroFresh",
+          name: "Plain Towel Set",
+          adCount: 0,
+          adCountLongtail: 0,
+          adProbeDetail: detailStamp,
+          adCountCheckedAt: recent,
+        }),
+        // B：双 0 但 TC 新鲜（3 天前查过 5 家）→ 不补查
+        base({
+          id: "b1",
+          brand: "ZeroTcFresh",
+          name: "Plain Towel Set",
+          adCount: 0,
+          adCountLongtail: 0,
+          adProbeDetail: detailStamp,
+          adCountCheckedAt: recent,
+          tcAdvertisersCount: 5,
+          tcCheckedAt: recent,
+        }),
+        // C：从未算过（SERP 值未知）→ 无法预判双 0，不计 TC（下限估算）
+        base({ id: "c1", brand: "NeverCalc", name: "Plain Towel Set" }),
+      ],
+      false
+    );
+    const p = await previewBrandAdCounts(prisma, "t1", {});
+    expect(p.tcChecksExpected).toBe(1);
+    expect(p.tcUnitPriceUsd).toBe(TC_QUERY_PRICE_USD);
+    expect(p.tcEstimatedCostUsd).toBe(0.0006);
+    // SERP 部分：只有 C 组将计费（裸词 1 次、无探针）= $0.002；总额含 TC
+    expect(p.expectedQueries).toBe(1);
+    expect(p.estimatedCostUsd).toBe(0.0026);
   });
 });

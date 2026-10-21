@@ -63,6 +63,11 @@ function setup(role: "owner" | "member") {
     groupsQueried: 2,
     groupsSkippedCache: 1,
     skippedDeadGroups: 3,
+    serpQueries: 9,
+    tcQueries: 1,
+    tcChecked: 1,
+    tcFailed: 0,
+    tcRescued: 1,
     productsUpdated: 5,
     errors: [],
   });
@@ -76,7 +81,10 @@ function setup(role: "owner" | "member") {
     expectedQueries: 40,
     worstCaseQueries: 72,
     unitPriceUsd: 0.002,
-    estimatedCostUsd: 0.08,
+    estimatedCostUsd: 0.0818,
+    tcChecksExpected: 3,
+    tcUnitPriceUsd: 0.0006,
+    tcEstimatedCostUsd: 0.0018,
   });
   return { ctx, app: buildApp(ctx, role).app };
 }
@@ -102,6 +110,40 @@ describe("POST /catalog/products/calc-ad-count", () => {
     );
     expect(audit?.detail.force).toBe(true);
     expect(audit?.detail.scope).toBe("alive");
+    // TC 旁证记账拆分与 SERP 并列进审计（单价不同，混算失真）
+    expect(audit?.detail.serpQueries).toBe(9);
+    expect(audit?.detail.tcQueries).toBe(1);
+    expect(audit?.detail.tcChecked).toBe(1);
+    expect(audit?.detail.tcFailed).toBe(0);
+    expect(audit?.detail.tcRescued).toBe(1);
+  });
+
+  it("TC 单独补查（groupsQueried=0、tcQueries>0）也触发用量记录", async () => {
+    const { ctx, app } = setup("owner");
+    mocks.calc.mockResolvedValue({
+      groupsQueried: 0,
+      groupsSkippedCache: 4,
+      skippedDeadGroups: 0,
+      serpQueries: 0,
+      tcQueries: 2,
+      tcChecked: 2,
+      tcFailed: 0,
+      tcRescued: 1,
+      productsUpdated: 6,
+      errors: [],
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/catalog/products/calc-ad-count",
+      payload: {},
+    });
+    expect(res.statusCode).toBe(200);
+    // owner 路径的用量落 PAID_DATA_OWNER_EXEMPT 审计（detail.calls）：
+    // groupsQueried=0 时旧门槛会漏记，TC 的 2 次必须记上。
+    const usage = ctx.adminGrantAudit.find(
+      (a) => a.action === "PAID_DATA_OWNER_EXEMPT"
+    );
+    expect(usage?.detail.calls).toBe(2);
   });
 
   it("缺省 body：force=false、scope=all（aliveOnly=false）", async () => {
@@ -206,7 +248,11 @@ describe("POST /catalog/products/calc-ad-count/preview", () => {
       expectedQueries: 40,
       worstCaseQueries: 72,
       unitPriceUsd: 0.002,
-      estimatedCostUsd: 0.08,
+      estimatedCostUsd: 0.0818,
+      // TC 旁证预估字段透传（确认框据此展示费用构成中的 TC 部分）
+      tcChecksExpected: 3,
+      tcUnitPriceUsd: 0.0006,
+      tcEstimatedCostUsd: 0.0018,
     });
     expect(mocks.preview).toHaveBeenCalledWith(
       expect.anything(),

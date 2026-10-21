@@ -109,6 +109,40 @@ describe("calcAdCountConfirmFacts", () => {
     expect(bare.unitPriceUsd).toBeNull();
     expect(bare.estimatedCostUsd).toBeNull();
   });
+
+  it("透明中心预估字段原样透传（前端不算钱）；preview 缺失 → null 不展示", () => {
+    const f = calcAdCountConfirmFacts(
+      preview({
+        tcChecksExpected: 3,
+        tcUnitPriceUsd: 0.0006,
+        tcEstimatedCostUsd: 0.0018,
+      }),
+      { force: false, scope: "all" }
+    );
+    expect(f.tcChecksExpected).toBe(3);
+    expect(f.tcUnitPriceUsd).toBe(0.0006);
+    expect(f.tcEstimatedCostUsd).toBe(0.0018);
+    const bare = calcAdCountConfirmFacts(preview(), {
+      force: false,
+      scope: "all",
+    });
+    expect(bare.tcChecksExpected).toBeNull();
+    expect(bare.tcUnitPriceUsd).toBeNull();
+    expect(bare.tcEstimatedCostUsd).toBeNull();
+  });
+
+  it("TC dict 新键双语齐全且占位符完整（{n}/{cost} 不丢）", () => {
+    for (const dict of [zh, en]) {
+      const p = dict.products;
+      expect(p.tcAdvertisers).toContain("{n}");
+      expect(p.adsTcShort).toContain("{n}");
+      expect(p.tcApproxAds).toContain("{n}");
+      expect(p.tcRescuedBadge.length).toBeGreaterThan(0);
+      expect(p.tcTopTitle.length).toBeGreaterThan(0);
+      expect(p.calcConfirmTcNote).toContain("{n}");
+      expect(p.calcConfirmTcNote).toContain("{cost}");
+    }
+  });
 });
 
 describe("resolveStoredCalcDepth / formatUsdAmount", () => {

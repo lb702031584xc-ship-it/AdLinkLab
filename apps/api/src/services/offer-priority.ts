@@ -5,7 +5,10 @@
  * - 初筛分 0–30：prescreenVerdict（go/caution/unknown/stop/未筛）
  * - 广告分 0–40：关联商品的品牌广告数分档 + 趋势（brand-ad-count 的
  *   adBandOf/deriveAdTrend 现算）；无关联商品或未计算 → 中性 12
- *   （与全站 unknown 不重罚口径一致）；疑似停投封顶 4
+ *   （与全站 unknown 不重罚口径一致）；疑似停投封顶 4。透明中心旁证
+ *   地板（2026-10-21）：SERP 档位为 none（裸词 0、长尾未 ≥1）但透明
+ *   中心广告主 tcAdvertisersCount ≥ 1 时按 small 计——快照未捕获 ≠
+ *   没人投；TC = 0 维持 none，TC 未知（null）维持现行不臆造。
  * - 佣金分 0–30：单笔佣金金额分档；未知 → 8（中性偏低，不判死）
  *
  * reasons 是与分数来源一一对应的中文短标签（按贡献从大到小，最多 4 条），
@@ -21,6 +24,8 @@ export interface TestPriorityInput {
   adCount: number | null;
   /** 长尾探针广告数（品牌+型号/品类词 MAX）；adBandOf 地板规则用，可缺省。 */
   adCountLongtail?: number | null;
+  /** 透明中心广告主数（旁证地板用）；null/缺省 = 未查过，维持现行不臆造。 */
+  tcAdvertisersCount?: number | null;
   lastAdCount: number | null;
   hasProductLink: boolean;
 }
@@ -68,9 +73,19 @@ export function computeTestPriority(input: TestPriorityInput): TestPriority {
   /* ── 广告分 0–40 ── */
   let adScore: number;
   // 分档走多探针 adBandOf：裸词为 none/未算但长尾有广告在投 → small 地板。
-  const band = input.hasProductLink
+  let band = input.hasProductLink
     ? adBandOf(input.adCount, input.adCountLongtail)
     : null;
+  // 透明中心旁证地板：band 为 none 已蕴含裸词 = 0（已知）且长尾未 ≥1
+  // （长尾 = 0 或未探明都算——SERP 两路都没证到"有"），此时 TC ≥ 1
+  // 是唯一的"有人在投"证据 → 抬到 small。TC = 0 维持 none；TC 未知
+  // （null）维持现行，绝不臆造。趋势修正不因 TC 新增（与长尾地板
+  // 走同一套既有趋势逻辑）。
+  let tcFloor = false;
+  if (band === "none" && (input.tcAdvertisersCount ?? 0) >= 1) {
+    band = "small";
+    tcFloor = true;
+  }
   if (!input.hasProductLink || band === null) {
     adScore = 12;
     entries.push({
@@ -85,7 +100,12 @@ export function computeTestPriority(input: TestPriorityInput): TestPriority {
         break;
       case "small":
         adScore = 30;
-        entries.push({ weight: 30, text: "有广告在投" });
+        entries.push({
+          weight: 30,
+          text: tcFloor
+            ? "透明中心有广告主在投（快照未捕获）"
+            : "有广告在投",
+        });
         break;
       case "hot":
         adScore = 28;
@@ -246,6 +266,7 @@ export async function attachTestPriorities<T extends OfferForPriority>(
     {
       adCount: number | null;
       adCountLongtail: number | null;
+      tcAdvertisersCount: number | null;
       lastAdCount: number | null;
     }
   >();
@@ -263,6 +284,7 @@ export async function attachTestPriorities<T extends OfferForPriority>(
         externalId: true,
         adCount: true,
         adCountLongtail: true,
+        tcAdvertisersCount: true,
         lastAdCount: true,
       },
     })) as Array<{
@@ -270,12 +292,14 @@ export async function attachTestPriorities<T extends OfferForPriority>(
       externalId: string;
       adCount: number | null;
       adCountLongtail: number | null;
+      tcAdvertisersCount: number | null;
       lastAdCount: number | null;
     }>;
     for (const r of rows) {
       productByKey.set(`${r.networkId}:${r.externalId}`, {
         adCount: r.adCount,
         adCountLongtail: r.adCountLongtail ?? null,
+        tcAdvertisersCount: r.tcAdvertisersCount ?? null,
         lastAdCount: r.lastAdCount,
       });
     }
@@ -291,6 +315,7 @@ export async function attachTestPriorities<T extends OfferForPriority>(
       commissionPerSaleUsd: deriveCommissionPerSaleUsd(o),
       adCount: product?.adCount ?? null,
       adCountLongtail: product?.adCountLongtail ?? null,
+      tcAdvertisersCount: product?.tcAdvertisersCount ?? null,
       lastAdCount: product?.lastAdCount ?? null,
       hasProductLink: product !== undefined,
     });

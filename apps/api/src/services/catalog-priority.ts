@@ -35,6 +35,7 @@ export interface CatalogPriorityInput {
   commissionRate?: number | null;
   adCount?: number | null;
   adCountLongtail?: number | null;
+  tcAdvertisersCount?: number | null;
   lastAdCount?: number | null;
 }
 
@@ -83,6 +84,7 @@ export function catalogPriorityInputFromRow(r: {
   commissionRate?: unknown;
   adCount?: unknown;
   adCountLongtail?: unknown;
+  tcAdvertisersCount?: unknown;
   lastAdCount?: unknown;
 }): CatalogPriorityInput {
   return {
@@ -93,6 +95,7 @@ export function catalogPriorityInputFromRow(r: {
     commissionRate: toFiniteNumberOrNull(r.commissionRate),
     adCount: toFiniteNumberOrNull(r.adCount),
     adCountLongtail: toFiniteNumberOrNull(r.adCountLongtail),
+    tcAdvertisersCount: toFiniteNumberOrNull(r.tcAdvertisersCount),
     lastAdCount: toFiniteNumberOrNull(r.lastAdCount),
   };
 }
@@ -111,6 +114,7 @@ export function computeCatalogTestPriority(
     commissionPerSaleUsd: figure,
     adCount: input.adCount ?? null,
     adCountLongtail: input.adCountLongtail ?? null,
+    tcAdvertisersCount: input.tcAdvertisersCount ?? null,
     lastAdCount: input.lastAdCount ?? null,
     // 商品自身即广告数据源：未计算时走"广告数未计算"中性 12（同 Offer 关联口径）。
     hasProductLink: true,

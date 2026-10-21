@@ -34,6 +34,8 @@ function product(over: Partial<OneClickProductRow> = {}): OneClickProductRow {
     poolStage: "inbox",
     adCount: 8,
     adCountLongtail: 0,
+    // 缺省 = 透明中心从未查过（null）；判杀夹具须显式给 0（三通道全 0 已知）
+    tcAdvertisersCount: null,
     adPolicyRisk: false,
     adCountCheckedAt: new Date(),
     lastAdCount: null,
@@ -142,7 +144,7 @@ describe("runOneClickScreen 全流程", () => {
       product({ id: "p-black", externalId: "e1", merchantId: "m-bad" }),
       product({ id: "p-comm", externalId: "e2", commissionAmount: 5, commissionRate: 5 }),
       product({ id: "p-preset", externalId: "e3", price: 200, commissionAmount: 30, commissionRate: 15 }),
-      product({ id: "p-ads", externalId: "e4", adCount: 0 }),
+      product({ id: "p-ads", externalId: "e4", adCount: 0, tcAdvertisersCount: 0 }),
       product({ id: "p-gate", externalId: "e5", name: "Gate Fail Item", adCount: 3 }),
       product({ id: "p-review", externalId: "e6", commissionAmount: null, commissionRate: null, adCount: 5 }),
       product({ id: "p-pass", externalId: "e7", adCount: 12 }),
@@ -314,9 +316,9 @@ describe("runOneClickScreen 广告趋势与单品豁免", () => {
         actorId: "u1",
         userRole: "owner",
         products: [
-          product({ id: "p-stopped", externalId: "e1", adCount: 0, lastAdCount: 6 }),
+          product({ id: "p-stopped", externalId: "e1", adCount: 0, tcAdvertisersCount: 0, lastAdCount: 6 }),
           product({ id: "p-active", externalId: "e2", adCount: 4, lastAdCount: 9 }),
-          product({ id: "p-first", externalId: "e3", adCount: 0, lastAdCount: null }),
+          product({ id: "p-first", externalId: "e3", adCount: 0, tcAdvertisersCount: 0, lastAdCount: null }),
         ],
       }
     );
@@ -352,8 +354,8 @@ describe("runOneClickScreen 广告趋势与单品豁免", () => {
         actorId: "u1",
         userRole: "owner",
         products: [
-          product({ id: "p-waived", externalId: "e1", adCount: 0, lastAdCount: 5 }),
-          product({ id: "p-other", externalId: "e2", brand: "OtherBrand", adCount: 0 }),
+          product({ id: "p-waived", externalId: "e1", adCount: 0, tcAdvertisersCount: 0, lastAdCount: 5 }),
+          product({ id: "p-other", externalId: "e2", brand: "OtherBrand", adCount: 0, tcAdvertisersCount: 0 }),
         ],
       }
     );
@@ -476,7 +478,7 @@ describe("runOneClickScreen 广告层多探针口径", () => {
       userRole: "owner",
       products: [
         product({ id: "p-tail", externalId: "e1", adCount: 0, adCountLongtail: 4 }),
-        product({ id: "p-zero", externalId: "e2", adCount: 0, adCountLongtail: 0 }),
+        product({ id: "p-zero", externalId: "e2", adCount: 0, adCountLongtail: 0, tcAdvertisersCount: 0 }),
       ],
     });
     expect(report.passed).toBe(1);
@@ -503,6 +505,7 @@ describe("runOneClickScreen 广告层多探针口径", () => {
           brand: "GunBrand",
           adCount: 0,
           adCountLongtail: 0,
+          tcAdvertisersCount: 0,
           adPolicyRisk: true,
         }),
       ],
@@ -514,7 +517,9 @@ describe("runOneClickScreen 广告层多探针口径", () => {
     expect(o?.reason).not.toContain("暂无人在投放");
   });
 
-  it("长尾未探明（null）+ 裸词 0 → 维持旧口径判停（不臆测长尾）", async () => {
+  it("长尾未探明（null）+ 裸词 0 → 新口径不判停：任一维度未知 → review", async () => {
+    // 2026-10-21 透明中心旁证批改判：旧口径"长尾未探明只看裸词判停"
+    // 已废止——判停须裸词/长尾/透明中心三通道全 0 已知。
     const world = makeWorld({});
     const report = await runOneClickScreen(deps(world), {
       tenantId: TENANT,
@@ -524,9 +529,115 @@ describe("runOneClickScreen 广告层多探针口径", () => {
         product({ id: "p-old", externalId: "e1", adCount: 0, adCountLongtail: null }),
       ],
     });
-    expect(report.killedAdCount).toBe(1);
+    expect(report.killedAdCount).toBe(0);
+    expect(report.review).toBe(1);
     const o = report.outcomes.find((x) => x.productId === "p-old");
-    expect(o?.reason).toContain("暂无人在投放");
+    expect(o?.outcome).toBe("review");
+    expect(o?.reason).toContain("待人工复核");
     expect(report.adLongtailOnlyCount).toBe(0);
+  });
+});
+
+describe("runOneClickScreen 广告层透明中心旁证口径", () => {
+  const allowedGateway = async () => ({
+    allowed: true,
+    feature: "catalog-ad-count",
+    keySource: "owner" as const,
+    credentials: null,
+    grantId: null,
+    remainingCalls: null,
+  });
+  const deps = (world: FakeWorld) => ({
+    prisma: world.prisma,
+    createOfferImpl: makeCreateOfferImpl(world),
+    gateEvaluator: async () => PASS_GATE,
+    gatewayResolve: allowedGateway,
+    adCountCalc: async () => ({
+      groupsQueried: 0,
+      groupsSkippedCache: 0,
+      productsUpdated: 0,
+      errors: [],
+    }),
+  });
+
+  it("SERP 双 0 + TC ≥1 → pass + tcRescued 标记 + 报告 tcRescuedCount + screenReason 旁证文案", async () => {
+    const world = makeWorld({});
+    const report = await runOneClickScreen(deps(world), {
+      tenantId: TENANT,
+      actorId: "u1",
+      userRole: "owner",
+      products: [
+        product({ id: "p-tc", externalId: "e1", adCount: 0, adCountLongtail: 0, tcAdvertisersCount: 11 }),
+        product({ id: "p-dead", externalId: "e2", brand: "DeadBrand", adCount: 0, adCountLongtail: 0, tcAdvertisersCount: 0 }),
+      ],
+    });
+    expect(report.passed).toBe(1);
+    expect(report.killedAdCount).toBe(1);
+    expect(report.tcRescuedCount).toBe(1);
+    const tc = report.outcomes.find((o) => o.productId === "p-tc");
+    expect(tc?.outcome).toBe("pass");
+    expect(tc?.tcRescued).toBe(true);
+    expect(tc?.tcAdvertisersCount).toBe(11);
+    expect(tc?.reason).toContain("透明中心有 11 家广告主在投（快照未捕获）");
+    const upd = world.productUpdates.find((u) => u.id === "p-tc");
+    expect(upd?.data.screenVerdict).toBe("pass");
+    expect(String(upd?.data.screenReason)).toContain("透明中心");
+    const dead = report.outcomes.find((o) => o.productId === "p-dead");
+    expect(dead?.outcome).toBe("kill");
+    expect(dead?.reason).toContain("SERP 与透明中心双通道确认");
+    // 审计 detail 带 tcRescuedCount
+    const audit = world.audits.find((a) => a.action === "CATALOG_ONE_CLICK_SCREEN");
+    expect((audit?.detail as Record<string, unknown>)?.tcRescuedCount).toBe(1);
+  });
+
+  it("SERP 双 0 + TC 未查（null）→ review 不判停（calc 补查后仍未知）", async () => {
+    const world = makeWorld({});
+    const report = await runOneClickScreen(deps(world), {
+      tenantId: TENANT,
+      actorId: "u1",
+      userRole: "owner",
+      products: [
+        product({ id: "p-unk", externalId: "e1", adCount: 0, adCountLongtail: 0, tcAdvertisersCount: null }),
+      ],
+    });
+    expect(report.killedAdCount).toBe(0);
+    expect(report.review).toBe(1);
+    expect(report.tcRescuedCount).toBe(0);
+    const o = report.outcomes.find((x) => x.productId === "p-unk");
+    expect(o?.outcome).toBe("review");
+    expect(o?.reason).toContain("透明中心待补查");
+  });
+
+  it("TC 记账：calc 只补 TC（groupsQueried=0、tcQueries=2）→ 用量按 2 记（owner 审计）", async () => {
+    const world = makeWorld({});
+    const report = await runOneClickScreen(
+      {
+        ...deps(world),
+        adCountCalc: async () => ({
+          groupsQueried: 0,
+          groupsSkippedCache: 1,
+          serpQueries: 0,
+          tcQueries: 2,
+          tcChecked: 2,
+          tcFailed: 0,
+          tcRescued: 0,
+          productsUpdated: 0,
+          errors: [],
+        }),
+      },
+      {
+        tenantId: TENANT,
+        actorId: "u1",
+        userRole: "owner",
+        products: [
+          product({ id: "p-unk2", externalId: "e1", adCount: 0, adCountLongtail: 0, tcAdvertisersCount: null }),
+        ],
+      }
+    );
+    expect(report.review).toBe(1);
+    const usageAudit = world.audits.find(
+      (a) => a.action === "PAID_DATA_OWNER_EXEMPT"
+    );
+    expect((usageAudit?.detail as Record<string, unknown>)?.calls).toBe(2);
   });
 });
