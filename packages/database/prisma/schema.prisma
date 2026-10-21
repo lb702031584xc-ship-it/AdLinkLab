@@ -1175,7 +1175,9 @@ model NetworkProduct {
   countryCode     String?  @map("country_code") @db.Text
   /// 商品状态：active（有效）/ inactive（手动下线）。默认 active。
   status          String   @default("active") @db.Text
-  /// 广告投放数量（按品牌+国家查 Google SERP 付费广告数；null = 未计算）。
+  /// 广告投放数量（按品牌+国家查 Google SERP：文字广告 paid 条数＋购物广告
+  /// shopping_element 条数；null = 未计算）。拆分字段（self/others/home/
+  /// product）只按文字广告条目计，购物条目不拆（v1 口径）。
   adCount         Int?     @map("ad_count")
   /// 自投广告数（广告落地页域名含品牌名；Amazon 落地页分不清 → null）。
   adCountSelf     Int?     @map("ad_count_self")
@@ -1185,6 +1187,13 @@ model NetworkProduct {
   adCountHome     Int?     @map("ad_count_home")
   /// 落商品页的广告条数（同上分类口径）。
   adCountProduct  Int?     @map("ad_count_product")
+  /// 长尾探针广告数：品牌+型号/品类词 SERP 广告数（文字广告＋购物广告，
+  /// 同 adCount 口径）的 MAX（联盟客投的是长尾，裸品牌词 0 ≠ 没人投）；
+  /// null = 无可派生长尾探针或未按多探针口径计算过。
+  adCountLongtail Int?     @map("ad_count_longtail")
+  /// 政策风险（组级）：组内 Top 商品名命中武器配件类模式——该类目付费广告
+  /// 禁投，其「广告数 0」是政策墙不是市场空白。默认 false。
+  adPolicyRisk    Boolean  @default(false) @map("ad_policy_risk")
   /// 广告投放数量上次查询时间（14 天缓存期内跳过重查）。
   adCountCheckedAt DateTime? @map("ad_count_checked_at") @db.Timestamptz(3)
   /// 广告投放数量上一次计算值快照（重算时把旧 adCount/adCountCheckedAt 挪到这里，供趋势对比：新投/停投/持续；null = 还没重算过）。

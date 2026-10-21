@@ -19,6 +19,8 @@ export interface TestPriorityInput {
   prescreenVerdict: string | null;
   commissionPerSaleUsd: number | null;
   adCount: number | null;
+  /** 长尾探针广告数（品牌+型号/品类词 MAX）；adBandOf 地板规则用，可缺省。 */
+  adCountLongtail?: number | null;
   lastAdCount: number | null;
   hasProductLink: boolean;
 }
@@ -65,14 +67,17 @@ export function computeTestPriority(input: TestPriorityInput): TestPriority {
 
   /* ── 广告分 0–40 ── */
   let adScore: number;
-  if (!input.hasProductLink || input.adCount == null) {
+  // 分档走多探针 adBandOf：裸词为 none/未算但长尾有广告在投 → small 地板。
+  const band = input.hasProductLink
+    ? adBandOf(input.adCount, input.adCountLongtail)
+    : null;
+  if (!input.hasProductLink || band === null) {
     adScore = 12;
     entries.push({
       weight: 12,
       text: input.hasProductLink ? "广告数未计算" : "未关联商品，广告数中性",
     });
   } else {
-    const band = adBandOf(input.adCount);
     switch (band) {
       case "sweet":
         adScore = 40;
@@ -238,7 +243,11 @@ export async function attachTestPriorities<T extends OfferForPriority>(
 
   const productByKey = new Map<
     string,
-    { adCount: number | null; lastAdCount: number | null }
+    {
+      adCount: number | null;
+      adCountLongtail: number | null;
+      lastAdCount: number | null;
+    }
   >();
   if (prisma && pairKeys.size > 0) {
     const rows = (await prisma.networkProduct.findMany({
@@ -253,17 +262,20 @@ export async function attachTestPriorities<T extends OfferForPriority>(
         networkId: true,
         externalId: true,
         adCount: true,
+        adCountLongtail: true,
         lastAdCount: true,
       },
     })) as Array<{
       networkId: string;
       externalId: string;
       adCount: number | null;
+      adCountLongtail: number | null;
       lastAdCount: number | null;
     }>;
     for (const r of rows) {
       productByKey.set(`${r.networkId}:${r.externalId}`, {
         adCount: r.adCount,
+        adCountLongtail: r.adCountLongtail ?? null,
         lastAdCount: r.lastAdCount,
       });
     }
@@ -278,6 +290,7 @@ export async function attachTestPriorities<T extends OfferForPriority>(
       prescreenVerdict: o.prescreenVerdict ?? null,
       commissionPerSaleUsd: deriveCommissionPerSaleUsd(o),
       adCount: product?.adCount ?? null,
+      adCountLongtail: product?.adCountLongtail ?? null,
       lastAdCount: product?.lastAdCount ?? null,
       hasProductLink: product !== undefined,
     });

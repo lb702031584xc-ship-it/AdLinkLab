@@ -33,8 +33,8 @@ function makeWorld(blacklist: Array<Record<string, unknown>> = []) {
     aiSetting: { findUnique: async () => null },
     networkProduct: {
       findMany: async () => [
-        { id: "np1", brand: "WidgetCo", adCount: 6 },
-        { id: "np2", brand: "ZeroBrand", adCount: 0 },
+        { id: "np1", brand: "WidgetCo", adCount: 6, adCountLongtail: 3 },
+        { id: "np2", brand: "ZeroBrand", adCount: 0, adCountLongtail: 0 },
       ],
     },
     offer: {
@@ -208,10 +208,10 @@ describe("prescreenOffers adStoppedCount（疑似停投计数）", () => {
 
   it("上次有广告、本次 0 的商品计数；同品牌多 Offer 不重复计；无关品牌不计", async () => {
     const prisma = makeWorldWithProducts([
-      { id: "np-s1", brand: "StoppedBrand", adCount: 0, lastAdCount: 4 },
-      { id: "np-s2", brand: "StoppedBrand", adCount: 0, lastAdCount: 2 },
-      { id: "np-s3", brand: "StoppedBrand", adCount: 3, lastAdCount: 1 },
-      { id: "np-o1", brand: "OtherBrand", adCount: 0, lastAdCount: 5 },
+      { id: "np-s1", brand: "StoppedBrand", adCount: 0, adCountLongtail: 0, lastAdCount: 4 },
+      { id: "np-s2", brand: "StoppedBrand", adCount: 0, adCountLongtail: 0, lastAdCount: 2 },
+      { id: "np-s3", brand: "StoppedBrand", adCount: 3, adCountLongtail: 2, lastAdCount: 1 },
+      { id: "np-o1", brand: "OtherBrand", adCount: 0, adCountLongtail: 0, lastAdCount: 5 },
     ]);
     const { counts } = await prescreenOffers(
       { prisma, gateEvaluator: gateOk, gatewayResolve: gatewayOk },
@@ -231,7 +231,7 @@ describe("prescreenOffers adStoppedCount（疑似停投计数）", () => {
 
   it("网关拒绝 → adStoppedCount = 0", async () => {
     const prisma = makeWorldWithProducts([
-      { id: "np-s1", brand: "StoppedBrand", adCount: 0, lastAdCount: 4 },
+      { id: "np-s1", brand: "StoppedBrand", adCount: 0, adCountLongtail: 0, lastAdCount: 4 },
     ]);
     const { counts, skippedPaidLayer } = await prescreenOffers(
       {
@@ -283,6 +283,7 @@ describe("prescreenOffers 广告层投放方式分流（promoMode）", () => {
     networkId: "net-1",
     countryCode: "US",
     adCount: 0,
+    adCountLongtail: 0,
     lastAdCount: null,
   });
   const profile = (brandKey: string, promoMode: string) => ({
@@ -374,5 +375,103 @@ describe("prescreenOffers 广告层投放方式分流（promoMode）", () => {
     expect(outcomes[0].verdict).toBe("stop");
     expect(outcomes[0].reason).toContain("8");
     expect(counts.adWaivedCount).toBe(0);
+  });
+});
+
+describe("prescreenOffers 广告层多探针口径", () => {
+  function makeWorldWithProducts(
+    products: Array<Record<string, unknown>>
+  ): PrismaClient {
+    return {
+      catalogBlacklist: { findMany: async () => [] },
+      catalogScreeningPreset: { findUnique: async () => null },
+      aiSetting: { findUnique: async () => null },
+      networkProduct: { findMany: async () => products },
+      brandProfile: { findMany: async () => [] },
+      offer: { update: async () => ({}) },
+      adminGrantAudit: { create: async () => ({}) },
+    } as unknown as PrismaClient;
+  }
+  const gateOk = async () =>
+    ({
+      passed: true,
+      reason: "ok",
+      officialSite: null,
+      signals: [],
+    }) as TrafficGateResult;
+
+  it("裸词 0 + 长尾 ≥1 → go + adLongtailOnly 标记与计数", async () => {
+    const prisma = makeWorldWithProducts([
+      { id: "np-t1", brand: "TailBrand", adCount: 0, adCountLongtail: 4, lastAdCount: null },
+    ]);
+    const { outcomes, counts } = await prescreenOffers(
+      { prisma, gateEvaluator: gateOk, gatewayResolve: gatewayOk },
+      {
+        tenantId: "t1",
+        actorId: "u1",
+        userRole: "owner",
+        offers: [offer({ id: "o-tail", brandName: "TailBrand" })],
+      }
+    );
+    expect(outcomes[0].verdict).toBe("go");
+    expect(outcomes[0].adLongtailOnly).toBe(true);
+    expect(counts.adLongtailOnlyCount).toBe(1);
+    expect(counts.stop).toBe(0);
+  });
+
+  it("裸词与长尾双 0 + 政策风险组 → stop，原因用政策口径文案", async () => {
+    const prisma = makeWorldWithProducts([
+      {
+        id: "np-g1",
+        brand: "GunBrand",
+        adCount: 0,
+        adCountLongtail: 0,
+        adPolicyRisk: true,
+        lastAdCount: null,
+      },
+    ]);
+    const { outcomes, counts } = await prescreenOffers(
+      { prisma, gateEvaluator: gateOk, gatewayResolve: gatewayOk },
+      {
+        tenantId: "t1",
+        actorId: "u1",
+        userRole: "owner",
+        offers: [offer({ id: "o-gun", brandName: "GunBrand" })],
+      }
+    );
+    expect(outcomes[0].verdict).toBe("stop");
+    expect(outcomes[0].reason).toContain("政策受限");
+    expect(outcomes[0].reason).not.toContain("暂无人在投放");
+    expect(counts.stop).toBe(1);
+  });
+
+  it("长尾未探明（null，旧印记）→ 维持旧口径：只看裸词判停，原因不变", async () => {
+    const prisma = makeWorldWithProducts([
+      // 无 adCountLongtail 字段 = 多探针上线前旧印记
+      { id: "np-old", brand: "OldBrand", adCount: 0, lastAdCount: null },
+    ]);
+    const { outcomes } = await prescreenOffers(
+      {
+        prisma,
+        gateEvaluator: gateOk,
+        gatewayResolve: gatewayOk,
+        // 触发增量计算但组被新鲜度/无探针跳过（groupsQueried=0）→ 长尾仍未知
+        adCountCalc: async () => ({
+          groupsQueried: 0,
+          groupsSkippedCache: 1,
+          productsUpdated: 0,
+          errors: [],
+        }),
+      },
+      {
+        tenantId: "t1",
+        actorId: "u1",
+        userRole: "owner",
+        offers: [offer({ id: "o-old", brandName: "OldBrand" })],
+      }
+    );
+    expect(outcomes[0].verdict).toBe("stop");
+    expect(outcomes[0].reason).toContain("广告数为 0");
+    expect(outcomes[0].adLongtailOnly).toBeUndefined();
   });
 });

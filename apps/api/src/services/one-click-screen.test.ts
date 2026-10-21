@@ -33,6 +33,8 @@ function product(over: Partial<OneClickProductRow> = {}): OneClickProductRow {
     merchantId: null,
     poolStage: "inbox",
     adCount: 8,
+    adCountLongtail: 0,
+    adPolicyRisk: false,
     adCountCheckedAt: new Date(),
     lastAdCount: null,
     ...over,
@@ -440,5 +442,91 @@ describe("forceSelectProducts 强制入选", () => {
     expect(upd?.data.screenReason).toBe("人工强制入选（跳过筛选阶梯）");
     const offerUpd = world.offerUpdates.find((u) => u.id === result.created[0].offerId);
     expect(offerUpd?.data.prescreenVerdict).toBe("unknown");
+  });
+});
+
+describe("runOneClickScreen 广告层多探针口径", () => {
+  const allowedGateway = async () => ({
+    allowed: true,
+    feature: "catalog-ad-count",
+    keySource: "owner" as const,
+    credentials: null,
+    grantId: null,
+    remainingCalls: null,
+  });
+  const noCalc = async () => ({
+    groupsQueried: 0,
+    groupsSkippedCache: 0,
+    productsUpdated: 0,
+    errors: [],
+  });
+  const deps = (world: FakeWorld) => ({
+    prisma: world.prisma,
+    createOfferImpl: makeCreateOfferImpl(world),
+    gateEvaluator: async () => PASS_GATE,
+    gatewayResolve: allowedGateway,
+    adCountCalc: noCalc,
+  });
+
+  it("裸词 0 + 长尾 ≥1 → pass + adLongtailOnly 标记与报告计数", async () => {
+    const world = makeWorld({});
+    const report = await runOneClickScreen(deps(world), {
+      tenantId: TENANT,
+      actorId: "u1",
+      userRole: "owner",
+      products: [
+        product({ id: "p-tail", externalId: "e1", adCount: 0, adCountLongtail: 4 }),
+        product({ id: "p-zero", externalId: "e2", adCount: 0, adCountLongtail: 0 }),
+      ],
+    });
+    expect(report.passed).toBe(1);
+    expect(report.killedAdCount).toBe(1);
+    expect(report.adLongtailOnlyCount).toBe(1);
+    const tail = report.outcomes.find((o) => o.productId === "p-tail");
+    expect(tail?.outcome).toBe("pass");
+    expect(tail?.adLongtailOnly).toBe(true);
+    const zero = report.outcomes.find((o) => o.productId === "p-zero");
+    expect(zero?.outcome).toBe("kill");
+    expect(zero?.adLongtailOnly).toBeUndefined();
+  });
+
+  it("双 0 + 政策风险 → kill 且原因用政策口径文案", async () => {
+    const world = makeWorld({});
+    const report = await runOneClickScreen(deps(world), {
+      tenantId: TENANT,
+      actorId: "u1",
+      userRole: "owner",
+      products: [
+        product({
+          id: "p-gun",
+          externalId: "e1",
+          brand: "GunBrand",
+          adCount: 0,
+          adCountLongtail: 0,
+          adPolicyRisk: true,
+        }),
+      ],
+    });
+    expect(report.killedAdCount).toBe(1);
+    const o = report.outcomes.find((x) => x.productId === "p-gun");
+    expect(o?.outcome).toBe("kill");
+    expect(o?.reason).toContain("政策受限");
+    expect(o?.reason).not.toContain("暂无人在投放");
+  });
+
+  it("长尾未探明（null）+ 裸词 0 → 维持旧口径判停（不臆测长尾）", async () => {
+    const world = makeWorld({});
+    const report = await runOneClickScreen(deps(world), {
+      tenantId: TENANT,
+      actorId: "u1",
+      userRole: "owner",
+      products: [
+        product({ id: "p-old", externalId: "e1", adCount: 0, adCountLongtail: null }),
+      ],
+    });
+    expect(report.killedAdCount).toBe(1);
+    const o = report.outcomes.find((x) => x.productId === "p-old");
+    expect(o?.reason).toContain("暂无人在投放");
+    expect(report.adLongtailOnlyCount).toBe(0);
   });
 });

@@ -225,6 +225,10 @@ function serializeProduct(r: Record<string, unknown>, whitelisted: boolean) {
     /** 广告落地拆分：落首页/旗舰店 vs 落商品页的条数（other 不计入两者）。 */
     adCountHome: numOrNull(r.adCountHome),
     adCountProduct: numOrNull(r.adCountProduct),
+    /** 长尾探针广告数（品牌+型号/品类词的文字广告＋购物广告数 MAX）；无可派生探针 → null。 */
+    adCountLongtail: numOrNull(r.adCountLongtail),
+    /** 政策风险：品牌组 Top 商品命中武器配件类模式（付费广告禁投类目）。 */
+    adPolicyRisk: r.adPolicyRisk === true,
     adCountCheckedAt:
       (r.adCountCheckedAt as Date)?.toISOString?.() ??
       (typeof r.adCountCheckedAt === "string" ? r.adCountCheckedAt : null),
@@ -268,7 +272,10 @@ function computeBrandScore(args: {
   productCount: number;
 }): number {
   let adScore: number;
-  if (args.adCount === null || args.adBand === null) adScore = 10;
+  // 档位已含长尾地板规则（adBandOf(adCount, adCountLongtail)）：只有分档
+  // 本身为 null（裸词与长尾都未算）才记「未计算」中性分，不能再用
+  // adCount===null 卡住——否则裸词未算但长尾有广告的组拿不到 small 分。
+  if (args.adBand === null) adScore = 10;
   else
     adScore = { none: 5, small: 30, sweet: 40, hot: 30, redocean: 15 }[
       args.adBand
@@ -1081,6 +1088,8 @@ export async function registerCatalogRoutes(
         adCountOthers: true,
         adCountHome: true,
         adCountProduct: true,
+        adCountLongtail: true,
+        adPolicyRisk: true,
         lastAdCount: true,
       },
     })) as Array<Record<string, unknown>>;
@@ -1104,6 +1113,8 @@ export async function registerCatalogRoutes(
       adCountOthers: number | null;
       adCountHome: number | null;
       adCountProduct: number | null;
+      adCountLongtail: number | null;
+      adPolicyRisk: boolean;
       lastAdCount: number | null;
       products: Array<Record<string, unknown>>;
     }
@@ -1138,6 +1149,8 @@ export async function registerCatalogRoutes(
           adCountOthers: null,
           adCountHome: null,
           adCountProduct: null,
+          adCountLongtail: null,
+          adPolicyRisk: false,
           lastAdCount: null,
           products: [],
         };
@@ -1174,6 +1187,10 @@ export async function registerCatalogRoutes(
       if (g.adCountHome === null) g.adCountHome = numOrNull(r.adCountHome);
       if (g.adCountProduct === null)
         g.adCountProduct = numOrNull(r.adCountProduct);
+      // 长尾探针组值同口径（第一个非 null）；政策风险取 any true（组级统一写入）。
+      if (g.adCountLongtail === null)
+        g.adCountLongtail = numOrNull(r.adCountLongtail);
+      if (r.adPolicyRisk === true) g.adPolicyRisk = true;
       if (g.lastAdCount === null) g.lastAdCount = numOrNull(r.lastAdCount);
       g.products.push({
         id: r.id,
@@ -1223,7 +1240,8 @@ export async function registerCatalogRoutes(
         }
       }
       const adTrend = deriveAdTrend(g.adCount, g.lastAdCount);
-      const adBand = adBandOf(g.adCount);
+      // 分档含长尾地板：裸词 none/未算但长尾 ≥1 → small（与 Offer 优先分共用）。
+      const adBand = adBandOf(g.adCount, g.adCountLongtail);
       const brandScore = computeBrandScore({
         adCount: g.adCount,
         adBand,
@@ -1261,6 +1279,8 @@ export async function registerCatalogRoutes(
         adCountOthers: g.adCountOthers,
         adCountHome: g.adCountHome,
         adCountProduct: g.adCountProduct,
+        adCountLongtail: g.adCountLongtail,
+        adPolicyRisk: g.adPolicyRisk,
         lastAdCount: g.lastAdCount,
         adTrend,
         adBand,
@@ -1396,9 +1416,10 @@ export async function registerCatalogRoutes(
    * - recommended：recommended=true 且未命中黑名单（商品/商家，判定口径
    *   与商品列表的 blacklisted 标记一致：status='active' 的黑名单行）。
    * - launchable：recommended 基础上 promoUrl 非空且 status='active'。
-   * - withAds：范围内 adCount >= 1 的商品数（未计算=null 的不计入；
-   *   品牌级信号，一个品牌有广告在投时该品牌 0 佣金商品也可能被计入，
-   *   见筛选预设口径说明）。
+   * - withAds：范围内「有广告在投」的商品数——多探针口径：裸品牌词
+   *   adCount >= 1 或长尾探针 adCountLongtail >= 1（未计算=null 的不
+   *   计入；品牌级信号，一个品牌有广告在投时该品牌 0 佣金商品也可能被
+   *   计入，见筛选预设口径说明）。
    * - offersCreated：launchable 中已建过 Offer 的商品数；Offer 关联方式 =
    *   idempotencyKey `catalog:{networkId}:{externalId}`（与 launch-counts 同口径）。
    */
@@ -1414,7 +1435,10 @@ export async function registerCatalogRoutes(
       prisma.networkProduct.count({ where: base }),
       prisma.networkProduct.count({ where: { ...base, status: "active" } }),
       prisma.networkProduct.count({
-        where: { ...base, adCount: { gte: 1 } },
+        where: {
+          ...base,
+          OR: [{ adCount: { gte: 1 } }, { adCountLongtail: { gte: 1 } }],
+        },
       }),
     ]);
     const candidates = (await prisma.networkProduct.findMany({
@@ -1895,7 +1919,9 @@ export async function registerCatalogRoutes(
           actorId: info.id,
           feature: "catalog-ad-count",
           keySource: access.keySource,
-          calls: result.groupsQueried,
+          // 多探针后一组最多 3 次 SERP 查询：按实际查询次数记账，
+          // 不能再按组数记（会把真实消耗低估到 1/3）。
+          calls: result.serpQueries ?? result.groupsQueried,
           grantId: access.grantId,
         });
       }
@@ -1908,6 +1934,7 @@ export async function registerCatalogRoutes(
           force,
           scope,
           groupsQueried: result.groupsQueried,
+          serpQueries: result.serpQueries ?? result.groupsQueried,
           groupsSkippedCache: result.groupsSkippedCache,
           skippedDeadGroups: result.skippedDeadGroups ?? 0,
           productsUpdated: result.productsUpdated,

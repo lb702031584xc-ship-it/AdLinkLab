@@ -11,8 +11,12 @@
  *    置 0 再判：不可判定的维度不判死，其余维度照常判。
  * 4. 广告数（付费层，经付费数据网关）：网关拒绝 → 整层跳过
  *    （skippedPaidLayer=true，不杀不标记）；允许 → 先对未计算/已过期的
- *    商品增量计算（calcBrandAdCounts，14 天缓存），再按 adCount >= 1
- *    判 pass、= 0 kill、仍未知转复核标记。分档只报告不拦截。
+ *    商品增量计算（calcBrandAdCounts，14 天缓存），再按「在投」判定：
+ *    裸品牌词 adCount >= 1 或长尾探针 adCountLongtail（品牌+型号/品类词
+ *    MAX）>= 1 → pass（仅长尾过关标记 adLongtailOnly，计入报告）；
+ *    裸词 = 0 且长尾 = 0 或未探明 → kill；裸词仍未知且长尾无广告证据
+ *    → 转复核标记。分档只报告不拦截。政策口径：品牌组命中政策风险
+ *    （武器配件类）被判停时，原因写明是类目政策禁投而非无人投放。
  *    例外：品牌在 BrandProfile 标了「单品投放」（promoMode="product"）
  *    的，= 0 不杀（单品打法主信号是单品需求，品牌词广告数仅作参考），
  *    标记 adReferenceOnly 并计入报告 adWaivedCount。报告另计
@@ -80,6 +84,8 @@ export interface OneClickProductOutcome {
   reason?: string;
   /** 广告层因品牌标注「单品投放」被豁免（广告数仅作参考，未据此杀）。 */
   adReferenceOnly?: boolean;
+  /** 仅靠长尾探针广告数过关（裸品牌词无广告、品牌+型号/品类词有广告在投）。 */
+  adLongtailOnly?: boolean;
 }
 
 export interface OneClickScreenReport {
@@ -104,6 +110,8 @@ export interface OneClickScreenReport {
   adStoppedCount: number;
   /** 广告层因品牌「单品投放」标注被豁免的件数（本应被广告数 0 杀）。 */
   adWaivedCount: number;
+  /** 仅靠长尾探针过关的件数（裸品牌词 0/未算、长尾 ≥1）。 */
+  adLongtailOnlyCount: number;
   outcomes: OneClickProductOutcome[];
 }
 
@@ -140,6 +148,10 @@ export interface OneClickProductRow {
   merchantId: string | null;
   poolStage: string;
   adCount: number | null;
+  /** 长尾探针广告数（品牌+型号/品类词 MAX）；null = 尚未探明（旧印记）。 */
+  adCountLongtail: number | null;
+  /** 所属品牌组政策风险（武器配件类目，付费广告禁投）。 */
+  adPolicyRisk: boolean;
   adCountCheckedAt: Date | null;
   lastAdCount: number | null;
 }
@@ -246,13 +258,18 @@ export async function runOneClickScreen(
     reason?: string;
     reviewFlags: string[];
     adCount: number | null;
+    adCountLongtail: number | null;
+    adPolicyRisk: boolean;
     lastAdCount: number | null;
     adReferenceOnly?: boolean;
+    adLongtailOnly?: boolean;
   }
   const works: Work[] = products.map((p) => ({
     p,
     reviewFlags: [],
     adCount: p.adCount,
+    adCountLongtail: p.adCountLongtail ?? null,
+    adPolicyRisk: p.adPolicyRisk === true,
     lastAdCount: p.lastAdCount,
   }));
 
@@ -312,6 +329,7 @@ export async function runOneClickScreen(
   /* ── 4) 广告数（付费层，经网关；拒绝 → 整层跳过） ── */
   let skippedPaidLayer = false;
   let adWaivedCount = 0;
+  let adLongtailOnlyCount = 0;
   let paidKeySource: OneClickScreenReport["paidKeySource"] = null;
   const survivors = works.filter((w) => !w.killedBy);
   if (survivors.length > 0) {
@@ -358,6 +376,9 @@ export async function runOneClickScreen(
         .filter(
           (w) =>
             w.adCount === null ||
+            // 长尾口径未落地（多探针上线前旧印记）也要重算——calc 内部
+            // 新鲜度规则兜底：派生不出探针的组不真正发查询。
+            w.p.adCountLongtail == null ||
             !(w.p.adCountCheckedAt instanceof Date) ||
             nowMs - (w.p.adCountCheckedAt as Date).getTime() >=
               AD_COUNT_CACHE_TTL_MS
@@ -374,17 +395,26 @@ export async function runOneClickScreen(
             actorId: input.actorId,
             feature: "catalog-ad-count",
             keySource: access.keySource,
-            calls: result.groupsQueried,
+            // 多探针后一组最多 3 次 SERP：按实际查询次数记账。
+            calls: result.serpQueries ?? result.groupsQueried,
             grantId: access.grantId,
           });
         }
         // 计算已写回 DB：重读这批商品的广告数（连同上次快照，供趋势判定）。
         const refreshed = (await prisma.networkProduct.findMany({
           where: { tenantId, id: { in: staleIds } },
-          select: { id: true, adCount: true, lastAdCount: true },
+          select: {
+            id: true,
+            adCount: true,
+            adCountLongtail: true,
+            adPolicyRisk: true,
+            lastAdCount: true,
+          },
         })) as Array<{
           id: string;
           adCount: number | null;
+          adCountLongtail: number | null;
+          adPolicyRisk: boolean;
           lastAdCount: number | null;
         }>;
         const byId = new Map(refreshed.map((r) => [r.id, r]));
@@ -392,14 +422,26 @@ export async function runOneClickScreen(
           const r = byId.get(w.p.id);
           if (r) {
             w.adCount = r.adCount ?? null;
+            w.adCountLongtail = r.adCountLongtail ?? null;
+            w.adPolicyRisk = r.adPolicyRisk === true;
             w.lastAdCount = r.lastAdCount ?? null;
           }
         }
       }
       for (const w of survivors) {
-        if (w.adCount === null) {
+        // 「在投」多探针口径：裸品牌词 ≥1 或 长尾探针（型号/品类词）≥1。
+        const hasAds =
+          (w.adCount ?? 0) >= 1 || (w.adCountLongtail ?? 0) >= 1;
+        if (hasAds) {
+          if ((w.adCount ?? 0) < 1) {
+            // 仅靠长尾过关：裸词 0/未算、长尾有广告在投（可审计标记）。
+            w.adLongtailOnly = true;
+            adLongtailOnlyCount += 1;
+          }
+        } else if (w.adCount === null) {
           w.reviewFlags.push("广告数未计算（品牌缺失或查询失败），待人工复核");
         } else if (w.adCount === 0) {
+          // 判停：裸词 =0 且长尾 =0 或未探明（null → 维持旧口径，不臆测）。
           const promoMode = promoModeByKey.get(
             `${w.p.networkId}${brandKeyOf(w.p.brand)}${w.p.countryCode ?? ""}`
           );
@@ -407,6 +449,11 @@ export async function runOneClickScreen(
             // 单品品牌豁免：不杀，标记广告数仅作参考（汇总计数）。
             w.adReferenceOnly = true;
             adWaivedCount += 1;
+          } else if (w.adPolicyRisk) {
+            // 政策口径：武器配件类类目付费广告禁投，0 是政策墙不是空白。
+            w.killedBy = "ad_count";
+            w.reason =
+              "政策受限类目（武器配件）：付费广告禁投，广告数为 0 是政策限制而非无人投放";
           } else {
             w.killedBy = "ad_count";
             w.reason = "广告数为 0：该品牌暂无人在投放";
@@ -459,6 +506,7 @@ export async function runOneClickScreen(
       (w) => deriveAdTrend(w.adCount, w.lastAdCount) === "stopped"
     ).length,
     adWaivedCount,
+    adLongtailOnlyCount,
     outcomes: [],
   };
   const now = new Date();
@@ -495,6 +543,7 @@ export async function runOneClickScreen(
         outcome: "review",
         reason,
         ...(w.adReferenceOnly ? { adReferenceOnly: true } : {}),
+        ...(w.adLongtailOnly ? { adLongtailOnly: true } : {}),
       });
       await prisma.networkProduct.update({
         where: { id: p.id },
@@ -507,6 +556,7 @@ export async function runOneClickScreen(
       productId: p.id,
       outcome: "pass",
       ...(w.adReferenceOnly ? { adReferenceOnly: true } : {}),
+      ...(w.adLongtailOnly ? { adLongtailOnly: true } : {}),
     });
     await prisma.networkProduct.update({
       where: { id: p.id },
@@ -561,6 +611,7 @@ export async function runOneClickScreen(
       killedTrafficGate: report.killedTrafficGate,
       adStoppedCount: report.adStoppedCount,
       adWaivedCount: report.adWaivedCount,
+      adLongtailOnlyCount: report.adLongtailOnlyCount,
       review: report.review,
       passed: report.passed,
       skippedPaidLayer: report.skippedPaidLayer,

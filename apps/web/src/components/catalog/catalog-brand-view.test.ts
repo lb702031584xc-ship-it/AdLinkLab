@@ -36,6 +36,9 @@ import {
   CatalogBrandView,
   adBandBadge,
   adLandingSplitText,
+  adLongtailActiveVisible,
+  adLongtailSuffix,
+  adProbeFields,
   effectivePromoMode,
 } from "./catalog-brand-view";
 
@@ -176,6 +179,80 @@ describe("effectivePromoMode", () => {
     expect(
       effectivePromoMode(brand({ promoMode: null, landingUrl: null }))
     ).toBe("unmarked");
+  });
+});
+
+describe("adProbeFields", () => {
+  it("passes through a numeric longtail and an explicit policy risk", () => {
+    expect(adProbeFields({ adCountLongtail: 7, adPolicyRisk: true })).toEqual({
+      longtail: 7,
+      policyRisk: true,
+    });
+    expect(adProbeFields({ adCountLongtail: 0, adPolicyRisk: false })).toEqual(
+      { longtail: 0, policyRisk: false }
+    );
+  });
+
+  it("defaults missing/invalid fields to null / false (never guessed)", () => {
+    expect(adProbeFields({})).toEqual({ longtail: null, policyRisk: false });
+    expect(
+      adProbeFields({ adCountLongtail: null, adPolicyRisk: undefined })
+    ).toEqual({ longtail: null, policyRisk: false });
+    expect(
+      adProbeFields({ adCountLongtail: "7", adPolicyRisk: "yes" })
+    ).toEqual({ longtail: null, policyRisk: false });
+    expect(adProbeFields({ adCountLongtail: Number.NaN })).toEqual({
+      longtail: null,
+      policyRisk: false,
+    });
+  });
+});
+
+describe("adLongtailSuffix", () => {
+  it("renders the probe count as a suffix with the leading separator", () => {
+    expect(adLongtailSuffix(5, d)).toBe("· 长尾探针 约 5 条");
+    expect(adLongtailSuffix(0, d)).toBe("· 长尾探针 约 0 条");
+  });
+
+  it("renders in English with the en template", () => {
+    expect(adLongtailSuffix(5, en.products)).toBe("· Longtail probe ~5 ads");
+  });
+
+  it("returns null when not probed yet (line hidden)", () => {
+    expect(adLongtailSuffix(null, d)).toBeNull();
+    expect(adLongtailSuffix(undefined, d)).toBeNull();
+  });
+});
+
+describe("adLongtailActiveVisible", () => {
+  it("shows when the bare brand term has no ads but the longtail probe found some", () => {
+    expect(adLongtailActiveVisible(0, 1)).toBe(true);
+    expect(adLongtailActiveVisible(0, 12)).toBe(true);
+    expect(adLongtailActiveVisible(null, 3)).toBe(true);
+  });
+
+  it("hides when the bare term already has ads, the probe found none, or nothing was probed", () => {
+    expect(adLongtailActiveVisible(2, 5)).toBe(false);
+    expect(adLongtailActiveVisible(0, 0)).toBe(false);
+    expect(adLongtailActiveVisible(null, null)).toBe(false);
+    expect(adLongtailActiveVisible(0, null)).toBe(false);
+    expect(adLongtailActiveVisible(undefined, undefined)).toBe(false);
+  });
+});
+
+describe("multi-probe dict keys", () => {
+  it("exist in both languages with template placeholders intact", () => {
+    for (const dict of [zh, en]) {
+      const p = dict.products;
+      expect(p.adsLongtailApprox).toContain("{n}");
+      expect(p.adsLongtailShort).toContain("{n}");
+      expect(p.adLongtailActive.length).toBeGreaterThan(0);
+      expect(p.adPolicyRisk.length).toBeGreaterThan(0);
+      expect(p.adPolicyRiskCategory.length).toBeGreaterThan(0);
+    }
+    expect(zh.products.adLongtailActive).toBe("长尾在投");
+    expect(zh.products.adPolicyRisk).toBe("政策受限");
+    expect(zh.products.adPolicyRiskCategory).toBe("政策受限类");
   });
 });
 

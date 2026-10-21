@@ -4,6 +4,7 @@
  *
  * 支持：create/findUnique/findFirst/findMany/update/upsert/count/delete，
  * where 操作符：in/lt/lte/gt/gte/contains(+mode insensitive)、复合唯一键
+ * 与 OR/AND 逻辑组合（递归子 where）。
  * （如 tenantId_channel_entityType_entityId）、update 的 { increment }。
  */
 import { randomUUID } from "node:crypto";
@@ -79,6 +80,15 @@ function matchesValue(value: any, cond: any): boolean {
 export function matchesWhere(row: Row, where: Row | undefined): boolean {
   if (!where) return true;
   return Object.entries(where).every(([key, cond]) => {
+    // 逻辑组合子（Prisma OR/AND）：元素为子 where 数组，递归匹配。
+    if (key === "OR")
+      return (
+        Array.isArray(cond) && cond.some((c) => matchesWhere(row, c as Row))
+      );
+    if (key === "AND")
+      return (
+        Array.isArray(cond) && cond.every((c) => matchesWhere(row, c as Row))
+      );
     if (key in row) return matchesValue(row[key], cond);
     // 复合唯一键：row 上没有该 key，cond 为普通对象 → 逐子键匹配 row。
     if (isPlainObject(cond)) {

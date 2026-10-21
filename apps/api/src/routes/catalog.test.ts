@@ -593,7 +593,13 @@ describe("GET /api/v1/catalog/funnel（可投流漏斗）", () => {
       promoUrl: "https://promo.test/5",
       merchantId,
     });
-    ctx.networkProduct.push(p1, p2, p3, p4, p5);
+    // 6: 裸品牌词 0、长尾探针 3 → 多探针口径下计入 withAds（total/passedGate 同步 +1）
+    const p6 = funnelProduct({
+      externalId: "f6",
+      adCount: 0,
+      adCountLongtail: 3,
+    });
+    ctx.networkProduct.push(p1, p2, p3, p4, p5, p6);
     ctx.catalogBlacklist.push(
       blacklistRow({ entityType: "product", entityId: p3.id }),
       blacklistRow({ entityType: "merchant", entityId: merchantId })
@@ -608,11 +614,11 @@ describe("GET /api/v1/catalog/funnel（可投流漏斗）", () => {
     const res = await app.inject({ method: "GET", url: "/api/v1/catalog/funnel" });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({
-      total: 5,
-      passedGate: 4,
+      total: 6,
+      passedGate: 5,
       recommended: 2,
       launchable: 1,
-      withAds: 1,
+      withAds: 2,
       offersCreated: 1,
     });
   });

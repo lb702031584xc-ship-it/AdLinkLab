@@ -257,3 +257,44 @@ describe("attachTestPriorities", () => {
     expect(out[0].testPriority.reasons).toContain("未关联商品，广告数中性");
   });
 });
+
+describe("computeTestPriority 广告腿 长尾地板（多探针）", () => {
+  it("裸词 0 + 长尾 ≥1 → small 30 分（不再判「暂无广告在投」）", () => {
+    const linked = { ...base, hasProductLink: true };
+    const r = computeTestPriority({
+      ...linked,
+      adCount: 0,
+      adCountLongtail: 3,
+      lastAdCount: null,
+    });
+    expect(r.score).toBe(5 + 30 + 8);
+    expect(r.reasons).toContain("有广告在投");
+    expect(r.reasons).not.toContain("暂无广告在投");
+  });
+
+  it("裸词未算 + 长尾 ≥1 → small 30 分（不再中性 12）", () => {
+    const linked = { ...base, hasProductLink: true };
+    const r = computeTestPriority({
+      ...linked,
+      adCount: null,
+      adCountLongtail: 2,
+      lastAdCount: null,
+    });
+    expect(r.score).toBe(5 + 30 + 8);
+    expect(r.reasons).toContain("有广告在投");
+  });
+
+  it("长尾为 0/null 时不抬档：裸词 0 仍 4 分、未算仍中性 12", () => {
+    const linked = { ...base, hasProductLink: true };
+    expect(
+      computeTestPriority({ ...linked, adCount: 0, adCountLongtail: 0, lastAdCount: null }).score
+    ).toBe(5 + 4 + 8);
+    expect(
+      computeTestPriority({ ...linked, adCount: null, adCountLongtail: null, lastAdCount: null }).score
+    ).toBe(5 + 12 + 8);
+    // 裸词已有档位时地板不干预
+    expect(
+      computeTestPriority({ ...linked, adCount: 10, adCountLongtail: 1, lastAdCount: null }).score
+    ).toBe(5 + 40 + 8);
+  });
+});

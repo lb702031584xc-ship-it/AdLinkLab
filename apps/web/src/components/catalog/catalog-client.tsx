@@ -69,6 +69,7 @@ import {
   AdTrendMark,
   CatalogBrandView,
   adLandingSplitText,
+  adProbeFields,
 } from "./catalog-brand-view";
 import {
   calcAdCountConfirmFacts,
@@ -3033,6 +3034,7 @@ export function CatalogClient({
             <tbody>
               {products.map((p, i) => {
                 const blacklisted = !!p.blacklisted;
+                const probe = adProbeFields(p);
                 const seq = (page - 1) * PAGE_SIZE + i + 1;
                 return (
                   <tr
@@ -3146,12 +3148,19 @@ export function CatalogClient({
                       )}
                     </td>
                     <td className="whitespace-nowrap px-3 py-2">
-                      {p.adCount == null ? (
+                      {p.adCount == null && probe.longtail == null ? (
                         <span className="text-xs text-ink/40">
                           {d.products.adsNotCalculated}
+                          {probe.policyRisk && (
+                            <span className="ml-1 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-medium text-red-800">
+                              {d.products.adPolicyRisk}
+                            </span>
+                          )}
                         </span>
                       ) : (
                         <span className="block">
+                          {p.adCount != null && (
+                            <>
                           <span className="tabular-nums text-ink/80">
                             {d.products.adsApprox.replace(
                               "{n}",
@@ -3204,6 +3213,13 @@ export function CatalogClient({
                                 {d.products.adsExpired}
                               </span>
                             )}
+                            </>
+                          )}
+                          {probe.policyRisk && (
+                            <span className="ml-1 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-medium text-red-800">
+                              {d.products.adPolicyRisk}
+                            </span>
+                          )}
                           {p.adCountSelf != null &&
                             p.adCountOthers != null && (
                               <span className="block text-[11px] text-ink/50">
@@ -3224,6 +3240,14 @@ export function CatalogClient({
                               </span>
                             ) : null;
                           })()}
+                          {probe.longtail != null && (
+                            <span className="block text-[11px] text-ink/50">
+                              {d.products.adsLongtailShort.replace(
+                                "{n}",
+                                String(probe.longtail)
+                              )}
+                            </span>
+                          )}
                         </span>
                       )}
                     </td>

@@ -92,6 +92,48 @@ export function adLandingSplitText(
 }
 
 /**
+ * 多探针口径字段（adCountLongtail / adPolicyRisk）的防御式读取：
+ * 字段缺失或形状不对 → longtail null（未探）、policyRisk false（无风险），
+ * 不猜、不编造。商品 DTO 与品牌 DTO 共用同一口径。
+ * 入参取 unknown：DTO 类型补齐前后都可直接传入，不依赖字段是否已声明。
+ */
+export function adProbeFields(x: unknown): {
+  longtail: number | null;
+  policyRisk: boolean;
+} {
+  const o = (
+    typeof x === "object" && x !== null ? x : {}
+  ) as { adCountLongtail?: unknown; adPolicyRisk?: unknown };
+  return {
+    longtail:
+      typeof o.adCountLongtail === "number" && Number.isFinite(o.adCountLongtail)
+        ? o.adCountLongtail
+        : null,
+    policyRisk: o.adPolicyRisk === true,
+  };
+}
+
+/** 长尾探针广告数后缀：「· 长尾探针 约 {n} 条」；未探（null）→ null（不显示）。 */
+export function adLongtailSuffix(
+  longtail: number | null | undefined,
+  d: ProductsDict
+): string | null {
+  if (longtail == null) return null;
+  return `· ${d.adsLongtailApprox.replace("{n}", String(longtail))}`;
+}
+
+/**
+ * 「长尾在投」徽标出现条件：裸品牌词查无广告（0 或未计算 null），
+ * 但长尾探针查到 ≥1 条——说明投放在长尾词上，裸词口径会误判无人投放。
+ */
+export function adLongtailActiveVisible(
+  adCount: number | null | undefined,
+  longtail: number | null | undefined
+): boolean {
+  return (adCount == null || adCount === 0) && longtail != null && longtail >= 1;
+}
+
+/**
  * 品牌行状态标的有效投放方式：显式标注优先（product/brand 以标注为准）；
  * 未标注时，已填品牌落地页链接视为品牌页；都没有才是未标注。
  * 注意：绝不从"链接为空"推断单品——单品必须显式标注。
@@ -371,6 +413,12 @@ export function CatalogBrandView({
         {brands.map((b) => {
           const key = rowKey(b);
           const band = adBandBadge(b.adBand, b.adCount, p);
+          const probe = adProbeFields(b);
+          const longtailSuffix = adLongtailSuffix(probe.longtail, p);
+          const longtailActive = adLongtailActiveVisible(
+            b.adCount,
+            probe.longtail
+          );
           const splitText =
             b.adCount != null
               ? adLandingSplitText(b.adCountHome, b.adCountProduct, p)
@@ -471,6 +519,21 @@ export function CatalogBrandView({
                             d={p}
                           />
                         </>
+                      )}
+                      {longtailSuffix && (
+                        <span className="ml-1 tabular-nums text-ink/70">
+                          {longtailSuffix}
+                        </span>
+                      )}
+                      {longtailActive && (
+                        <span className="ml-1 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-800">
+                          {p.adLongtailActive}
+                        </span>
+                      )}
+                      {probe.policyRisk && (
+                        <span className="ml-1 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-medium text-red-800">
+                          {p.adPolicyRiskCategory}
+                        </span>
                       )}
                     </span>
                   </p>

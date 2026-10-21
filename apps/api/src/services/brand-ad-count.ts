@@ -4,13 +4,25 @@
  * - 数据源：DataForSEO SERP `google/organic/live/advanced`（凭证复用流量信号
  *   凭证：AiSetting `traffic.dataforseoLogin` / `traffic.dataforseoPassword`，
  *   加密存储）。凭证缺失 → 抛错（明确提示未配置），不静默返回假数据。
- * - 口径：keyword = 品牌名，数 SERP items 里 type === "paid" 的条数。
- *   广告落地页域名含品牌名 → 自投（self）；其余 → 他投（others）。
+ * - 口径：keyword = 品牌名，广告数 = 文字广告＋购物广告（tallySerpAds）：
+ *   SERP items 里 type === "paid" 的条数 + type === "shopping" 块内
+ *   shopping_element 的条数（购物广告是独立 item type，只数 paid 会漏掉
+ *   卖货品牌的主力形态）。广告落地页域名含品牌名 → 自投（self）；其余 →
+ *   他投（others）——self/others 与 home/product 拆分只看 paid 条目 URL
+ *   （v1 口径，不扩展到购物条目）。
  *   另按落地页 URL 分类累计 adCountHome（落首页/旗舰店）/ adCountProduct
  *   （落商品页），other 不计入——用来看同行在用哪种打法投这个品牌。
  *   落地页是 Amazon 的商品分不清自投/他投（谁投落地页都是 amazon.com），
  *   只记 total，self/others 记 null。
+ * - 多探针（2026-10-21）：裸品牌词之外再派生长尾探针（品牌+型号/品类词，
+ *   deriveLongtailProbes），各探针广告数（同一文字＋购物口径）的 MAX 写
+ *   adCountLongtail——联盟客投的是长尾型号词，裸词 0 ≠ 没人投；「在投」
+ *   判定 = adCount ≥ 1 || adCountLongtail ≥ 1。组内 Top5 商品名命中武器
+ *   配件类模式 → adPolicyRisk=true（该类目付费广告禁投，0 是政策墙不是空白）。
  * - 缓存：同一（品牌，国家）组内任一商品 14 天内查过 → 整组跳过，不重复花钱。
+ *   例外：组 adCountLongtail 为 null 且能派生长尾探针 = 多探针上线前的
+ *   旧印记，视为过期，下一次计算必须重探（派生不出探针的组 null 是
+ *   终局值，不反复重查）。
  *   deps.force=true 可显式绕过（仅人工入口，提交前有预估确认）；
  *   deps.aliveOnly=true 时整组判死的组（初筛 kill 或已下线）整组跳过，
  *   单独计入 skippedDeadGroups。两项默认关，既有调用方行为不变。
@@ -85,13 +97,173 @@ export function deriveAdTrend(
 /** 广告数分档（品牌+国家观测广告数，经验口径；null = 未计算）。 */
 export type AdBand = "none" | "small" | "sweet" | "hot" | "redocean";
 
-export function adBandOf(adCount: number | null): AdBand | null {
+function adBandOfBare(adCount: number | null): AdBand | null {
   if (adCount == null) return null;
   if (adCount === 0) return "none";
   if (adCount <= 5) return "small";
   if (adCount <= 20) return "sweet";
   if (adCount <= 50) return "hot";
   return "redocean";
+}
+
+/**
+ * 广告数分档（多探针口径）：在裸品牌词分档之上加一条地板规则——
+ * 裸词档位为 none（0）或未算（null），但长尾探针（品牌+型号/品类词）
+ * 有广告在投（adCountLongtail ≥ 1）时，按 small 档计：联盟客投的是
+ * 长尾型号词，裸词 0 ≠ 没人投。adCountLongtail 不传（undefined）时
+ * 行为与旧口径完全一致（保护其他调用方）。
+ */
+export function adBandOf(
+  adCount: number | null,
+  adCountLongtail?: number | null
+): AdBand | null {
+  const bare = adBandOfBare(adCount);
+  if (
+    adCountLongtail != null &&
+    adCountLongtail >= 1 &&
+    (bare === null || bare === "none")
+  ) {
+    return "small";
+  }
+  return bare;
+}
+
+/** 按非字母数字切分 token（统一小写；与站内 keyword-marks 同口径）。 */
+function tokensOf(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+/**
+ * 型号 token：含相邻字母+数字的 token（如 s8、q7、x40、s8pro）。
+ * 纯数字（年份/容量）与纯字母都不算——与站内 keyword-marks.hasModelToken
+ * 同口径，此处是 api 侧自带实现（两包不互相 import）。
+ */
+export function modelTokensOf(name: string): string[] {
+  const out: string[] = [];
+  for (const tk of tokensOf(name ?? "")) {
+    if (/[a-z]\d|\d[a-z]/.test(tk) && !out.includes(tk)) out.push(tk);
+  }
+  return out;
+}
+
+/** 从 rawData 提取类目（PB datafeed 的 category 字段）；无/不可用 → null。 */
+export function extractProductCategory(rawData: unknown): string | null {
+  let raw: unknown = rawData;
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  if (!raw || typeof raw !== "object") return null;
+  const v = (raw as Record<string, unknown>).category;
+  if (typeof v !== "string") return null;
+  // 类目可能是路径（"A > B > Flashlights"）：取最后一段。
+  const last = v
+    .split(/[>/|»]+/)
+    .map((s) => s.trim().replace(/\s+/g, " "))
+    .filter(Boolean)
+    .pop();
+  if (!last || last.length < 2 || last.length > 40) return null;
+  return last;
+}
+
+/** 探针派生的商品输入（组内商品的最小形状）。 */
+export interface ProbeSourceProduct {
+  name: string;
+  recommendationScore: number | null;
+  reviewCount: number | null;
+  category?: string | null;
+}
+
+/** 探针排序口径：推荐分降序（null 最后）→ 评论数降序（null 最后）。 */
+function sortForProbes(
+  products: ProbeSourceProduct[]
+): ProbeSourceProduct[] {
+  return [...products].sort((a, b) => {
+    const sa = a.recommendationScore;
+    const sb = b.recommendationScore;
+    if (sa === null && sb !== null) return 1;
+    if (sa !== null && sb === null) return -1;
+    if (sa !== null && sb !== null && sa !== sb) return sb - sa;
+    const ra = a.reviewCount ?? -1;
+    const rb = b.reviewCount ?? -1;
+    return rb - ra;
+  });
+}
+
+/**
+ * 派生长尾探针（纯函数）：联盟客投的是「品牌+型号」长尾词，故探针 =
+ * - P1：`{品牌} {型号1}`——排序后第一个带型号 token 商品的首个型号；
+ * - P2：另一件商品的第二个不同型号 token；没有时退 Top 商品类目
+ *   `{品牌} {类目}`；再没有 → 不发 P2。
+ * 探针与裸品牌词相同（归一后）则跳过；P1/P2 互不重复。无任何长尾
+ * 探针可派生 → 空数组（该组 adCountLongtail 恒 null，是终局不是缺失）。
+ */
+export function deriveLongtailProbes(
+  brand: string,
+  products: ProbeSourceProduct[]
+): string[] {
+  const b = (brand ?? "").trim();
+  if (!b) return [];
+  const sorted = sortForProbes(products);
+  const modelsByIdx = sorted.map((p) => modelTokensOf(p.name ?? ""));
+  const topCategory = sorted[0]?.category?.trim() || null;
+  const firstIdx = modelsByIdx.findIndex((tks) => tks.length > 0);
+  if (firstIdx === -1) {
+    // 无任何型号 token：只剩 Top 商品类目可作长尾探针（有才发）。
+    return topCategory ? [`${b} ${topCategory}`] : [];
+  }
+  const model1 = modelsByIdx[firstIdx]![0]!;
+  const probes: string[] = [`${b} ${model1}`];
+  let p2: string | null = null;
+  for (let i = 0; i < sorted.length; i++) {
+    if (i === firstIdx) continue;
+    const other = modelsByIdx[i]!.find((tk) => tk !== model1);
+    if (other) {
+      p2 = `${b} ${other}`;
+      break;
+    }
+  }
+  if (!p2 && topCategory) p2 = `${b} ${topCategory}`;
+  if (p2 && !probes.includes(p2)) probes.push(p2);
+  const bareKey = b.toLowerCase();
+  return probes.filter((p) => p.toLowerCase() !== bareKey);
+}
+
+/**
+ * 政策风险模式（武器配件类）：商品名（小写）命中任一 → 该类目付费
+ * 广告禁投。只收武器灯的确定性表述，不收 "tactical" / "flashlight"
+ * 这类普通手电也会用的词（防误伤 EDC 手电）。
+ */
+export const AD_POLICY_RISK_PATTERNS: readonly string[] = [
+  "weapon light",
+  "weaponlight",
+  "gun light",
+  "rifle light",
+  "pistol light",
+  "weapon-mounted",
+  "weapon mounted",
+  "枪灯",
+  "武器灯",
+];
+
+/** 单件商品名是否命中武器配件类政策风险模式（纯函数）。 */
+export function hasAdPolicyRisk(name: string): boolean {
+  const n = (name ?? "").toLowerCase();
+  if (!n) return false;
+  return AD_POLICY_RISK_PATTERNS.some((p) => n.includes(p));
+}
+
+/** 组级政策风险：Top5（探针排序口径）任一商品命中 → 整组 true。 */
+export function groupAdPolicyRisk(products: ProbeSourceProduct[]): boolean {
+  return sortForProbes(products)
+    .slice(0, 5)
+    .some((p) => hasAdPolicyRisk(p.name ?? ""));
 }
 
 /** 品牌名归一化：小写 + 只留字母数字（去空格/符号），用于域名包含判断。 */
@@ -105,8 +277,9 @@ function isAmazonDomain(domain: string): boolean {
 }
 
 /**
- * 把付费广告按落地页域名分类：域名含品牌名 → 自投；其余（含 amazon.*）→ 他投。
- * 纯函数，无副作用。
+ * 把文字广告（paid 条目）按落地页域名分类：域名含品牌名 → 自投；其余
+ * （含 amazon.*）→ 他投。纯函数，无副作用。注意返回的 total 只含 paid
+ * 条数——写回 adCount 的总数（含购物广告）来自 tallySerpAds 的 total。
  */
 export function classifyAds(
   brand: string,
@@ -205,6 +378,12 @@ export interface BrandAdCountResult {
    * 真实实现恒写入；消费方读取时按 `?? 0` 处理。
    */
   skippedDeadGroups?: number;
+  /**
+   * 实际完成的 SERP 查询次数（裸品牌词 + 长尾探针，只计成功返回的）。
+   * 多探针后一组最多 3 次，付费用量记账应以此为准（`?? groupsQueried`
+   * 兼容旧 fake）。可选字段同 skippedDeadGroups 的兼容口径。
+   */
+  serpQueries?: number;
   productsUpdated: number;
   errors: Array<{ brand: string; countryCode: string | null; message: string }>;
 }
@@ -246,13 +425,19 @@ export interface BrandAdCountPreview {
 
 interface ProductRow {
   id: string;
+  name: string;
   brand: string | null;
   countryCode: string | null;
   landingPageType: string | null;
   adCount: number | null;
+  adCountLongtail: number | null;
   adCountCheckedAt: Date | null;
   screenVerdict: string | null;
   status: string;
+  /** 探针派生用：推荐分（Decimal 已转 number）/ 评论数 / 类目（rawData 提取）。 */
+  recommendationScore: number | null;
+  reviewCount: number | null;
+  category: string | null;
 }
 
 interface AdCountGroup {
@@ -267,7 +452,7 @@ async function loadAdCountRows(
   tenantId: string,
   productIds?: string[]
 ): Promise<ProductRow[]> {
-  return (await prisma.networkProduct.findMany({
+  const rows = (await prisma.networkProduct.findMany({
     where: {
       tenantId,
       ...(productIds && productIds.length > 0
@@ -276,15 +461,38 @@ async function loadAdCountRows(
     },
     select: {
       id: true,
+      name: true,
       brand: true,
       countryCode: true,
       landingPageType: true,
       adCount: true,
+      adCountLongtail: true,
       adCountCheckedAt: true,
       screenVerdict: true,
       status: true,
+      recommendationScore: true,
+      reviewCount: true,
+      rawData: true,
     },
-  })) as ProductRow[];
+  })) as Array<Record<string, unknown>>;
+  return rows.map((r) => ({
+    id: r.id as string,
+    name: (r.name as string) ?? "",
+    brand: (r.brand as string | null) ?? null,
+    countryCode: (r.countryCode as string | null) ?? null,
+    landingPageType: (r.landingPageType as string | null) ?? null,
+    adCount: typeof r.adCount === "number" ? r.adCount : null,
+    adCountLongtail:
+      typeof r.adCountLongtail === "number" ? r.adCountLongtail : null,
+    adCountCheckedAt:
+      r.adCountCheckedAt instanceof Date ? r.adCountCheckedAt : null,
+    screenVerdict: (r.screenVerdict as string | null) ?? null,
+    status: (r.status as string) ?? "active",
+    recommendationScore:
+      r.recommendationScore == null ? null : Number(r.recommendationScore),
+    reviewCount: typeof r.reviewCount === "number" ? r.reviewCount : null,
+    category: extractProductCategory(r.rawData),
+  }));
 }
 
 /** 按（品牌小写，国家大写首个）分组；brand 为空的商品跳过。calc 与 preview 共用。 */
@@ -302,13 +510,28 @@ function groupAdCountRows(rows: ProductRow[]): Map<string, AdCountGroup> {
   return groups;
 }
 
-/** 14 天缓存判定：组内任一商品在缓存期内查过 → 整组新鲜。 */
-function isGroupFresh(items: ProductRow[], now: number): boolean {
-  return items.some(
+/**
+ * 新鲜度判定（14 天缓存 + 多探针口径，calc 与 preview 共用）：
+ * - 组内任一商品 14 天内查过，才可能新鲜；
+ * - 且长尾口径已落地：组内任一商品 adCountLongtail 非 null → 新鲜；
+ *   长尾为 null 但派生不出任何长尾探针（无型号/类目）→ null 即终局
+ *   值（探无可探），也算新鲜，不反复重查裸词烧钱；
+ *   长尾为 null 且能派生探针 → 多探针上线前的旧印记，视为过期，
+ *   下一次计算（哪怕非 force）必须重探。
+ */
+function isGroupFresh(
+  brand: string,
+  items: ProductRow[],
+  now: number
+): boolean {
+  const recent = items.some(
     (p) =>
       p.adCountCheckedAt instanceof Date &&
       now - p.adCountCheckedAt.getTime() < AD_COUNT_CACHE_TTL_MS
   );
+  if (!recent) return false;
+  if (items.some((p) => p.adCountLongtail != null)) return true;
+  return deriveLongtailProbes(brand, items).length === 0;
 }
 
 /**
@@ -323,6 +546,8 @@ interface SerpItem {
   type?: unknown;
   domain?: unknown;
   url?: unknown;
+  /** type="shopping" 块的子条目（购物广告元素在 items 里，自身不是顶层广告）。 */
+  items?: SerpItem[];
 }
 
 function itemDomain(item: SerpItem): string {
@@ -342,13 +567,47 @@ function itemUrl(item: SerpItem): string {
   return typeof item.url === "string" ? item.url.trim() : "";
 }
 
-/** 调一次 DataForSEO SERP，返回付费广告的 {域名, 落地页 URL} 列表。失败抛错（调用方捕获跳组）。 */
-async function fetchPaidAds(
+export interface SerpAdTally {
+  /** 文字广告（type="paid"）条目：自投/他投与落地拆分的唯一依据。 */
+  paidAds: Array<{ domain: string; url: string }>;
+  /** 购物广告条数：type="shopping" 块内 type="shopping_element" 的条数。 */
+  shoppingCount: number;
+  /** 广告总数 = paid 条数 + shopping 条数（adCount / adCountLongtail 口径）。 */
+  total: number;
+}
+
+/**
+ * 统一广告计数（纯函数，裸词探针与长尾探针共用同一口径）：
+ * total = 文字广告（type="paid"）条数 + 购物广告条数。购物广告在
+ * DataForSEO SERP 里是独立 item type——{type:"shopping", items:[{
+ * type:"shopping_element", …}]}，不是 paid，只数 paid 会系统性漏掉
+ * 卖货品牌的主力广告形态。organic / 其他类型一律不计。
+ * 注意：self/others 与 home/product 拆分只看 paid 条目的 URL（v1 口径，
+ * 不扩展到购物条目——购物条目的落地归属另行处理），故 paidAds 单独带出。
+ */
+export function tallySerpAds(items: SerpItem[]): SerpAdTally {
+  const paidAds: Array<{ domain: string; url: string }> = [];
+  let shoppingCount = 0;
+  for (const it of items) {
+    if (!it) continue;
+    if (it.type === "paid") {
+      paidAds.push({ domain: itemDomain(it), url: itemUrl(it) });
+    } else if (it.type === "shopping") {
+      for (const el of it.items ?? []) {
+        if (el?.type === "shopping_element") shoppingCount += 1;
+      }
+    }
+  }
+  return { paidAds, shoppingCount, total: paidAds.length + shoppingCount };
+}
+
+/** 调一次 DataForSEO SERP，返回广告计数（文字广告条目 + 购物广告条数）。失败抛错（调用方捕获跳组）。 */
+async function fetchSerpAdTally(
   fetchImpl: typeof fetch,
   creds: { login: string; password: string },
   keyword: string,
   countryCode: string | null
-): Promise<Array<{ domain: string; url: string }>> {
+): Promise<SerpAdTally> {
   const cc = (countryCode ?? "").trim().toUpperCase();
   const auth = Buffer.from(`${creds.login}:${creds.password}`).toString(
     "base64"
@@ -387,9 +646,7 @@ async function fetchPaidAds(
     );
   }
   const items = task.result?.[0]?.items ?? [];
-  return items
-    .filter((it) => it?.type === "paid")
-    .map((it) => ({ domain: itemDomain(it), url: itemUrl(it) }));
+  return tallySerpAds(items);
 }
 
 /**
@@ -423,6 +680,7 @@ export async function calcBrandAdCounts(
     groupsQueried: 0,
     groupsSkippedCache: 0,
     skippedDeadGroups: 0,
+    serpQueries: 0,
     productsUpdated: 0,
     errors: [],
   };
@@ -437,14 +695,14 @@ export async function calcBrandAdCounts(
     }
     // 14 天缓存：组内任一商品在缓存期内查过 → 整组跳过。
     // force=true 时不跳过（用户显式要求忽略缓存重新计费查询）。
-    if (!deps.force && isGroupFresh(g.items, now)) {
+    if (!deps.force && isGroupFresh(g.brand, g.items, now)) {
       result.groupsSkippedCache += 1;
       continue;
     }
 
-    let ads: Array<{ domain: string; url: string }>;
+    let tally: SerpAdTally;
     try {
-      ads = await fetchPaidAds(
+      tally = await fetchSerpAdTally(
         fetchImpl,
         { login, password },
         g.brand,
@@ -459,6 +717,43 @@ export async function calcBrandAdCounts(
       continue;
     }
     result.groupsQueried += 1;
+    result.serpQueries = (result.serpQueries ?? 0) + 1;
+
+    // 长尾探针（品牌+型号/品类词）：联盟客投的是长尾，裸词 0 ≠ 没人投。
+    // 每探针单独查一次 SERP 数广告条数（与裸词同一 tallySerpAds 口径：
+    // 文字广告＋购物广告），组长尾值 = 各探针 MAX；
+    // 无可派生探针 → null（终局）；探针全失败 → null 并记 errors
+    // （新鲜度规则会让该组下次重探，不静默当 0）。
+    const probes = deriveLongtailProbes(g.brand, g.items);
+    let longtail: number | null = null;
+    let probeSucceeded = 0;
+    for (const kw of probes) {
+      try {
+        const probeTally = await fetchSerpAdTally(
+          fetchImpl,
+          { login, password },
+          kw,
+          g.countryCode
+        );
+        probeSucceeded += 1;
+        result.serpQueries = (result.serpQueries ?? 0) + 1;
+        longtail =
+          longtail === null
+            ? probeTally.total
+            : Math.max(longtail, probeTally.total);
+      } catch {
+        // 单探针失败不中断其他探针/整组。
+      }
+    }
+    if (probes.length > 0 && probeSucceeded === 0) {
+      result.errors.push({
+        brand: g.brand,
+        countryCode: g.countryCode,
+        message: "长尾探针查询失败（型号/品类词 SERP 全部失败）",
+      });
+    }
+    // 政策风险（组级）：Top5 商品名命中武器配件类模式 → 整组标记。
+    const policyRisk = groupAdPolicyRisk(g.items);
 
     // Amazon 落地页分不清自投/他投 → 只记 total。
     const isAmazonGroup = g.items.some(
@@ -466,23 +761,28 @@ export async function calcBrandAdCounts(
         p.landingPageType === "amazon_product" ||
         p.landingPageType === "amazon_storefront"
     );
+    // 自投/他投拆分只看文字广告（paid）条目（classifyAds 的 total 是
+    // paid-only，不写回 adCount）；adCount 写 tally.total（文字＋购物）。
     const counts = classifyAds(
       g.brand,
-      ads.map((a) => ({ domain: a.domain }))
+      tally.paidAds.map((a) => ({ domain: a.domain }))
     );
     // 落地类型拆分：同行这批广告是落首页/旗舰店还是落商品页（other 不计入）。
-    const landing = countLandingTypes(ads.map((a) => a.url));
+    // 同拆分口径：只看 paid 条目 URL，购物条目不扩展（v1）。
+    const landing = countLandingTypes(tally.paidAds.map((a) => a.url));
     // 快照：把组内代表行（组级统一写入，任一行即组值）的旧广告数/旧查询时间
     // 挪到 last* 字段，供下次计算时派生趋势（新投/停投/持续）。
     const representative = g.items[0];
     const res = await prisma.networkProduct.updateMany({
       where: { id: { in: g.items.map((p) => p.id) }, tenantId },
       data: {
-        adCount: counts.total,
+        adCount: tally.total,
         adCountSelf: isAmazonGroup ? null : counts.self,
         adCountOthers: isAmazonGroup ? null : counts.others,
         adCountHome: landing.home,
         adCountProduct: landing.product,
+        adCountLongtail: longtail,
+        adPolicyRisk: policyRisk,
         adCountCheckedAt: new Date(),
         lastAdCount: representative?.adCount ?? null,
         lastAdCountCheckedAt: representative?.adCountCheckedAt ?? null,
@@ -515,7 +815,7 @@ export async function previewBrandAdCounts(
   let groupsStale = 0;
   let deadGroupsSkipped = 0;
   for (const g of groups.values()) {
-    if (isGroupFresh(g.items, now)) groupsFresh += 1;
+    if (isGroupFresh(g.brand, g.items, now)) groupsFresh += 1;
     else groupsStale += 1;
     if (opts.aliveOnly && isDeadGroup(g.items)) deadGroupsSkipped += 1;
   }
