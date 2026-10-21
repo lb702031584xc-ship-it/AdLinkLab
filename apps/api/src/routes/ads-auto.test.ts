@@ -64,6 +64,8 @@ function makeFakePrisma() {
   const auditLogs: Row[] = [];
   const offerCaptures: Row[] = [];
   const googleAccounts: Row[] = [];
+  const tenantSettings: Row[] = [];
+  const adminGrants: Row[] = [];
   return {
     tenant: mkStore(tenants),
     user: mkStore(users),
@@ -89,7 +91,36 @@ function makeFakePrisma() {
     auditLog: mkStore(auditLogs),
     offerCapture: mkStore(offerCaptures),
     googleAccount: mkStore(googleAccounts),
-    _rows: { tenants, users, sessions, aiSettings, integrations, targets, auditLogs, offerCaptures, googleAccounts },
+    // 付费数据网关新增依赖的两张表（租户设置 KV + B 级授权）。
+    tenantSetting: {
+      findUnique: async ({ where }: any) => {
+        const k = where?.tenant_settings_tenant_key_unique;
+        const row =
+          tenantSettings.find((r) => r.tenantId === k?.tenantId && r.key === k?.key) ?? null;
+        return row ? { ...row } : null;
+      },
+      upsert: async ({ where, create, update }: any) => {
+        const k = where?.tenant_settings_tenant_key_unique;
+        const existing = tenantSettings.find(
+          (r) => r.tenantId === k?.tenantId && r.key === k?.key
+        );
+        if (existing) {
+          Object.assign(existing, update);
+          return { ...existing };
+        }
+        const row = { id: create.id ?? randomUUID(), createdAt: new Date(), updatedAt: new Date(), ...create };
+        tenantSettings.push(row);
+        return { ...row };
+      },
+      deleteMany: async ({ where }: any) => {
+        for (let i = tenantSettings.length - 1; i >= 0; i--) {
+          if (matches(tenantSettings[i]!, where)) tenantSettings.splice(i, 1);
+        }
+        return { count: 0 };
+      },
+    },
+    adminGrant: mkStore(adminGrants),
+    _rows: { tenants, users, sessions, aiSettings, integrations, targets, auditLogs, offerCaptures, googleAccounts, tenantSettings, adminGrants },
   };
 }
 
@@ -286,6 +317,25 @@ describe("POST /api/v1/ads/auto-create", () => {
   });
 
   it("copyStyle=expert without serpCaptureId and without DataForSEO creds errors clearly", async () => {
+    // 网关口径：member 用平台 key 须有 paid-data 授权；本用例给一条有效授权，
+    // 使流程走到「已授权但无任何 DataForSEO 凭证」→ 明确 400（断言不变）。
+    fake._rows.adminGrants.push({
+      id: randomUUID(),
+      tenantId,
+      capability: "paid-data",
+      applicationId: null,
+      applicantId: randomUUID(),
+      approverId: randomUUID(),
+      whitelist: ["serp-ads"],
+      usageLimit: null,
+      usageCount: 0,
+      status: "active",
+      startsAt: new Date(Date.now() - 3600_000),
+      endsAt: new Date(Date.now() + 3600_000),
+      revokedReason: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
     const app = await buildApp(fake);
     const res = await app.inject({
       method: "POST",
