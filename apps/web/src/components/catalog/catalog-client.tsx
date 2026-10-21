@@ -8,6 +8,7 @@ import { zh as catalogZh, en as catalogEn } from "@/i18n/dict/catalog";
 import {
   addBlacklistAction,
   addWhitelistAction,
+  addedProductIdsAction,
   backfillCatalogProductsAction,
   batchCreateOffersAction,
   calcAdCountAction,
@@ -33,6 +34,7 @@ import {
   offlineProductsAction,
   forceSelectProductsAction,
   oneClickScreenAction,
+  previewCalcAdCountAction,
   recheckBlacklistAction,
   saveScreeningPresetAction,
   saveSessionCookieAction,
@@ -43,6 +45,7 @@ import {
   type BatchCreateResult,
   type BlacklistEntry,
   type BlacklistEntityType,
+  type CalcAdCountPreviewResult,
   type CatalogChannel,
   type CatalogFunnel,
   type CatalogNetwork,
@@ -67,6 +70,14 @@ import {
   CatalogBrandView,
   adLandingSplitText,
 } from "./catalog-brand-view";
+import {
+  calcAdCountConfirmFacts,
+  type CalcAdCountScope,
+} from "./calc-ad-count-confirm";
+import {
+  localDayRangeToIso,
+  localTodayString,
+} from "./added-date-range";
 import { selectableProducts } from "./list-helpers";
 import Link from "next/link";
 
@@ -1938,6 +1949,19 @@ export function CatalogClient({
 
   const [calcScoring, setCalcScoring] = useState(false);
   const [calcAdCounting, setCalcAdCounting] = useState(false);
+  /** 广告数付费计算的范围/强制控制与预估确认（防误触：先预估、再确认）。 */
+  const [adCalcScope, setAdCalcScope] = useState<CalcAdCountScope>("all");
+  const [adCalcForce, setAdCalcForce] = useState(false);
+  const [adCalcPreviewing, setAdCalcPreviewing] = useState(false);
+  const [adCalcConfirm, setAdCalcConfirm] = useState<{
+    preview: CalcAdCountPreviewResult;
+    scope: CalcAdCountScope;
+    force: boolean;
+    facts: ReturnType<typeof calcAdCountConfirmFacts>;
+  } | null>(null);
+  /** 按新增日期全选：所选本地日期与请求中标记。 */
+  const [addedDate, setAddedDate] = useState(() => localTodayString());
+  const [selectingAdded, setSelectingAdded] = useState(false);
   /** 一键筛选：运行中标记 + 最近一次数字报告。 */
   const [oneClickBusy, setOneClickBusy] = useState(false);
   const [screenReport, setScreenReport] = useState<OneClickScreenReport | null>(null);
@@ -1986,13 +2010,46 @@ export function CatalogClient({
     await reloadProducts(page);
   }
 
+  /**
+   * 广告数付费计算第一步：只读预估（不计费）→ 打开确认框。
+   * 防误触口径：付费调用绝不一键直达，必须先看真实数字再确认；
+   * 预估中/确认框打开/提交中都视为忙，入口按钮全程 disabled 防连点。
+   */
   async function onCalcAdCount() {
-    if (calcAdCounting) return;
+    if (calcAdCounting || adCalcPreviewing || adCalcConfirm) return;
+    setAdCalcPreviewing(true);
+    setMsg(null);
+    const res = await previewCalcAdCountAction(adCalcScope);
+    setAdCalcPreviewing(false);
+    if (!res.ok) {
+      setMsg(res.error);
+      return;
+    }
+    // 快照当时的范围/强制：确认提交时按快照走，不受其后改动影响。
+    setAdCalcConfirm({
+      preview: res.data,
+      scope: adCalcScope,
+      force: adCalcForce,
+      facts: calcAdCountConfirmFacts(res.data, {
+        force: adCalcForce,
+        scope: adCalcScope,
+      }),
+    });
+  }
+
+  /** 确认框点「确认提交计算」才真正调付费计算（带快照的 force/scope）。 */
+  async function onConfirmCalcAdCount() {
+    if (!adCalcConfirm || calcAdCounting) return;
+    const snapshot = adCalcConfirm;
     setCalcAdCounting(true);
     setMsg(null);
-    // 未选中 = 全量增量（后端按 14 天缓存自动跳过已查的品牌组）。
-    const res = await calcAdCountAction(Array.from(selectedIds));
+    // 未选中 = 全量（范围/强制仍按快照）；选中 = 只算勾选的商品。
+    const res = await calcAdCountAction(Array.from(selectedIds), {
+      force: snapshot.force,
+      scope: snapshot.scope,
+    });
     setCalcAdCounting(false);
+    setAdCalcConfirm(null);
     if (!res.ok) {
       setMsg(res.error);
       return;
@@ -2001,6 +2058,12 @@ export function CatalogClient({
       .replace("{q}", String(res.data.groupsQueried))
       .replace("{s}", String(res.data.groupsSkippedCache))
       .replace("{u}", String(res.data.productsUpdated));
+    if ((res.data.skippedDeadGroups ?? 0) > 0) {
+      text += d.products.calcAdCountSkippedDead.replace(
+        "{n}",
+        String(res.data.skippedDeadGroups)
+      );
+    }
     if (res.data.errors.length > 0) {
       text += d.products.calcAdCountErrors.replace(
         "{e}",
@@ -2025,6 +2088,49 @@ export function CatalogClient({
     }
     setMsg(text);
     await reloadProducts(page);
+  }
+
+  /**
+   * 按新增日期全选：本地时区把所选日期换算成 [当天 00:00, 次日 00:00)
+   * 的 UTC ISO 区间（带当前网络过滤，若有）→ 取 id 后**替换**当前勾选集。
+   * 纯选择辅助，不触发任何付费/筛选动作；失败不改勾选。
+   */
+  async function onSelectAddedByDate() {
+    if (selectingAdded) return;
+    const range = localDayRangeToIso(addedDate);
+    if (!range) {
+      setMsg(d.products.addedSelectInvalid);
+      return;
+    }
+    setSelectingAdded(true);
+    setMsg(null);
+    const res = await addedProductIdsAction({
+      from: range.from,
+      to: range.to,
+      ...(selectedId ? { networkId: selectedId } : {}),
+    });
+    setSelectingAdded(false);
+    if (!res.ok) {
+      setMsg(res.error);
+      return;
+    }
+    setSelectedIds(new Set(res.data.ids));
+    if (res.data.ids.length === 0) {
+      setMsg(d.products.addedSelectNone.replace("{date}", addedDate));
+    } else if (res.data.truncated) {
+      setMsg(
+        d.products.addedSelectTruncated
+          .replace("{date}", addedDate)
+          .replace("{total}", String(res.data.total))
+          .replace("{n}", String(res.data.ids.length))
+      );
+    } else {
+      setMsg(
+        d.products.addedSelectDone
+          .replace("{date}", addedDate)
+          .replace("{n}", String(res.data.ids.length))
+      );
+    }
   }
 
   /** 一键筛选（范围三选）：免费层直跑，广告数层经网关（被拒后端自动跳过并标注）。 */
@@ -3234,120 +3340,259 @@ export function CatalogClient({
           )}
         </div>
 
-        <div className="mt-4 flex flex-wrap items-center gap-3">
-          <button
-            className={btnPrimary}
-            onClick={onBatchCreate}
-            disabled={batching || selectedIds.size === 0}
-          >
-            {batching ? d.products.creating : d.products.batchCreate}
-          </button>
-          <button
-            className={btnGhost}
-            onClick={onCalcScore}
-            disabled={calcScoring || selectedIds.size === 0}
-          >
-            {calcScoring
-              ? d.products.calculating
-              : d.products.calcScore.replace("{n}", String(selectedIds.size))}
-          </button>
-          <button
-            className={btnGhost}
-            onClick={onCalcAdCount}
-            disabled={calcAdCounting}
-            title={d.products.calcAdCountAll}
-          >
-            {calcAdCounting
-              ? d.products.calculatingAds
-              : selectedIds.size > 0
-                ? d.products.calcAdCount.replace(
-                    "{n}",
-                    String(selectedIds.size)
-                  )
-                : d.products.calcAdCountAll}
-          </button>
-          <PaidDataBillingNote
-            feature="catalog-ad-count"
-            labels={{
-              platform: d.products.billingPlatform,
-              platformNoLimit: d.products.billingPlatformNoLimit,
-              tenantOwn: d.products.billingTenantOwn,
-              owner: d.products.billingOwner,
-              denied: d.products.billingDenied,
-              loading: d.products.billingLoading,
-            }}
-          />
-          <button
-            className={btnGhost}
-            onClick={() => void onOneClickScreen("selected")}
-            disabled={oneClickBusy || selectedIds.size === 0}
-          >
-            {oneClickBusy
-              ? d.products.oneClickScreening
-              : `${d.products.oneClickScreen} · ${d.products.oneClickScopeSelected.replace("{n}", String(selectedIds.size))}`}
-          </button>
-          <button
-            className={btnGhost}
-            onClick={() => void onOneClickScreen("current")}
-            disabled={oneClickBusy}
-          >
-            {`${d.products.oneClickScreen} · ${d.products.oneClickScopeCurrent}`}
-          </button>
-          <button
-            className={btnGhost}
-            onClick={() => void onOneClickScreen("unscreened")}
-            disabled={oneClickBusy}
-          >
-            {`${d.products.oneClickScreen} · ${d.products.oneClickScopeUnscreened}`}
-          </button>
-          <button
-            className={btnGhost}
-            onClick={onBatchOffline}
-            disabled={offlining || selectedIds.size === 0}
-          >
-            {offlining
-              ? d.products.offlining
-              : d.products.batchOffline.replace("{n}", String(selectedIds.size))}
-          </button>
-          <select
-            className="rounded-lg border border-ink/15 bg-white px-2 py-1.5 text-sm text-ink/80"
-            value={batchPoolStage}
-            onChange={(e) => setBatchPoolStage(e.target.value as PoolStage)}
-            aria-label={d.products.colPoolStage}
-          >
-            {(["inbox", "pool", "testing", "live"] as const).map((st) => (
-              <option key={st} value={st}>
-                {d.products.poolStage[st]}
-              </option>
-            ))}
-          </select>
-          <button
-            className={btnGhost}
-            onClick={onBatchMovePoolStage}
-            disabled={movingStage || selectedIds.size === 0}
-          >
-            {movingStage ? d.products.movingPoolStage : d.products.movePoolStage}
-          </button>
-          <button
-            className={btnGhost}
-            onClick={onToggleScorePause}
-            disabled={togglingPause}
-          >
-            {togglingPause
-              ? "…"
-              : scorePaused
-                ? d.products.resumeScoreCalc
-                : d.products.pauseScoreCalc}
-          </button>
-          <span className="text-sm text-ink/60">
-            ({selectedIds.size})
-          </span>
-          {scorePaused && (
-            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
-              {d.products.scoreCalcPausedBadge}
-            </span>
-          )}
+        <div className="mt-4 flex flex-wrap items-start gap-4">
+          {/* ── 日常操作：选择辅助 + 一键筛选 + 批量动作（每天用） ── */}
+          <div>
+            <p className="mb-1.5 text-xs font-medium text-ink/45">
+              {d.products.toolbarGroupEveryday}
+            </p>
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="flex items-center gap-2 text-sm text-ink/80">
+                {d.products.addedDateLabel}
+                <input
+                  type="date"
+                  className="rounded-lg border border-ink/15 bg-white px-2 py-1.5 text-sm text-ink/80"
+                  value={addedDate}
+                  onChange={(e) => setAddedDate(e.target.value)}
+                />
+              </label>
+              <button
+                className={btnGhost}
+                onClick={onSelectAddedByDate}
+                disabled={selectingAdded}
+              >
+                {selectingAdded
+                  ? d.products.selectingAdded
+                  : d.products.selectAddedByDate}
+              </button>
+              <button
+                className={btnGhost}
+                onClick={() => void onOneClickScreen("selected")}
+                disabled={oneClickBusy || selectedIds.size === 0}
+              >
+                {oneClickBusy
+                  ? d.products.oneClickScreening
+                  : `${d.products.oneClickScreen} · ${d.products.oneClickScopeSelected.replace("{n}", String(selectedIds.size))}`}
+              </button>
+              <button
+                className={btnGhost}
+                onClick={() => void onOneClickScreen("current")}
+                disabled={oneClickBusy}
+              >
+                {`${d.products.oneClickScreen} · ${d.products.oneClickScopeCurrent}`}
+              </button>
+              <button
+                className={btnGhost}
+                onClick={() => void onOneClickScreen("unscreened")}
+                disabled={oneClickBusy}
+              >
+                {`${d.products.oneClickScreen} · ${d.products.oneClickScopeUnscreened}`}
+              </button>
+              <button
+                className={btnPrimary}
+                onClick={onBatchCreate}
+                disabled={batching || selectedIds.size === 0}
+              >
+                {batching ? d.products.creating : d.products.batchCreate}
+              </button>
+              <button
+                className={btnGhost}
+                onClick={onBatchOffline}
+                disabled={offlining || selectedIds.size === 0}
+              >
+                {offlining
+                  ? d.products.offlining
+                  : d.products.batchOffline.replace("{n}", String(selectedIds.size))}
+              </button>
+              <select
+                className="rounded-lg border border-ink/15 bg-white px-2 py-1.5 text-sm text-ink/80"
+                value={batchPoolStage}
+                onChange={(e) => setBatchPoolStage(e.target.value as PoolStage)}
+                aria-label={d.products.colPoolStage}
+              >
+                {(["inbox", "pool", "testing", "live"] as const).map((st) => (
+                  <option key={st} value={st}>
+                    {d.products.poolStage[st]}
+                  </option>
+                ))}
+              </select>
+              <button
+                className={btnGhost}
+                onClick={onBatchMovePoolStage}
+                disabled={movingStage || selectedIds.size === 0}
+              >
+                {movingStage ? d.products.movingPoolStage : d.products.movePoolStage}
+              </button>
+              <span className="text-sm text-ink/60">
+                ({selectedIds.size})
+              </span>
+            </div>
+          </div>
+
+          {/* ── 数据计算 · 偶尔用：付费/后台计算（视觉弱化容器区隔，不折叠） ── */}
+          <div className="rounded-xl border border-ink/10 bg-ink/[0.02] px-3 pb-2.5 pt-2">
+            <p className="mb-1.5 text-xs font-medium text-ink/45">
+              {d.products.toolbarGroupCompute}
+            </p>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                className={btnGhost}
+                onClick={onCalcScore}
+                disabled={calcScoring || selectedIds.size === 0}
+              >
+                {calcScoring
+                  ? d.products.calculating
+                  : d.products.calcScore.replace("{n}", String(selectedIds.size))}
+              </button>
+              <button
+                className={btnGhost}
+                onClick={onCalcAdCount}
+                disabled={calcAdCounting || adCalcPreviewing || adCalcConfirm !== null}
+                title={d.products.calcAdCountAll}
+              >
+                {calcAdCounting
+                  ? d.products.calculatingAds
+                  : adCalcPreviewing
+                    ? d.products.calcPreviewing
+                    : selectedIds.size > 0
+                      ? d.products.calcAdCount.replace(
+                          "{n}",
+                          String(selectedIds.size)
+                        )
+                      : d.products.calcAdCountAll}
+              </button>
+              <select
+                className="rounded-lg border border-ink/15 bg-white px-2 py-1.5 text-sm text-ink/80"
+                value={adCalcScope}
+                onChange={(e) => setAdCalcScope(e.target.value as CalcAdCountScope)}
+                aria-label={d.products.calcScopeLabel}
+              >
+                <option value="all">{d.products.calcScopeAll}</option>
+                <option value="alive">{d.products.calcScopeAlive}</option>
+              </select>
+              <label className="flex items-center gap-1.5 text-sm text-ink/80">
+                <input
+                  type="checkbox"
+                  checked={adCalcForce}
+                  onChange={(e) => setAdCalcForce(e.target.checked)}
+                />
+                {d.products.calcForceLabel}
+              </label>
+              <PaidDataBillingNote
+                feature="catalog-ad-count"
+                labels={{
+                  platform: d.products.billingPlatform,
+                  platformNoLimit: d.products.billingPlatformNoLimit,
+                  tenantOwn: d.products.billingTenantOwn,
+                  owner: d.products.billingOwner,
+                  denied: d.products.billingDenied,
+                  loading: d.products.billingLoading,
+                }}
+              />
+              <button
+                className={btnGhost}
+                onClick={onToggleScorePause}
+                disabled={togglingPause}
+              >
+                {togglingPause
+                  ? "…"
+                  : scorePaused
+                    ? d.products.resumeScoreCalc
+                    : d.products.pauseScoreCalc}
+              </button>
+              {scorePaused && (
+                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
+                  {d.products.scoreCalcPausedBadge}
+                </span>
+              )}
+            </div>
+            {adCalcForce && (
+              <p className="mt-2 text-xs text-amber-700">
+                {d.products.calcForceWarning}
+              </p>
+            )}
+          </div>
         </div>
+
+        {/* ===== 广告数付费计算：预估确认框（防误触，先看数字再确认） ===== */}
+        {adCalcConfirm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4">
+            <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl">
+              <h3 className="text-lg font-semibold text-ink">
+                {d.products.calcConfirmTitle}
+              </h3>
+              <ul className="mt-3 space-y-1.5 text-sm text-ink/80">
+                <li className="font-medium text-ink">
+                  {d.products.calcConfirmBillable.replace(
+                    "{n}",
+                    String(adCalcConfirm.facts.billableGroups)
+                  )}
+                </li>
+                {adCalcConfirm.facts.freshSkipped > 0 && (
+                  <li>
+                    {d.products.calcConfirmFreshSkipped.replace(
+                      "{n}",
+                      String(adCalcConfirm.facts.freshSkipped)
+                    )}
+                  </li>
+                )}
+                {adCalcConfirm.facts.deadSkipped > 0 && (
+                  <li>
+                    {d.products.calcConfirmDeadSkipped.replace(
+                      "{n}",
+                      String(adCalcConfirm.facts.deadSkipped)
+                    )}
+                  </li>
+                )}
+                <li>
+                  {adCalcConfirm.scope === "alive"
+                    ? d.products.calcConfirmScopeAlive
+                    : d.products.calcConfirmScopeAll}
+                </li>
+                <li>
+                  {adCalcConfirm.force
+                    ? d.products.calcConfirmModeForce
+                    : d.products.calcConfirmModeIncremental}
+                </li>
+                {adCalcConfirm.facts.keySource && (
+                  <li>
+                    {d.products.calcConfirmBilling.replace(
+                      "{path}",
+                      adCalcConfirm.facts.keySource === "owner"
+                        ? d.products.calcBillingOwner
+                        : adCalcConfirm.facts.keySource === "tenant-own"
+                          ? d.products.calcBillingTenantOwn
+                          : d.products.calcBillingPlatform
+                    )}
+                  </li>
+                )}
+              </ul>
+              {!adCalcConfirm.facts.allowed && (
+                <p className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-800">
+                  {d.products.calcConfirmDenied}
+                </p>
+              )}
+              <div className="mt-5 flex justify-end gap-3">
+                <button
+                  className={btnGhost}
+                  onClick={() => setAdCalcConfirm(null)}
+                  disabled={calcAdCounting}
+                >
+                  {d.products.calcConfirmCancel}
+                </button>
+                <button
+                  className={btnPrimary}
+                  onClick={onConfirmCalcAdCount}
+                  disabled={calcAdCounting || !adCalcConfirm.facts.allowed}
+                >
+                  {calcAdCounting
+                    ? d.products.calculatingAds
+                    : d.products.calcConfirmSubmit}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
           </>
         )}

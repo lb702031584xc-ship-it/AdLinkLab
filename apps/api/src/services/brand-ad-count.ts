@@ -11,6 +11,9 @@
  *   落地页是 Amazon 的商品分不清自投/他投（谁投落地页都是 amazon.com），
  *   只记 total，self/others 记 null。
  * - 缓存：同一（品牌，国家）组内任一商品 14 天内查过 → 整组跳过，不重复花钱。
+ *   deps.force=true 可显式绕过（仅人工入口，提交前有预估确认）；
+ *   deps.aliveOnly=true 时整组判死的组（初筛 kill 或已下线）整组跳过，
+ *   单独计入 skippedDeadGroups。两项默认关，既有调用方行为不变。
  * - 历史快照：重算写入新值前，把组内旧 adCount/adCountCheckedAt 挪到
  *   lastAdCount/lastAdCountCheckedAt，趋势（deriveAdTrend）由新旧两值现算。
  * - 单组 SERP 失败不中断整批：跳过该组并把原因记入返回值 errors。
@@ -196,6 +199,12 @@ export function countLandingTypes(urls: Array<string | undefined>): {
 export interface BrandAdCountResult {
   groupsQueried: number;
   groupsSkippedCache: number;
+  /**
+   * aliveOnly 模式下整组判死而跳过的组数（与缓存跳过分开计数，避免混淆）。
+   * 可选字段：one-click-screen / offer-prescreen 的注入 fake 不带此字段，
+   * 真实实现恒写入；消费方读取时按 `?? 0` 处理。
+   */
+  skippedDeadGroups?: number;
   productsUpdated: number;
   errors: Array<{ brand: string; countryCode: string | null; message: string }>;
 }
@@ -208,6 +217,31 @@ export interface BrandAdCountDeps {
    * 不传 → 读站级流量信号凭证（平台路径/历史行为）。
    */
   credentials?: { login: string; password: string } | null;
+  /**
+   * 强制重算：true → 不执行 14 天缓存跳过（新鲜组也重新计费查询）。
+   * 默认 false。仅 calc-ad-count 入口的用户显式勾选可传 true；
+   * one-click-screen / offer-prescreen 不传，行为不变。
+   */
+  force?: boolean;
+  /**
+   * 只算活口径组：true → 整组商品全部判死（screenVerdict="kill" 或
+   * status 非 "active"）的组整组跳过（计入 skippedDeadGroups，不花钱）；
+   * 组内只要有一件活口径商品 → 照常查，写回仍覆盖组内全部商品。
+   * 默认 false。
+   */
+  aliveOnly?: boolean;
+}
+
+/** calc 的只读预估（不调 DataForSEO、不需要凭证）：提交付费计算前的数字。 */
+export interface BrandAdCountPreview {
+  /** 全部品牌+国家组数。 */
+  groupsTotal: number;
+  /** 缓存内（14 天内查过）的组数——正常增量模式会跳过。 */
+  groupsFresh: number;
+  /** 过期/从未查的组数——正常增量模式将计费查询的组数。 */
+  groupsStale: number;
+  /** aliveOnly 时整组皆死的组数（将被跳过）；scope=all 时恒为 0。 */
+  deadGroupsSkipped: number;
 }
 
 interface ProductRow {
@@ -217,6 +251,72 @@ interface ProductRow {
   landingPageType: string | null;
   adCount: number | null;
   adCountCheckedAt: Date | null;
+  screenVerdict: string | null;
+  status: string;
+}
+
+interface AdCountGroup {
+  brand: string;
+  countryCode: string | null;
+  items: ProductRow[];
+}
+
+/** 读行（calc 与 preview 共用同一取数口径；aliveOnly 判活在分组层做，不在 where 过滤）。 */
+async function loadAdCountRows(
+  prisma: PrismaClient,
+  tenantId: string,
+  productIds?: string[]
+): Promise<ProductRow[]> {
+  return (await prisma.networkProduct.findMany({
+    where: {
+      tenantId,
+      ...(productIds && productIds.length > 0
+        ? { id: { in: productIds } }
+        : {}),
+    },
+    select: {
+      id: true,
+      brand: true,
+      countryCode: true,
+      landingPageType: true,
+      adCount: true,
+      adCountCheckedAt: true,
+      screenVerdict: true,
+      status: true,
+    },
+  })) as ProductRow[];
+}
+
+/** 按（品牌小写，国家大写首个）分组；brand 为空的商品跳过。calc 与 preview 共用。 */
+function groupAdCountRows(rows: ProductRow[]): Map<string, AdCountGroup> {
+  const groups = new Map<string, AdCountGroup>();
+  for (const r of rows) {
+    const brand = (r.brand ?? "").trim();
+    if (!brand) continue;
+    const country = (r.countryCode ?? "").split(",")[0]?.trim().toUpperCase() || null;
+    const key = `${brand.toLowerCase()}|${country ?? ""}`;
+    const g = groups.get(key);
+    if (g) g.items.push(r);
+    else groups.set(key, { brand, countryCode: country, items: [r] });
+  }
+  return groups;
+}
+
+/** 14 天缓存判定：组内任一商品在缓存期内查过 → 整组新鲜。 */
+function isGroupFresh(items: ProductRow[], now: number): boolean {
+  return items.some(
+    (p) =>
+      p.adCountCheckedAt instanceof Date &&
+      now - p.adCountCheckedAt.getTime() < AD_COUNT_CACHE_TTL_MS
+  );
+}
+
+/**
+ * 死组判定（aliveOnly）：组内全部商品都满足「初筛判死（screenVerdict="kill"）
+ * 或已下线（status !== "active"）」→ 整组是死组。任一活口径商品即非死组。
+ */
+function isDeadGroup(items: ProductRow[]): boolean {
+  return items.every((p) => p.screenVerdict === "kill" || p.status !== "active");
 }
 
 interface SerpItem {
@@ -316,54 +416,28 @@ export async function calcBrandAdCounts(
   }
   const fetchImpl = deps.fetchImpl ?? fetch;
 
-  const rows = (await prisma.networkProduct.findMany({
-    where: {
-      tenantId,
-      ...(productIds && productIds.length > 0
-        ? { id: { in: productIds } }
-        : {}),
-    },
-    select: {
-      id: true,
-      brand: true,
-      countryCode: true,
-      landingPageType: true,
-      adCount: true,
-      adCountCheckedAt: true,
-    },
-  })) as ProductRow[];
-
-  // 按（品牌小写，国家大写首个）分组；brand 为空的商品跳过。
-  const groups = new Map<
-    string,
-    { brand: string; countryCode: string | null; items: ProductRow[] }
-  >();
-  for (const r of rows) {
-    const brand = (r.brand ?? "").trim();
-    if (!brand) continue;
-    const country = (r.countryCode ?? "").split(",")[0]?.trim().toUpperCase() || null;
-    const key = `${brand.toLowerCase()}|${country ?? ""}`;
-    const g = groups.get(key);
-    if (g) g.items.push(r);
-    else groups.set(key, { brand, countryCode: country, items: [r] });
-  }
+  const rows = await loadAdCountRows(prisma, tenantId, productIds);
+  const groups = groupAdCountRows(rows);
 
   const result: BrandAdCountResult = {
     groupsQueried: 0,
     groupsSkippedCache: 0,
+    skippedDeadGroups: 0,
     productsUpdated: 0,
     errors: [],
   };
   const now = Date.now();
 
   for (const g of groups.values()) {
+    // 活口径（aliveOnly）：整组判死 → 跳过（单独计数，不与缓存跳过混淆）。
+    // 先于缓存判定：死组即使新鲜也算死组跳过。
+    if (deps.aliveOnly && isDeadGroup(g.items)) {
+      result.skippedDeadGroups = (result.skippedDeadGroups ?? 0) + 1;
+      continue;
+    }
     // 14 天缓存：组内任一商品在缓存期内查过 → 整组跳过。
-    const fresh = g.items.some(
-      (p) =>
-        p.adCountCheckedAt instanceof Date &&
-        now - p.adCountCheckedAt.getTime() < AD_COUNT_CACHE_TTL_MS
-    );
-    if (fresh) {
+    // force=true 时不跳过（用户显式要求忽略缓存重新计费查询）。
+    if (!deps.force && isGroupFresh(g.items, now)) {
       result.groupsSkippedCache += 1;
       continue;
     }
@@ -418,4 +492,37 @@ export async function calcBrandAdCounts(
   }
 
   return result;
+}
+
+/**
+ * 广告数付费计算的只读预估（提交前确认用）：只读本地库分组计数，
+ * 不调 DataForSEO、不需要凭证、不写任何数据。分组/缓存/死组判定与
+ * calcBrandAdCounts 共用同一套 helper，口径保证一致：
+ * - groupsFresh = 缓存内组（正常模式跳过）；groupsStale = 其余组；
+ * - deadGroupsSkipped 仅 aliveOnly 时统计（与 calc 一样先于缓存判死，
+ *   死组同时也计入它自身的新鲜/过期归类——总数口径：
+ *   groupsTotal = groupsFresh + groupsStale，死组是其中的子集）。
+ */
+export async function previewBrandAdCounts(
+  prisma: PrismaClient,
+  tenantId: string,
+  opts: { aliveOnly?: boolean } = {}
+): Promise<BrandAdCountPreview> {
+  const rows = await loadAdCountRows(prisma, tenantId);
+  const groups = groupAdCountRows(rows);
+  const now = Date.now();
+  let groupsFresh = 0;
+  let groupsStale = 0;
+  let deadGroupsSkipped = 0;
+  for (const g of groups.values()) {
+    if (isGroupFresh(g.items, now)) groupsFresh += 1;
+    else groupsStale += 1;
+    if (opts.aliveOnly && isDeadGroup(g.items)) deadGroupsSkipped += 1;
+  }
+  return {
+    groupsTotal: groups.size,
+    groupsFresh,
+    groupsStale,
+    deadGroupsSkipped,
+  };
 }

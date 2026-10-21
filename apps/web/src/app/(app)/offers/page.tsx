@@ -18,6 +18,7 @@ import {
 import { getLang } from "@/i18n/lang";
 import { getDictionary } from "@/i18n/dictionaries";
 import { OfferScoreCell } from "@/components/offers/offer-score-cell";
+import { OfferTestPriorityCell } from "@/components/offers/offer-test-priority-cell";
 import OfferLinks from "@/components/entities/offer-links";
 import { OfferDeleteButton } from "@/components/offers/offer-delete-button";
 import {
@@ -59,6 +60,30 @@ function parsePositiveInt(
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
 }
 
+/** 排序切换链接：保留 tab 与预设筛选参数，切排序即回到第 1 页。 */
+function buildOffersHref(
+  sp: { [key: string]: string | string[] | undefined },
+  tab: OfferTab,
+  sort: string | undefined
+): string {
+  const qs = new URLSearchParams();
+  qs.set("tab", tab);
+  for (const key of [
+    "preset",
+    "minReviews",
+    "minCommission",
+    "minRate",
+    "minPrice",
+    "maxPrice",
+    "minScore",
+  ]) {
+    const v = sp[key];
+    if (typeof v === "string" && v !== "") qs.set(key, v);
+  }
+  if (sort) qs.set("sort", sort);
+  return `/offers?${qs.toString()}`;
+}
+
 /** P1-30：解析可选数值筛选参数（空/非法 → null = 不筛选）。 */
 function parseFilterNum(value: string | string[] | undefined): number | null {
   const raw = Array.isArray(value) ? value[0] : value;
@@ -76,17 +101,30 @@ interface OfferPresetFilter {
   minScore: number | null;
 }
 
-/** P1-30：派生佣金金额/比例（电商：均价×比例；固定：佣金值；缺数据 → null）。 */
+/**
+ * P1-30：派生佣金金额/比例。口径以写入方为准（与 API offer-priority 同源）：
+ * catalog-sync 写入的 "PERCENT"，其 commissionValue 已是换算好的美元金额
+ * （如 899×13% 存 116.87），不能再当费率乘均价；费率由 金额÷均价 反推。
+ * offer-form 的 "percentage"/"%" 才是真费率；"fixed" 值即金额。
+ * 缺数据 → null。
+ */
 function derivedCommission(o: Offer): { amount: number | null; rate: number | null } {
   const cv = o.commissionValue == null ? null : Number(o.commissionValue);
   const price = o.avgPrice == null ? null : Number(o.avgPrice);
-  if (o.commissionType === "percentage") {
+  const t = (o.commissionType ?? "").trim().toLowerCase();
+  if (t === "percentage" || t === "%") {
     return {
       amount: cv != null && price != null ? (price * cv) / 100 : null,
       rate: cv,
     };
   }
-  if (o.commissionType === "fixed") {
+  if (t === "percent") {
+    return {
+      amount: cv,
+      rate: cv != null && price != null && price > 0 ? (cv / price) * 100 : null,
+    };
+  }
+  if (t === "fixed") {
     return { amount: cv, rate: null };
   }
   return { amount: null, rate: null };
@@ -140,6 +178,8 @@ export default async function OffersPage({
   const tab = parseTab(sp.tab);
   const page = parsePositiveInt(sp.page, 1);
   const pageSize = parsePositiveInt(sp.pageSize, 20);
+  /** 测试优先排序（把握最大在前）：仅 priority 有意义，其余值按默认。 */
+  const sortParam = sp.sort === "priority" ? "priority" : undefined;
   // P1-30：筛选预设参数（preset=1 时用默认预设；显式参数优先）。
   const presetDefaults =
     sp.preset === "1"
@@ -324,6 +364,9 @@ export default async function OffersPage({
     );
   }
 
+  // 测试优先排序时每条 Offer 的全局名次（数据取回后填充，供「先测」徽标）。
+  const priorityRankById = new Map<string, number>();
+
   const columns: Array<Column<Offer>> = [
     {
       header: "",
@@ -436,6 +479,17 @@ export default async function OffersPage({
       className: "whitespace-nowrap",
     },
     {
+      header: t.entities.offers.testPriorityColumn,
+      render: (o) => (
+        <OfferTestPriorityCell
+          priority={o.testPriority}
+          rank={priorityRankById.get(o.id) ?? null}
+          dict={{ testFirst: t.entities.offers.testFirstBadge }}
+        />
+      ),
+      className: "whitespace-nowrap",
+    },
+    {
       header: t.entities.offers.testStopLoss.listColumn,
       render: (o) => (
         <TestSpendCell
@@ -533,12 +587,26 @@ export default async function OffersPage({
         p += 1;
       }
       const filtered = all.filter((o) => passesPresetFilter(o, presetFilter));
+      if (sortParam === "priority") {
+        // 筛选模式在前端拿到全集：按后端附带的测试优先分现排（同分 createdAt 降序）。
+        filtered.sort(
+          (a, b) =>
+            (b.testPriority?.score ?? -1) - (a.testPriority?.score ?? -1) ||
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+      }
       data = { items: filtered, page: 1, pageSize: Math.max(filtered.length, 1), total: filtered.length };
     } else {
-      data = await entityApi.offers.list(page, pageSize, tab);
+      data = await entityApi.offers.list(page, pageSize, tab, sortParam);
     }
   } catch (e) {
     error = mapEntityErrorMessage(e, lang);
+  }
+
+  if (sortParam === "priority" && data) {
+    data.items.forEach((o, idx) => {
+      priorityRankById.set(o.id, (data.page - 1) * data.pageSize + idx + 1);
+    });
   }
 
   const tableColumns: Array<Column<Offer>> = data
@@ -600,6 +668,21 @@ export default async function OffersPage({
             minScore: sp.minScore != null && !Array.isArray(sp.minScore) ? sp.minScore : "",
           }}
         />
+      {/* 排序切换：默认（最新在前）/ 测试优先（把握最大在前，前 5 标「先测」）。 */}
+      <div className="mt-3 inline-flex rounded-xl bg-ink/5 p-1">
+        <Link
+          href={buildOffersHref(sp, tab, undefined)}
+          className={tabClass(sortParam === undefined)}
+        >
+          {t.entities.offers.sortDefault}
+        </Link>
+        <Link
+          href={buildOffersHref(sp, tab, "priority")}
+          className={tabClass(sortParam === "priority")}
+        >
+          {t.entities.offers.sortPriority}
+        </Link>
+      </div>
       {error || !data ? (
         <ErrorState
           message={error ?? t.entities.offers.loadError}
@@ -637,7 +720,7 @@ export default async function OffersPage({
               pageSize={data.pageSize}
               total={data.total}
               basePath="/offers"
-              extraParams={{ tab }}
+              extraParams={{ tab, ...(sortParam ? { sort: sortParam } : {}) }}
               labels={paginationLabels(t)}
             />
           )}

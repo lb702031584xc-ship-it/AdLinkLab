@@ -100,6 +100,7 @@ import {
   httpMetrics,
 } from "../observability/index.js";
 import { getQueueCatalog } from "../queue/queue-catalog.js";
+import { attachTestPriorities } from "../services/offer-priority.js";
 import type { PrismaClient } from "@adlinklab/database";
 
 export interface AppServices {
@@ -494,20 +495,101 @@ export async function registerRoutes(
 
   app.get<{
     Headers: { "x-tenant-id"?: string };
-    Querystring: { page?: string; pageSize?: string; source?: string };
+    Querystring: {
+      page?: string;
+      pageSize?: string;
+      source?: string;
+      sort?: string;
+    };
   }>("/api/v1/offers", async (request) => {
     const tenantId = tenantOf(request);
     const source = request.query.source;
-    const result = await services.offers.list(
-      tenantId,
-      request.query.page ? Number(request.query.page) : undefined,
-      request.query.pageSize ? Number(request.query.pageSize) : undefined,
+    const sourceFilter =
       source && ["affiliate", "amazon", "cashback"].includes(source)
         ? source
-        : undefined
+        : undefined;
+    const page = request.query.page ? Number(request.query.page) : undefined;
+    const pageSize = request.query.pageSize
+      ? Number(request.query.pageSize)
+      : undefined;
+
+    // sort=priority：按测试优先分（把握性）排序。分数要全集计算，
+    // 故先分页拉全（仓库 pageSize 上限 100，循环取尽），排除软删除后
+    // 算分排序再切页；total 为排除软删除后的全集数（此模式下分页前
+    // 已过滤，与默认模式"total 扣本页软删除数"的口径差异仅在此）。
+    if (request.query.sort === "priority") {
+      const pageN = Math.max(1, Math.floor(page ?? 1) || 1);
+      const pageSizeN = Math.min(
+        100,
+        Math.max(1, Math.floor(pageSize ?? 50) || 50)
+      );
+      type OfferItem = Awaited<
+        ReturnType<typeof services.offers.list>
+      >["items"][number];
+      const collected: OfferItem[] = [];
+      let totalAll = Number.POSITIVE_INFINITY;
+      let pg = 1;
+      while (collected.length < totalAll && pg <= 200) {
+        const chunk = await services.offers.list(
+          tenantId,
+          pg,
+          100,
+          sourceFilter
+        );
+        collected.push(...chunk.items);
+        totalAll = chunk.total;
+        if (chunk.items.length === 0) break;
+        pg += 1;
+      }
+      const visible = collected.filter(
+        (o: { archivedAt?: string | Date | null }) => !o.archivedAt
+      );
+      const withPriority = await attachTestPriorities(
+        services.prisma ?? null,
+        tenantId,
+        visible
+      );
+      const timeOf = (o: { createdAt?: string | Date }) =>
+        o.createdAt ? new Date(o.createdAt).getTime() : 0;
+      withPriority.sort(
+        (a, b) =>
+          b.testPriority.score - a.testPriority.score || timeOf(b) - timeOf(a)
+      );
+      const prioById = new Map(
+        withPriority.map((o) => [o.id, o.testPriority] as const)
+      );
+      const pageItems = withPriority.slice(
+        (pageN - 1) * pageSizeN,
+        pageN * pageSizeN
+      );
+      // 与默认模式一致：本页条目附带推荐指数摘要（分数从全集结果按 id 合回，
+      // 不重算、不重复查商品）。
+      const items =
+        services.prisma && attachMetricsSummaries
+          ? (await attachMetricsSummaries(services.prisma, tenantId, pageItems)).map(
+              (o) => ({
+                ...o,
+                testPriority: prioById.get(o.id) ?? o.testPriority,
+              })
+            )
+          : pageItems;
+      return { items, total: withPriority.length, page: pageN, pageSize: pageSizeN };
+    }
+
+    const result = await services.offers.list(
+      tenantId,
+      page,
+      pageSize,
+      sourceFilter
     );
     // 附带推荐指数摘要（无数据时为 null；memory 模式无 prisma 时跳过）。
-    if (!services.prisma || !attachMetricsSummaries) return result;
+    if (!services.prisma || !attachMetricsSummaries) {
+      // 测试优先分仍附带（无 prisma → 无商品关联，广告分按中性计）。
+      return {
+        ...result,
+        items: await attachTestPriorities(null, tenantId, result.items),
+      };
+    }
     // 排除软删除（archivedAt != null）的 offer。
     const visibleItems = result.items.filter(
       (o: { archivedAt?: string | Date | null }) => !o.archivedAt
@@ -519,7 +601,7 @@ export async function registerRoutes(
     );
     return {
       ...result,
-      items,
+      items: await attachTestPriorities(services.prisma, tenantId, items),
       total: result.total - (result.items.length - visibleItems.length),
     };
   });

@@ -154,6 +154,8 @@ export interface Offer {
   prescreenVerdict?: string | null;
   prescreenReason?: string | null;
   prescreenedAt?: string | null;
+  /** 测试优先分（把握性排序；后端按初筛/广告/佣金三类真实信号算，含理由）。 */
+  testPriority?: { score: number; reasons: string[] } | null;
 }
 
 export interface LandingPage {
@@ -495,11 +497,12 @@ export const entityApi = {
   },
 
   offers: {
-    list: (page?: number, pageSize?: number, source?: string) => {
+    list: (page?: number, pageSize?: number, source?: string, sort?: string) => {
       const qs = new URLSearchParams();
       if (page) qs.set("page", String(page));
       if (pageSize) qs.set("pageSize", String(pageSize));
       if (source) qs.set("source", source);
+      if (sort) qs.set("sort", sort);
       const s = qs.toString();
       return apiFetch<Paginated<Offer>>(`/api/v1/offers${s ? `?${s}` : ""}`);
     },

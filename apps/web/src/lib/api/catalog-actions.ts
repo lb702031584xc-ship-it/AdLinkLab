@@ -909,6 +909,8 @@ export async function offlineProductsAction(productIds: string[]) {
 export interface CalcAdCountResult {
   groupsQueried: number;
   groupsSkippedCache: number;
+  /** 活口径（scope=alive）下整组判死而跳过的组数。 */
+  skippedDeadGroups?: number;
   productsUpdated: number;
   errors: Array<{ brand: string; countryCode: string | null; message: string }>;
   /** 付费数据网关计费路径（platform / tenant-own / owner）。 */
@@ -918,14 +920,75 @@ export interface CalcAdCountResult {
   } | null;
 }
 
-/** 广告投放数量计算：ids 为空数组 = 全量增量（后端按 14 天缓存跳过已查组）。 */
-export async function calcAdCountAction(productIds: string[]) {
+/**
+ * 广告投放数量计算：ids 为空数组 = 全量（后端按 14 天缓存跳过已查组）。
+ * opts.force = 忽略缓存强制重算；opts.scope = "alive" 时跳过全死组。
+ * 付费调用——前端必须先走 previewCalcAdCountAction 预估确认再调本函数。
+ */
+export async function calcAdCountAction(
+  productIds: string[],
+  opts?: { force?: boolean; scope?: "all" | "alive" }
+) {
   return attempt(() => apiFetch<CalcAdCountResult>(
     "/api/v1/catalog/products/calc-ad-count",
     {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ids: productIds.slice(0, 500) }),
+      body: JSON.stringify({
+        ids: productIds.slice(0, 500),
+        force: opts?.force === true,
+        scope: opts?.scope ?? "all",
+      }),
+    }
+  ), ["/catalog"]);
+}
+
+export interface CalcAdCountPreviewResult {
+  allowed: boolean;
+  keySource: "platform" | "tenant-own" | "owner" | null;
+  groupsTotal: number;
+  groupsFresh: number;
+  groupsStale: number;
+  deadGroupsSkipped: number;
+}
+
+/** 广告数计算的只读预估（不计费、不记用量）：提交前确认框的数字来源。 */
+export async function previewCalcAdCountAction(scope: "all" | "alive") {
+  return attempt(() => apiFetch<CalcAdCountPreviewResult>(
+    "/api/v1/catalog/products/calc-ad-count/preview",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scope }),
+    }
+  ), ["/catalog"]);
+}
+
+export interface AddedProductIdsResult {
+  ids: string[];
+  total: number;
+  truncated: boolean;
+}
+
+/**
+ * 按新增（入库）日期取商品 id（纯选择辅助）：from/to 是前端按本地时区
+ * 换算好的 [当天 00:00, 次日 00:00) UTC ISO 区间；networkId 可选过滤。
+ */
+export async function addedProductIdsAction(input: {
+  from: string;
+  to: string;
+  networkId?: string;
+}) {
+  return attempt(() => apiFetch<AddedProductIdsResult>(
+    "/api/v1/catalog/products/added-ids",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        from: input.from,
+        to: input.to,
+        ...(input.networkId ? { networkId: input.networkId } : {}),
+      }),
     }
   ), ["/catalog"]);
 }

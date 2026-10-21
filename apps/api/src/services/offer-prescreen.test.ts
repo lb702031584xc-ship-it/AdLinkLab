@@ -100,6 +100,36 @@ describe("prescreenOffers", () => {
     expect(world.audits.some((a) => a.action === "OFFER_PRESCREEN_BATCH")).toBe(true);
   });
 
+  it("佣金口径：PERCENT 值是已换算金额（不二次乘均价）、percentage 才是费率", async () => {
+    const world = makeWorld();
+    const gate = async (): Promise<TrafficGateResult> =>
+      ({ passed: true, reason: "ok", officialSite: null, signals: [] }) as TrafficGateResult;
+    const { outcomes, counts } = await prescreenOffers(
+      { prisma: world.prisma, gateEvaluator: gate, gatewayResolve: gatewayOk },
+      {
+        tenantId: "t1",
+        actorId: "u1",
+        userRole: "owner",
+        offers: [
+          // catalog-sync 口径：值 $5 就是单笔 $5 <$8 必须停；
+          // 旧读法按费率 5% × 均价 $899 = $44.95 会误放行。
+          offer({ id: "o-pct-low", commissionType: "PERCENT", commissionValue: 5, avgPrice: 899 }),
+          // offer-form 真费率：1% × $100 = $1 <$8 必须停；旧读法当未知放行。
+          offer({ id: "o-rate-low", commissionType: "percentage", commissionValue: 1, avgPrice: 100 }),
+          // catalog-sync 正常值：$13 ≥$8、反推费率 13% ≥10% → 全过 go。
+          offer({ id: "o-pct-ok", commissionType: "PERCENT", commissionValue: 13, avgPrice: 100 }),
+        ],
+      }
+    );
+    const byId = new Map(outcomes.map((o) => [o.offerId, o]));
+    expect(byId.get("o-pct-low")?.verdict).toBe("stop");
+    expect(byId.get("o-pct-low")?.reason).toContain("8");
+    expect(byId.get("o-rate-low")?.verdict).toBe("stop");
+    expect(byId.get("o-pct-ok")?.verdict).toBe("go");
+    expect(counts.stop).toBe(2);
+    expect(counts.go).toBe(1);
+  });
+
   it("黑名单（merchant）→ stop；品牌广告数全 0 → stop", async () => {
     const world = makeWorld([
       { channel: "affiliate", entityType: "merchant", entityId: "m-bad", reason: "拒付" },

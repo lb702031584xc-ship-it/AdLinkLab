@@ -5,8 +5,9 @@
  *
  * 阶梯（与 one-click-screen 同序、同规则实现口径）：
  * 1. 黑名单（merchant / offer 实体，channel 按 Offer.source 映射）
- * 2. $8 佣金门槛（FIXED 用 commissionValue；PERCENT 用 值 × 均价估算；
- *    未知 → 不判死，转 unknown 标记）
+ * 2. $8 佣金门槛（口径以写入方为准：FIXED 与 catalog-sync 的 PERCENT
+ *    其 commissionValue 都是已换算的美元金额；只有 offer-form 的
+ *    percentage/% 才是费率、需 × 均价；未知 → 不判死，转 unknown 标记）
  * 3. 已保存预设（evaluateProduct；Offers 无评论数维度，reviewCount=null
  *    按预设既有口径参与；佣金未知时金额维度置 0 不判死）
  * 4. 广告数（品牌级，经付费数据网关）：以同租户同品牌商品的 adCount 为据；
@@ -50,6 +51,7 @@ import {
   recordPaidDataUsage,
   resolvePaidDataAccess,
 } from "./paid-data-gateway.js";
+import { deriveCommissionPerSaleUsd } from "./offer-priority.js";
 
 export type OfferPrescreenVerdict = "go" | "unknown" | "stop";
 
@@ -197,11 +199,30 @@ export async function prescreenOffers(
     }
     const commissionValue = num(o.commissionValue);
     const avgPrice = num(o.avgPrice);
-    const isFixed = (o.commissionType ?? "").toUpperCase() === "FIXED";
-    const isPercent = (o.commissionType ?? "").toUpperCase() === "PERCENT";
+    // 佣金口径以写入方为准（金额推导与 offer-priority 同源实现）：
+    // catalog-sync 写入的 "PERCENT"，其 commissionValue 已是换算好的美元
+    // 金额（如 899×13% 存 116.87），绝不能再当费率乘均价（会算出 $1050
+    // 的假佣金）；offer-form 的 "percentage"/"%" 才是真费率；FIXED 值即金额。
+    // 费率维度：percentage/% 取原值；PERCENT 由 金额÷均价 反推真实费率；
+    // FIXED 无费率（null，维度不判死，与旧口径一致）。
+    const amount = deriveCommissionPerSaleUsd({
+      commissionValue: o.commissionValue,
+      commissionType: o.commissionType,
+      avgPrice: o.avgPrice,
+    });
+    const typeKey = (o.commissionType ?? "").trim().toLowerCase();
+    const ratePct =
+      typeKey === "percentage" || typeKey === "%"
+        ? commissionValue
+        : typeKey === "percent" &&
+            amount != null &&
+            avgPrice != null &&
+            avgPrice > 0
+          ? (amount / avgPrice) * 100
+          : null;
     const fig = estimateCommissionFigure({
-      amount: isFixed ? commissionValue : null,
-      ratePct: isPercent ? commissionValue : null,
+      amount,
+      ratePct,
       price: avgPrice,
     });
     if (fig.figure !== null && belowMinCommission(fig.figure, thresholdUsd)) {
@@ -214,9 +235,9 @@ export async function prescreenOffers(
       continue;
     }
     if (fig.figure === null) w.flags.push("佣金未知，待人工复核");
-    // 未知维度不判死：佣金算不出 → 金额维度置 0；非 PERCENT 型（无佣金率）
+    // 未知维度不判死：佣金算不出 → 金额维度置 0；无佣金率（FIXED 等）
     // → 比例维度置 0。其余维度照常判（与商品库一键筛选同口径）。
-    const rateForEval = isPercent ? commissionValue : null;
+    const rateForEval = ratePct;
     const effectivePreset = {
       ...preset,
       ...(fig.figure === null ? { minCommissionAmount: 0 } : {}),
@@ -225,7 +246,7 @@ export async function prescreenOffers(
     const ev = evaluateProduct(
       {
         price: avgPrice,
-        commissionAmount: isFixed ? commissionValue : null,
+        commissionAmount: amount,
         commissionRate: rateForEval,
         reviewCount: null,
       },

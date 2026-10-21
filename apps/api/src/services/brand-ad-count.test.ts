@@ -12,6 +12,7 @@ import {
   countLandingTypes,
   calcBrandAdCounts,
   deriveAdTrend,
+  previewBrandAdCounts,
 } from "./brand-ad-count.js";
 
 function enc(plain: string): string {
@@ -31,6 +32,8 @@ interface FakeProduct {
   adCountProduct?: number | null;
   lastAdCount?: number | null;
   lastAdCountCheckedAt?: Date | null;
+  screenVerdict?: string | null;
+  status?: string;
 }
 
 function makeFakePrisma(products: FakeProduct[], withCreds = true) {
@@ -236,6 +239,8 @@ describe("calcBrandAdCounts", () => {
     countryCode: "US",
     landingPageType: "dtc",
     adCountCheckedAt: null,
+    screenVerdict: null,
+    status: "active",
     ...over,
   });
 
@@ -421,5 +426,153 @@ describe("calcBrandAdCounts", () => {
     expect(r.errors).toHaveLength(1);
     expect(r.errors[0]?.brand).toBe("BadBrand");
     expect(r.productsUpdated).toBe(1);
+  });
+
+  it("force=true 绕过 14 天缓存：新鲜组也重新查询，groupsSkippedCache 为 0", async () => {
+    const recent = new Date(Date.now() - 3 * 24 * 3600 * 1000);
+    const { prisma, store } = makeFakePrisma([
+      base({ id: "p1", adCount: 1, adCountCheckedAt: recent }),
+    ]);
+    const fetchImpl = vi.fn(serpFetch(["senix.com", "ads.example.com"]));
+    const r = await calcBrandAdCounts(prisma, "t1", undefined, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      force: true,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(r.groupsQueried).toBe(1);
+    expect(r.groupsSkippedCache).toBe(0);
+    expect(store.get("p1")?.adCount).toBe(2);
+    // 强制重算同样把旧值挪进快照（旧 1 → lastAdCount）
+    expect(store.get("p1")?.lastAdCount).toBe(1);
+  });
+
+  it("aliveOnly：整组判死（kill 或下线）→ 整组跳过、单独计 skippedDeadGroups、不调 SERP", async () => {
+    const { prisma } = makeFakePrisma([
+      // SENIX 组：一件初筛 kill（仍 active）+ 一件已下线 → 全组皆死
+      base({ id: "p1", screenVerdict: "kill" }),
+      base({ id: "p2", status: "inactive" }),
+      // Other 组：活口径 → 照常查
+      base({ id: "p3", brand: "Other", countryCode: "DE" }),
+    ]);
+    const fetchImpl = vi.fn(serpFetch(["senix.com"]));
+    const r = await calcBrandAdCounts(prisma, "t1", undefined, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      aliveOnly: true,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1); // 只查 Other 组
+    expect(r.groupsQueried).toBe(1);
+    expect(r.skippedDeadGroups).toBe(1);
+    expect(r.groupsSkippedCache).toBe(0);
+    expect(r.productsUpdated).toBe(1);
+  });
+
+  it("aliveOnly：死组即使在缓存内也计死组跳过（先于缓存判定）", async () => {
+    const recent = new Date(Date.now() - 3 * 24 * 3600 * 1000);
+    const { prisma } = makeFakePrisma([
+      base({ id: "p1", screenVerdict: "kill", adCountCheckedAt: recent }),
+    ]);
+    const fetchImpl = vi.fn(serpFetch(["senix.com"]));
+    const r = await calcBrandAdCounts(prisma, "t1", undefined, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      aliveOnly: true,
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(r.skippedDeadGroups).toBe(1);
+    expect(r.groupsSkippedCache).toBe(0);
+  });
+
+  it("aliveOnly：混合组（有活口径商品）照常查，写回覆盖组内死商品", async () => {
+    const { prisma, store } = makeFakePrisma([
+      base({ id: "p1", screenVerdict: "kill" }),
+      base({ id: "p2" }), // 活口径
+    ]);
+    const fetchImpl = vi.fn(serpFetch(["senix.com", "ads.example.com"]));
+    const r = await calcBrandAdCounts(prisma, "t1", undefined, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      aliveOnly: true,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(r.skippedDeadGroups).toBe(0);
+    expect(r.productsUpdated).toBe(2);
+    // 已经查了，写回不额外花钱：被 kill 的商品也拿到新广告数
+    expect(store.get("p1")?.adCount).toBe(2);
+    expect(store.get("p2")?.adCount).toBe(2);
+  });
+
+  it("aliveOnly 关（默认）：死组照常查询，skippedDeadGroups 为 0", async () => {
+    const { prisma } = makeFakePrisma([
+      base({ id: "p1", screenVerdict: "kill", status: "inactive" }),
+    ]);
+    const fetchImpl = vi.fn(serpFetch(["senix.com"]));
+    const r = await calcBrandAdCounts(prisma, "t1", undefined, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(r.skippedDeadGroups).toBe(0);
+  });
+});
+
+describe("previewBrandAdCounts", () => {
+  const base = (
+    over: Partial<FakeProduct> & { id: string }
+  ): FakeProduct => ({
+    brand: "SENIX",
+    countryCode: "US",
+    landingPageType: "dtc",
+    adCountCheckedAt: null,
+    screenVerdict: null,
+    status: "active",
+    ...over,
+  });
+  const recent = new Date(Date.now() - 3 * 24 * 3600 * 1000);
+  const stale = new Date(Date.now() - 15 * 24 * 3600 * 1000);
+
+  function seedFourGroups() {
+    return makeFakePrisma(
+      [
+        // FreshAlive/US：新鲜 + 活
+        base({ id: "a1", brand: "FreshAlive", adCountCheckedAt: recent }),
+        // StaleAlive/DE：过期 + 活
+        base({ id: "b1", brand: "StaleAlive", countryCode: "DE", adCountCheckedAt: stale }),
+        // DeadStale/FR：过期 + 整组死（kill）
+        base({ id: "c1", brand: "DeadStale", countryCode: "FR", adCountCheckedAt: stale, screenVerdict: "kill" }),
+        // DeadFresh/ES：新鲜 + 整组死（下线）
+        base({ id: "d1", brand: "DeadFresh", countryCode: "ES", adCountCheckedAt: recent, status: "inactive" }),
+        // 无品牌商品不入组
+        base({ id: "e1", brand: null }),
+      ],
+      // 预估只读本地库：无凭证也必须能跑（withCreds=false 验证不抛错）
+      false
+    );
+  }
+
+  it("scope=all：总数 = 新鲜 + 过期，死组不单独计", async () => {
+    const { prisma } = seedFourGroups();
+    const p = await previewBrandAdCounts(prisma, "t1");
+    expect(p).toEqual({
+      groupsTotal: 4,
+      groupsFresh: 2,
+      groupsStale: 2,
+      deadGroupsSkipped: 0,
+    });
+  });
+
+  it("aliveOnly：死组单独计（含新鲜死组），新鲜/过期口径不变", async () => {
+    const { prisma } = seedFourGroups();
+    const p = await previewBrandAdCounts(prisma, "t1", { aliveOnly: true });
+    expect(p).toEqual({
+      groupsTotal: 4,
+      groupsFresh: 2,
+      groupsStale: 2,
+      deadGroupsSkipped: 2,
+    });
+  });
+
+  it("从未查过的组算过期（stale）", async () => {
+    const { prisma } = makeFakePrisma([base({ id: "p1" })], false);
+    const p = await previewBrandAdCounts(prisma, "t1", {});
+    expect(p.groupsTotal).toBe(1);
+    expect(p.groupsStale).toBe(1);
+    expect(p.groupsFresh).toBe(0);
   });
 });

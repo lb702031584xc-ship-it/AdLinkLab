@@ -63,6 +63,7 @@ import {
   adBandOf,
   calcBrandAdCounts,
   deriveAdTrend,
+  previewBrandAdCounts,
   type AdBand,
   type AdTrend,
 } from "../services/brand-ad-count.js";
@@ -75,6 +76,7 @@ import {
 import {
   recordPaidDataUsage,
   requirePaidDataAccess,
+  resolvePaidDataAccess,
 } from "../services/paid-data-gateway.js";
 import { countryCodeFromMarketPlace } from "../networks/yeahpromos-adapter.js";
 import {
@@ -1838,9 +1840,19 @@ export async function registerCatalogRoutes(
     }
   );
 
+  // 广告数计算范围：all = 全部品牌组；alive = 只算活口径组（整组判死的跳过）。
+  // 缺省 all；非法值 400（calc 与 preview 共用同一校验口径）。
+  function parseCalcScope(raw: unknown): "all" | "alive" {
+    if (raw === undefined || raw === null || raw === "") return "all";
+    if (raw === "all" || raw === "alive") return raw;
+    throw new ValidationError("scope 非法（all/alive）");
+  }
+
   // 广告投放数量计算（按品牌+国家查 DataForSEO SERP，14 天缓存增量）。
   // ids 缺省/空 = 该 tenant 全部商品增量；凭证未配置 → 明确报错不静默。
-  app.post<{ Body: { ids?: unknown } }>(
+  // force=true 忽略缓存强制重算（前端须先走 preview 确认）；scope=alive
+  // 跳过整组判死的品牌组。两者默认关，口径与历史行为一致。
+  app.post<{ Body: { ids?: unknown; force?: unknown; scope?: unknown } }>(
     "/api/v1/catalog/products/calc-ad-count",
     async (request) => {
       const info = await requireSession(deps, request);
@@ -1849,6 +1861,8 @@ export async function registerCatalogRoutes(
       if (Array.isArray(rawIds) && rawIds.length > 0) {
         productIds = asIdArray(rawIds, "ids");
       }
+      const force = request.body?.force === true;
+      const scope = parseCalcScope(request.body?.scope);
       // 付费数据网关：广告数计算是 DataForSEO 计费调用，统一走网关
       // （站长直通 / 租户自备 key / 平台 key + paid-data 授权）。
       const access = await requirePaidDataAccess(prisma, {
@@ -1861,6 +1875,8 @@ export async function registerCatalogRoutes(
       try {
         result = await calcBrandAdCounts(prisma, info.tenantId, productIds, {
           credentials: access.credentials ?? undefined,
+          force,
+          aliveOnly: scope === "alive",
         });
       } catch (e) {
         if (
@@ -1889,8 +1905,11 @@ export async function registerCatalogRoutes(
         action: "catalog.calc_ad_count",
         detail: {
           requested: productIds?.length ?? null,
+          force,
+          scope,
           groupsQueried: result.groupsQueried,
           groupsSkippedCache: result.groupsSkippedCache,
+          skippedDeadGroups: result.skippedDeadGroups ?? 0,
           productsUpdated: result.productsUpdated,
           errors: result.errors.length,
         },
@@ -1902,6 +1921,72 @@ export async function registerCatalogRoutes(
           remainingCalls: access.remainingCalls,
         },
       };
+    }
+  );
+
+  // 广告数计算的只读预估（提交付费计算前的确认数字）：只读本地库，
+  // 不调 DataForSEO、不记用量；附带网关判定（只判不记）供确认框展示
+  // 计费路径与可用性。allowed=false 时前端禁用确认按钮。
+  app.post<{ Body: { scope?: unknown } }>(
+    "/api/v1/catalog/products/calc-ad-count/preview",
+    async (request) => {
+      const info = await requireSession(deps, request);
+      const scope = parseCalcScope(request.body?.scope);
+      const resolution = await resolvePaidDataAccess(prisma, {
+        tenantId: info.tenantId,
+        userId: info.id,
+        userRole: info.role,
+        feature: "catalog-ad-count",
+      });
+      const preview = await previewBrandAdCounts(prisma, info.tenantId, {
+        aliveOnly: scope === "alive",
+      });
+      return {
+        allowed: resolution.allowed,
+        keySource: resolution.allowed ? resolution.keySource : null,
+        ...preview,
+      };
+    }
+  );
+
+  // 按新增（入库）日期取商品 id（纯选择辅助，不触发任何计算/筛选）：
+  // 前端按本地时区把某天换算成 [from, to) 的 UTC ISO 区间传来，服务端
+  // 不做时区换算，只按 createdAt ∈ [from, to) 查本租户商品 id。
+  app.post<{ Body: { from?: unknown; to?: unknown; networkId?: unknown } }>(
+    "/api/v1/catalog/products/added-ids",
+    async (request) => {
+      const info = await requireSession(deps, request);
+      const fromRaw = request.body?.from;
+      const toRaw = request.body?.to;
+      const from =
+        typeof fromRaw === "string" ? new Date(fromRaw) : new Date(NaN);
+      const to = typeof toRaw === "string" ? new Date(toRaw) : new Date(NaN);
+      if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+        throw new ValidationError("from/to 必须是可解析的 ISO 时间戳");
+      }
+      if (!(from.getTime() < to.getTime())) {
+        throw new ValidationError("from 必须早于 to");
+      }
+      if (to.getTime() - from.getTime() > 366 * 24 * 3600 * 1000) {
+        throw new ValidationError("日期范围跨度不能超过 366 天");
+      }
+      const where: Record<string, unknown> = {
+        tenantId: info.tenantId,
+        createdAt: { gte: from, lt: to },
+      };
+      if (typeof request.body?.networkId === "string" && request.body.networkId) {
+        where.networkId = assertId(request.body.networkId, "networkId");
+      }
+      const ADDED_IDS_CAP = 1000;
+      const total = await prisma.networkProduct.count({ where });
+      const rows = (await prisma.networkProduct.findMany({
+        where,
+        select: { id: true },
+        orderBy: { createdAt: "asc" },
+        take: ADDED_IDS_CAP,
+      })) as Array<{ id: string }>;
+      const ids = rows.map((r) => r.id);
+      return { ids, total, truncated: total > ids.length };
     }
   );
 
