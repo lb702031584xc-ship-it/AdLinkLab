@@ -419,7 +419,7 @@ export function CatalogBrandView({
                     <span>
                       {p.brandProducts}{" "}
                       <span className="font-medium text-ink tabular-nums">
-                        {b.productCount}
+                        {b.productCount} {p.brandCountUnit}
                       </span>
                     </span>
                     <span>
@@ -443,7 +443,7 @@ export function CatalogBrandView({
                     <span>
                       {p.brandGe80}{" "}
                       <span className="font-medium text-ink tabular-nums">
-                        {b.ge80Count}
+                        {b.ge80Count} {p.brandCountUnit}
                       </span>
                     </span>
                     <span className="inline-flex items-center">

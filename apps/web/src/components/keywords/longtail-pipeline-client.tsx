@@ -5,7 +5,9 @@
  * ① 扩词（Labs Related Keywords 实测）→ ② 多轮筛选（本地量/竞争过滤 +
  *    幸存词意图过滤）→ ③ 人工勾选 → ④ 广告测算（估算 CPC/页首出价，仅展示）
  *    → ⑤ 导入投放（复用既有 research→launch 导入路径）。
- * 每步都显示数字状态：已扩 X 条 / 筛后 Y 条 / 已勾 Z 条。
+ * 每步都显示数字状态：已扩 X 条 / 通过 Y 条（被过滤 K 条）/ 已勾 Z 条。
+ * 筛选是标记不是删除：全量候选常驻，被过滤的词折叠可展开、可人工勾选
+ * 保留；改参数重跑筛选、或重跑扩词（缓存命中同一批），都不清空已有勾选。
  * 测算结果硬隔离：不写入任何出价字段，出价唯一来源是投流页盈利测算。
  */
 import { useEffect, useMemo, useState } from "react";
@@ -22,8 +24,19 @@ import {
 } from "@/lib/keywords/dataforseo-locations";
 import type { KeywordStarterDict } from "@/i18n/dict/keyword-starter";
 import { PaidDataBillingNote } from "@/components/paid-data/billing-note";
-
-type CompetitionMode = "lowPlusMedium" | "lowOnly" | "all";
+import {
+  applyIntentOutcomes,
+  classifyLocalOutcomes,
+  competitionLevelOf,
+  countLocalSurvivors,
+  countOutcome,
+  hasModelToken,
+  isOwnedUserRisk,
+  keepSelectionWithin,
+  modelFirstStable,
+  type CompetitionMode,
+  type FilterOutcome,
+} from "./keyword-marks";
 
 /** 候选行 = 扩词候选 + 意图过滤后附加的意图标签。 */
 interface PipelineCandidate extends DfsCandidate {
@@ -47,30 +60,6 @@ function fmtNum(v: number | null): string {
 
 function fmtMoney(v: number | null): string {
   return v === null ? "—" : `$${v.toFixed(2)}`;
-}
-
-/** 竞争等级：优先响应原文 competition_level，缺失时按 0–1 数值分档；未知 → null（不拦）。 */
-function competitionLevelOf(c: DfsCandidate): "LOW" | "MEDIUM" | "HIGH" | null {
-  const raw = c.competitionLevel?.toUpperCase();
-  if (raw === "LOW" || raw === "MEDIUM" || raw === "HIGH") return raw;
-  if (c.competition === null) return null;
-  if (c.competition <= 0.33) return "LOW";
-  if (c.competition <= 0.66) return "MEDIUM";
-  return "HIGH";
-}
-
-function passesCompetition(c: DfsCandidate, mode: CompetitionMode): boolean {
-  if (mode === "all") return true;
-  const level = competitionLevelOf(c);
-  if (level === null) return true; // 未知不误杀
-  if (mode === "lowOnly") return level === "LOW";
-  return level === "LOW" || level === "MEDIUM";
-}
-
-function passesVolume(c: DfsCandidate, minVolume: number): boolean {
-  if (minVolume <= 0) return true;
-  if (c.searchVolume === null) return true; // 未知不误杀
-  return c.searchVolume >= minVolume;
 }
 
 export function LongtailPipelineClient({
@@ -102,9 +91,12 @@ export function LongtailPipelineClient({
   const [intentOn, setIntentOn] = useState(true);
   const [filtering, setFiltering] = useState(false);
   const [filterError, setFilterError] = useState<string | null>(null);
-  const [filtered, setFiltered] = useState<PipelineCandidate[] | null>(null);
-  const [localSurvivors, setLocalSurvivors] = useState<number | null>(null);
+  /** 筛选标记：小写词 → outcome；null = 还没筛过。candidates 始终是全量。 */
+  const [outcomes, setOutcomes] = useState<Map<string, FilterOutcome> | null>(
+    null
+  );
   const [intentUnverified, setIntentUnverified] = useState(false);
+  const [showFiltered, setShowFiltered] = useState(false);
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
@@ -126,13 +118,32 @@ export function LongtailPipelineClient({
   const languageCode =
     language === "auto" ? location.defaultLanguage : language;
 
-  const visibleRows = filtered ?? candidates;
+  const outcomeOf = (keyword: string): FilterOutcome | null =>
+    outcomes ? (outcomes.get(keyword.toLowerCase()) ?? "pass") : null;
+
+  const passCount = outcomes ? countOutcome(outcomes, "pass") : 0;
+  const outCount =
+    outcomes && candidates ? candidates.length - passCount : 0;
+  const localSurvivorCount = outcomes ? countLocalSurvivors(outcomes) : 0;
+
+  /** 展示序：pass 组与被过滤组各自内部，含型号特征的行稳定前置。 */
+  const allRows = candidates ?? [];
+  const passRows = outcomes
+    ? allRows.filter((c) => outcomeOf(c.keyword) === "pass")
+    : allRows;
+  const outRows = outcomes
+    ? allRows.filter((c) => outcomeOf(c.keyword) !== "pass")
+    : [];
+  const displayPass = modelFirstStable(passRows);
+  const displayOut = modelFirstStable(outRows);
+
+  /** 已勾选词（含人工保留的被过滤词），按候选原序。 */
   const pickedWords = useMemo(() => {
-    if (!filtered) return [];
-    return filtered
+    if (!candidates) return [];
+    return candidates
       .filter((c) => selected.has(c.keyword.toLowerCase()))
       .map((c) => c.keyword);
-  }, [filtered, selected]);
+  }, [candidates, selected]);
 
   async function doExpand() {
     const s = seed.trim();
@@ -150,15 +161,23 @@ export function LongtailPipelineClient({
         setExpandError(res.error);
         return;
       }
-      setCandidates(
-        res.data.candidates.map((c) => ({ ...c, intent: null }))
-      );
+      const nextCandidates = res.data.candidates.map((c) => ({
+        ...c,
+        intent: null,
+      }));
+      setCandidates(nextCandidates);
       setCached(res.data.cached);
-      // 换了一批候选：下游状态全部作废，避免拿旧筛选/旧测算误导
-      setFiltered(null);
-      setLocalSurvivors(null);
+      // 换了一批候选：筛选标记与测算作废（口径对不上新批次）；
+      // 但勾选只按"词还在不在新批次"保留，不整表清空。
+      setOutcomes(null);
       setIntentUnverified(false);
-      setSelected(new Set());
+      setShowFiltered(false);
+      setSelected((prev) =>
+        keepSelectionWithin(
+          prev,
+          nextCandidates.map((c) => c.keyword)
+        )
+      );
       setMeasure(null);
       setMeasureError(null);
     } finally {
@@ -172,15 +191,23 @@ export function LongtailPipelineClient({
     setFilterError(null);
     try {
       const minVolume = parseBoundedInt(minVolumeRaw, 100, 0, 100_000_000);
-      const local = candidates.filter(
-        (c) => passesVolume(c, minVolume) && passesCompetition(c, compMode)
-      );
-      setLocalSurvivors(local.length);
-      let survivors = local;
+      let next = classifyLocalOutcomes(candidates, {
+        minVolume,
+        competitionMode: compMode,
+      });
       let unverified = false;
-      if (intentOn && local.length > 0) {
+      // 先清上一轮的意图标签，避免旧标签挂在新口径的行上误导
+      let nextCandidates: PipelineCandidate[] = candidates.map((c) => ({
+        ...c,
+        intent: null,
+      }));
+      const localKeys = new Set<string>();
+      for (const [k, o] of next) if (o === "pass") localKeys.add(k);
+      if (intentOn && localKeys.size > 0) {
         const res = await intentFilterAction({
-          keywords: local.map((c) => c.keyword),
+          keywords: candidates
+            .filter((c) => localKeys.has(c.keyword.toLowerCase()))
+            .map((c) => c.keyword),
           locationCode,
           languageCode,
         });
@@ -188,28 +215,26 @@ export function LongtailPipelineClient({
           const byKey = new Map(
             res.data.results.map((r) => [r.keyword.toLowerCase(), r.intent])
           );
-          survivors = local
-            .map((c) => ({
-              ...c,
-              intent: byKey.get(c.keyword.toLowerCase()) ?? null,
-            }))
-            .filter((c) => {
-              // 意图明确非购买向才剔除；意图未知（null）保留，不丢词
-              if (c.intent === null) {
-                unverified = true;
-                return true;
-              }
-              return c.intent === "commercial" || c.intent === "transactional";
-            });
+          nextCandidates = nextCandidates.map((c) => {
+            const k = c.keyword.toLowerCase();
+            return localKeys.has(k)
+              ? { ...c, intent: byKey.get(k) ?? null }
+              : c;
+          });
+          const applied = applyIntentOutcomes(next, byKey);
+          next = applied.outcomes;
+          unverified = applied.hasUnverified;
         } else {
-          // fail-soft：意图没验成，保留全部本地幸存词并标注未验证
+          // fail-soft：意图没验成，本地幸存词全部保留并标注未验证
           unverified = true;
           if (!res.ok) setFilterError(res.error);
         }
       }
+      setCandidates(nextCandidates);
+      setOutcomes(next);
       setIntentUnverified(unverified);
-      setFiltered(survivors);
-      setSelected(new Set());
+      // 不清勾选：改参数重跑筛选，已勾的词（含人工保留）继续算数；
+      // 只有测算结果作废（口径变了，旧测算不能冒充新结论）。
       setMeasure(null);
       setMeasureError(null);
     } finally {
@@ -248,10 +273,84 @@ export function LongtailPipelineClient({
     });
   }
 
+  /** 全选通过词：疑似已购用户词排除（这类词勾了也是给已购用户烧钱）。 */
+  function selectAllPass() {
+    setSelected(
+      new Set(
+        passRows
+          .filter((c) => !isOwnedUserRisk(c.keyword))
+          .map((c) => c.keyword.toLowerCase())
+      )
+    );
+  }
+
   const inputCls =
     "rounded-lg border border-ink/15 bg-white px-3 py-1.5 text-sm outline-none focus:border-signal";
   const labelCls = "text-xs font-medium text-ink/60";
   const hintCls = "text-[11px] leading-snug text-ink/45";
+  const badgeCls =
+    "ml-1.5 inline-block rounded-full px-1.5 py-px align-middle text-[10px] font-medium";
+
+  function renderRow(c: PipelineCandidate) {
+    const level = competitionLevelOf(c);
+    const key = c.keyword.toLowerCase();
+    const outcome = outcomeOf(c.keyword);
+    const isOut = outcome !== null && outcome !== "pass";
+    const risk = isOwnedUserRisk(c.keyword);
+    const model = hasModelToken(c.keyword);
+    const kept = isOut && selected.has(key);
+    return (
+      <tr
+        key={key}
+        className={`border-b border-ink/5 ${isOut ? "opacity-55" : ""}`}
+      >
+        {outcomes && (
+          <td className="py-1.5 pr-2">
+            <input
+              type="checkbox"
+              checked={selected.has(key)}
+              onChange={() => togglePick(c.keyword)}
+              className="h-4 w-4 accent-[#2563eb]"
+            />
+          </td>
+        )}
+        <td className="py-1.5 pr-2 text-ink/85">
+          {c.keyword}
+          {isOut && (
+            <span className={`${badgeCls} bg-ink/10 text-ink/60`}>
+              {t.outcomeReasons[outcome as keyof typeof t.outcomeReasons]}
+            </span>
+          )}
+          {risk && (
+            <span className={`${badgeCls} bg-amber-100 text-amber-700`}>
+              {t.ownedRiskBadge}
+            </span>
+          )}
+          {model && (
+            <span className={`${badgeCls} bg-sky-100 text-sky-700`}>
+              {t.modelBadge}
+            </span>
+          )}
+          {kept && (
+            <span className={`${badgeCls} bg-emerald-100 text-emerald-700`}>
+              {t.keptBadge}
+            </span>
+          )}
+        </td>
+        <td className="py-1.5 pr-2 text-ink/70">{fmtNum(c.searchVolume)}</td>
+        <td className="py-1.5 pr-2 text-ink/70">{fmtMoney(c.cpc)}</td>
+        <td className="py-1.5 pr-2 text-ink/70">
+          {level ? t.competitionLevels[level] : "—"}
+        </td>
+        <td className="py-1.5 text-ink/70">
+          {c.intent
+            ? (t.intentLabels[c.intent as keyof typeof t.intentLabels] ??
+              c.intent)
+            : "—"}
+        </td>
+      </tr>
+    );
+  }
 
   return (
     <section className="mt-6 rounded-xl border border-ink/10 bg-white p-4">
@@ -275,13 +374,14 @@ export function LongtailPipelineClient({
                   candidates &&
                   t.expandedLine.replace("{n}", String(candidates.length))}
                 {step === "filter" &&
-                  filtered &&
+                  outcomes &&
                   candidates &&
                   t.filterLine
                     .replace("{x}", String(candidates.length))
-                    .replace("{y}", String(filtered.length))}
+                    .replace("{y}", String(passCount))
+                    .replace("{k}", String(outCount))}
                 {step === "pick" &&
-                  filtered &&
+                  outcomes &&
                   t.pickLine.replace("{n}", String(pickedWords.length))}
                 {step === "measure" &&
                   measure &&
@@ -358,6 +458,9 @@ export function LongtailPipelineClient({
           {expanding ? t.expanding : `🔍 ${t.expandBtn}`}
         </button>
       </div>
+      <p className="mt-2 text-[11px] leading-snug text-ink/45">
+        {t.expandCacheNote}
+      </p>
       {expandError && (
         <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
           {expandError}
@@ -425,41 +528,39 @@ export function LongtailPipelineClient({
               {filterError}
             </p>
           )}
-          {filtered && (
+          {outcomes && candidates && (
             <p className="mt-2 text-sm font-medium text-ink/70">
               {t.filterLine
                 .replace("{x}", String(candidates.length))
-                .replace("{y}", String(filtered.length))}
-              {localSurvivors !== null && intentOn && (
+                .replace("{y}", String(passCount))
+                .replace("{k}", String(outCount))}
+              {intentOn && (
                 <span className="ml-2 text-xs text-ink/50">
                   {t.filterStageLine
-                    .replace("{a}", String(localSurvivors))
-                    .replace("{b}", String(filtered.length))}
+                    .replace("{a}", String(localSurvivorCount))
+                    .replace("{b}", String(passCount))}
                 </span>
               )}
             </p>
           )}
-          {filtered && intentUnverified && (
+          {outcomes && intentUnverified && (
             <p className="mt-1 text-xs text-amber-600">⚠️ {t.intentUnverified}</p>
           )}
         </div>
       )}
 
-      {/* 候选表：筛选前只读预览；筛选后可勾选（第 ③ 步） */}
-      {visibleRows && visibleRows.length > 0 ? (
+      {/* 候选表：筛选前只读预览（含标记）；筛选后可勾选（第 ③ 步），
+          被过滤的词折叠在开关下、展开后同样可勾选（人工保留） */}
+      {candidates && candidates.length > 0 ? (
         <div className="mt-4 overflow-x-auto">
-          {filtered && (
+          {outcomes && (
             <div className="mb-2 flex flex-wrap items-center gap-2 text-sm">
               <span className="font-semibold text-ink">
                 {t.pickLine.replace("{n}", String(pickedWords.length))}
               </span>
               <button
                 type="button"
-                onClick={() =>
-                  setSelected(
-                    new Set(filtered.map((c) => c.keyword.toLowerCase()))
-                  )
-                }
+                onClick={selectAllPass}
                 className="rounded-lg border border-ink/15 px-2.5 py-1 text-xs text-ink/70 hover:bg-ink/5"
               >
                 {t.selectAll}
@@ -471,15 +572,29 @@ export function LongtailPipelineClient({
               >
                 {t.selectNone}
               </button>
+              {outCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowFiltered((v) => !v)}
+                  className="rounded-lg border border-ink/15 px-2.5 py-1 text-xs text-ink/70 hover:bg-ink/5"
+                >
+                  {showFiltered
+                    ? t.hideFiltered
+                    : t.showFiltered.replace("{k}", String(outCount))}
+                </button>
+              )}
             </div>
           )}
-          {!filtered && (
+          {!outcomes && (
             <p className="mb-2 text-xs text-ink/45">{t.needFilterFirst}</p>
           )}
+          <p className="mb-2 text-[11px] leading-snug text-ink/45">
+            {t.marksNote}
+          </p>
           <table className="w-full min-w-[560px] text-left text-sm">
             <thead>
               <tr className="border-b border-ink/10 text-xs text-ink/50">
-                {filtered && <th className="py-1.5 pr-2 font-medium">✓</th>}
+                {outcomes && <th className="py-1.5 pr-2 font-medium">✓</th>}
                 <th className="py-1.5 pr-2 font-medium">{d.thKeyword}</th>
                 <th className="py-1.5 pr-2 font-medium">{d.thVolume}</th>
                 <th className="py-1.5 pr-2 font-medium">{t.thCpc}</th>
@@ -488,39 +603,10 @@ export function LongtailPipelineClient({
               </tr>
             </thead>
             <tbody>
-              {visibleRows.map((c) => {
-                const level = competitionLevelOf(c);
-                const key = c.keyword.toLowerCase();
-                return (
-                  <tr key={key} className="border-b border-ink/5">
-                    {filtered && (
-                      <td className="py-1.5 pr-2">
-                        <input
-                          type="checkbox"
-                          checked={selected.has(key)}
-                          onChange={() => togglePick(c.keyword)}
-                          className="h-4 w-4 accent-[#2563eb]"
-                        />
-                      </td>
-                    )}
-                    <td className="py-1.5 pr-2 text-ink/85">{c.keyword}</td>
-                    <td className="py-1.5 pr-2 text-ink/70">
-                      {fmtNum(c.searchVolume)}
-                    </td>
-                    <td className="py-1.5 pr-2 text-ink/70">{fmtMoney(c.cpc)}</td>
-                    <td className="py-1.5 pr-2 text-ink/70">
-                      {level ? t.competitionLevels[level] : "—"}
-                    </td>
-                    <td className="py-1.5 text-ink/70">
-                      {c.intent
-                        ? (t.intentLabels[
-                            c.intent as keyof typeof t.intentLabels
-                          ] ?? c.intent)
-                        : "—"}
-                    </td>
-                  </tr>
-                );
-              })}
+              {displayPass.map((c) => renderRow(c))}
+              {outcomes &&
+                showFiltered &&
+                displayOut.map((c) => renderRow(c))}
             </tbody>
           </table>
         </div>
@@ -531,7 +617,7 @@ export function LongtailPipelineClient({
       )}
 
       {/* ④ 广告测算（人工勾选门：未勾选禁用） */}
-      {filtered && (
+      {outcomes && (
         <div className="mt-4 rounded-xl border border-ink/10 bg-ink/[0.02] p-3">
           <div className="flex flex-wrap items-end gap-3">
             <label className="flex w-40 flex-col gap-1">

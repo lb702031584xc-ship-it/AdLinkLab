@@ -12,9 +12,16 @@
  *   - return_performance_bonus: 1 = include bonus tiers
  * Response: { status: { code: 0 }, data: { list: [...], has_more: bool } }
  *
+ * Second catalog source (pullDatafeedOffers): Datafeed generic list
+ *   POST {base}/api.php?mod=datafeed&op=list （文档口径；REST 风格同名路径作候选）
+ *   - brand_type: DTC / Walmart（本批只取这两类）、limit（每页最大 100）、page
+ *   - 返回 data 为商品数组（字段：name/brand/merchant_name/sku/price/
+ *     tracking_url[_short|_smart]…），文档字段表无佣金字段 → 佣金未知（null）。
+ *
  * Link generation: POST /api/datafeed/get_amazon_link_by_asin
  *   - asins (max 50, comma-separated), country_code, return_partnerboost_link
  */
+import { createHash } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { isBlockedIp } from "../ai/fetch-page.js";
 import type {
@@ -29,6 +36,16 @@ export const PARTNERBOOST_PAGE_SIZE = 50;
 export const PARTNERBOOST_MAX_PAGES = 20;
 export const PARTNERBOOST_DEFAULT_TIMEOUT_MS = 15_000;
 export const PARTNERBOOST_DEFAULT_COUNTRY = "US";
+
+/** Datafeed 通用 list：每页条数（文档上限 100）。 */
+export const PARTNERBOOST_DATAFEED_PAGE_LIMIT = 100;
+/** Datafeed 通用 list：单 brand_type 分页硬顶（100/页 × 200 页 = 2 万件/类）。 */
+export const PARTNERBOOST_DATAFEED_MAX_PAGES = 200;
+/**
+ * 本批抓取的 brand_type：DTC（品牌独立站）+ Walmart。
+ * TikTok 不取：短视频电商的落地/归因形态与现有商品模型不同，另行评估。
+ */
+export const PARTNERBOOST_DATAFEED_BRAND_TYPES = ["DTC", "Walmart"] as const;
 
 /**
  * Endpoint candidates: docs list the `/api/datafeed/...` REST paths, but
@@ -165,6 +182,144 @@ interface PartnerBoostListResponse {
   data?: {
     list?: PartnerBoostProduct[];
     has_more?: boolean;
+  };
+}
+
+/**
+ * Datafeed 通用 list（op=list）单品。字段以 PB 官方文档字段表为准；
+ * commission / commission_rate 不在文档字段表内，仅作防御式可选键
+ * （真实响应若带了就映射，没带 → 佣金未知 null，绝不编造）。
+ */
+interface PartnerBoostDatafeedProduct {
+  name?: string;
+  description?: string;
+  brand_id?: number | string;
+  mcid?: string;
+  merchant_name?: string;
+  url?: string;
+  image?: string;
+  sku?: string;
+  category?: string;
+  price?: string | number;
+  currency?: string;
+  old_price?: string | number;
+  brand?: string;
+  availability?: string;
+  gtin?: string;
+  mpn?: string;
+  custom1?: string;
+  custom2?: string;
+  custom3?: string;
+  creative_id?: number | string;
+  tracking_url?: string;
+  tracking_url_short?: string;
+  tracking_url_smart?: string;
+  updated_at?: number | string;
+  commission?: unknown;
+  commission_rate?: unknown;
+}
+
+interface PartnerBoostDatafeedListResponse {
+  status?: { code?: number; msg?: string };
+  /** 文档口径：data 直接是商品数组；个别账号可能包一层 { list }，防御式兼容。 */
+  data?: PartnerBoostDatafeedProduct[] | { list?: PartnerBoostDatafeedProduct[] };
+}
+
+export interface PartnerBoostDatafeedPullOpts {
+  /** 按品牌 ID 过滤（与 FBA 按商家同步同一 brandId；仅指定时发送）。 */
+  brandId?: number | string;
+  /** 抓取的 brand_type 列表（默认 DTC + Walmart）。 */
+  brandTypes?: readonly string[];
+  /** 每页条数（默认 100 = 文档上限）。 */
+  limit?: number;
+  /** 单 brand_type 分页硬顶（默认 200 页）。 */
+  maxPages?: number;
+  /**
+   * 单个 brand_type 抓取失败时的回调（给定时不中断其他 brand_type；
+   * 不给定时第一个失败直接抛错，与 pullOffers 口径一致）。
+   */
+  onBrandTypeError?: (brandType: string, message: string) => void;
+}
+
+const nonEmpty = (v: unknown): string =>
+  typeof v === "string" ? v.trim() : v == null ? "" : String(v).trim();
+
+/**
+ * Datafeed 商品的稳定 externalId（跨同步不变、防与 FBA 的 ASIN/product_id 撞键）：
+ * 1. `df:{brand_id}:{sku}`；2. sku 缺失 → `df:{brand_id}:{creative_id}`；
+ * 3. 再缺 → `df:u:{sha256(url) 前 16 位}`（url 为原始商品链接）；
+ * 4. 都没有 → null（无法形成稳定键，适配器跳过该条）。
+ * 注意：同一 brand_id+sku 若同时出现在 DTC 与 Walmart 两类，会映射到同一
+ * externalId（后写覆盖先写）——brand_id 是品牌级标识，此合并可接受。
+ */
+export function datafeedExternalId(p: PartnerBoostDatafeedProduct): string | null {
+  const brandId = nonEmpty(p.brand_id);
+  const sku = nonEmpty(p.sku);
+  if (brandId && sku) return `df:${brandId}:${sku}`;
+  const creativeId = nonEmpty(p.creative_id);
+  if (brandId && creativeId) return `df:${brandId}:${creativeId}`;
+  const url = nonEmpty(p.url);
+  if (url) {
+    const hash = createHash("sha256").update(url).digest("hex").slice(0, 16);
+    return `df:u:${hash}`;
+  }
+  return null;
+}
+
+/** Datafeed 单品 → NetworkOffer；无法形成稳定 externalId → null（跳过）。 */
+function mapDatafeedProduct(
+  p: PartnerBoostDatafeedProduct,
+  brandType: string
+): NetworkOffer | null {
+  const externalId = datafeedExternalId(p);
+  if (!externalId) return null;
+  const brand = nonEmpty(p.brand) || nonEmpty(p.merchant_name) || null;
+  // 推广链接优先 smart（与 FBA 的 partnerboost_link 口径一致），其次
+  // tracking_url、tracking_url_short，最后原始商品链接。
+  const promoUrl =
+    nonEmpty(p.tracking_url_smart) ||
+    nonEmpty(p.tracking_url) ||
+    nonEmpty(p.tracking_url_short) ||
+    nonEmpty(p.url) ||
+    null;
+  // 落地页类型按原始商品链接判（DTC 品牌站/Walmart 商品页都非 Amazon 格式
+  // → dtc）；原始链接缺失时退推广链接判。
+  const landingSource = nonEmpty(p.url) || promoUrl;
+  // 佣金：文档字段表没有佣金字段。防御式——真实响应若带 commission/
+  // commission_rate 才按 FBA 同口径解析为百分比；没有 → null（未知）。
+  const rawCommission = p.commission ?? p.commission_rate ?? null;
+  const commissionPct =
+    rawCommission == null ? null : parseCommission(rawCommission);
+  return {
+    externalId,
+    name: nonEmpty(p.name) || nonEmpty(p.sku) || "Unknown product",
+    payout: commissionPct,
+    currency: commissionPct != null ? "%" : null,
+    termsText: [
+      brand ? `Brand: ${brand}` : null,
+      p.merchant_name ? `Merchant: ${p.merchant_name}` : null,
+      p.category ? `Category: ${p.category}` : null,
+      p.availability ? `Availability: ${p.availability}` : null,
+    ]
+      .filter(Boolean)
+      .join(" | "),
+    url: promoUrl,
+    // list 接口不给国家：置 null，下游有既有回填/未知口径，不猜。
+    countryCode: null,
+    landingPageType: deriveLandingPageType(landingSource),
+    brand,
+    // DTO 的 asin 字段口径为「ASIN / SKU」：datafeed 无 ASIN，用 sku。
+    asin: nonEmpty(p.sku) || null,
+    price: parsePrice(p.price),
+    priceCurrency: nonEmpty(p.currency) || null,
+    reviewCount: null,
+    rawData: {
+      ...(p as unknown as Record<string, unknown>),
+      // brand_type 是请求参数（响应不带），注入 rawData 供分来源计数/溯源；
+      // brand_id/mcid/merchant_name/gtin/mpn/availability 等随原始对象一并保留。
+      brand_type: brandType,
+      source_feed: "datafeed_list",
+    },
   };
 }
 
@@ -328,6 +483,90 @@ export class PartnerBoostAdapter implements NetworkAdapter {
       page += 1;
     }
 
+    return offers;
+  }
+
+  /**
+   * Second catalog source: Datafeed 通用 list（op=list），按 brand_type 分别
+   * 分页拉全（DTC + Walmart）。与 FBA 的 get_fba_products 互补：FBA 只有
+   * 亚马逊商品，DTC 品牌独立站 / Walmart 商品只在这个口出。
+   *
+   * 文档要点：必填 token；limit 每页最大 100；返回 data 为商品数组；
+   * 字段表无佣金 → payout 恒为 null（防御式映射见 mapDatafeedProduct）。
+   * list 接口不给国家 → countryCode 恒 null（下游既有未知口径，不猜）。
+   */
+  async pullDatafeedOffers(
+    ctx: AdapterContext,
+    opts: PartnerBoostDatafeedPullOpts = {}
+  ): Promise<NetworkOffer[]> {
+    const token = ctx.apiKey.trim();
+    if (!token) {
+      throw new NetworkAdapterError(
+        "BAD_CREDENTIALS",
+        "PartnerBoost Channel API token is required"
+      );
+    }
+    const baseUrl = (ctx.apiBaseUrl || PARTNERBOOST_DEFAULT_BASE_URL).replace(
+      /\/$/,
+      ""
+    );
+    const ssrfCheck = ctx.ssrfCheck ?? assertApiUrlSafe;
+    await ssrfCheck(`${baseUrl}/api/datafeed/list`);
+
+    const fetchImpl = ctx.fetchImpl ?? fetch;
+    const timeoutMs = ctx.timeoutMs ?? PARTNERBOOST_DEFAULT_TIMEOUT_MS;
+    const limit = opts.limit ?? PARTNERBOOST_DATAFEED_PAGE_LIMIT;
+    const maxPages = opts.maxPages ?? PARTNERBOOST_DATAFEED_MAX_PAGES;
+    const brandTypes = opts.brandTypes ?? PARTNERBOOST_DATAFEED_BRAND_TYPES;
+
+    const offers: NetworkOffer[] = [];
+    for (const brandType of brandTypes) {
+      try {
+        let page = 1;
+        for (;;) {
+          // 同 FBA：只发文档明确列出的参数（token/brand_type/limit/page，
+          // brand_id 仅按商家同步时发），不多发可选字段。
+          const body: Record<string, unknown> = {
+            token,
+            brand_type: brandType,
+            limit,
+            page,
+            ...(opts.brandId != null && String(opts.brandId).trim() !== ""
+              ? { brand_id: opts.brandId }
+              : {}),
+          };
+          const { json } = await postWithFallback(
+            endpointCandidates(baseUrl, "/api/datafeed/list"),
+            body,
+            fetchImpl,
+            timeoutMs
+          );
+          const listRes = json as PartnerBoostDatafeedListResponse;
+          if (listRes.status?.code !== 0) {
+            throw new NetworkAdapterError(
+              "API_ERROR",
+              `PartnerBoost API error: ${listRes.status?.msg ?? "unknown"}`
+            );
+          }
+          const list = Array.isArray(listRes.data)
+            ? listRes.data
+            : (listRes.data?.list ?? []);
+          for (const p of list) {
+            const mapped = mapDatafeedProduct(p, brandType);
+            if (mapped) offers.push(mapped);
+          }
+          // 返回条数 < 每页上限 = 最后一页；硬顶防上游异常死循环。
+          if (list.length < limit || page >= maxPages) break;
+          page += 1;
+        }
+      } catch (error) {
+        if (!opts.onBrandTypeError) throw error;
+        opts.onBrandTypeError(
+          brandType,
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+    }
     return offers;
   }
 

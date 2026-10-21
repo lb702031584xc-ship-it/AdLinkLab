@@ -83,6 +83,17 @@ import Link from "next/link";
 
 type Dict = typeof catalogZh;
 
+/** 一键筛选淘汰总数：报告没有现成合计字段，由五道杀的计数相加推导。 */
+function killedTotalOf(r: OneClickScreenReport): number {
+  return (
+    r.killedBlacklist +
+    r.killedCommission +
+    r.killedPreset +
+    r.killedAdCount +
+    r.killedTrafficGate
+  );
+}
+
 const inputCls =
   "w-full rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm text-ink outline-none focus:border-signal";
 const btnPrimary =
@@ -1714,6 +1725,20 @@ export function CatalogClient({
     await reloadProducts(page);
   }
 
+  /** 一键筛选报告「查看被淘汰的」：切到商品视图 + 备选池阶段，并滚动到商品表。 */
+  function onViewKilled() {
+    setViewMode("products");
+    setPoolStageFilter("pool");
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        tableWrapRef.current?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      });
+    });
+  }
+
   async function onBackfill() {
     if (backfilling || !selectedId) return;
     setBackfilling(true);
@@ -2743,6 +2768,9 @@ export function CatalogClient({
                 {funnel.offersCreated ?? "—"}
               </span>
             </p>
+            <p className="mt-1 text-xs text-ink/40">
+              {d.products.funnelScopeNote}
+            </p>
           </div>
         )}
         <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -2930,6 +2958,11 @@ export function CatalogClient({
           />
         ) : (
           <>
+        {poolStageFilter === "pool" && (
+          <p className="mt-3 rounded-lg bg-amber-50 px-4 py-2 text-sm text-amber-900">
+            {d.products.poolStageBanner}
+          </p>
+        )}
         <p className="mt-3 text-xs text-ink/40">{d.products.dragHint}</p>
         <div
           ref={tableWrapRef}
@@ -3679,6 +3712,16 @@ export function CatalogClient({
                 .replace("{s}", String(screenReport.offersSkippedExisting))
                 .replace("{f}", String(screenReport.offersFailed.length))}
             </p>
+            {killedTotalOf(screenReport) > 0 && (
+              <p className="mt-2">
+                <button className={btnGhost} onClick={onViewKilled}>
+                  {d.products.oneClickViewKilled.replace(
+                    "{n}",
+                    String(killedTotalOf(screenReport))
+                  )}
+                </button>
+              </p>
+            )}
             <p className="mt-1 text-xs text-ink/60">
               {`${d.products.adTierNone} ${screenReport.adTierDistribution.none} · ${d.products.adTierSmall} ${screenReport.adTierDistribution.small} · ${d.products.adTierSweet} ${screenReport.adTierDistribution.sweet} · ${d.products.adTierHot} ${screenReport.adTierDistribution.hot} · ${d.products.adTierRedOcean} ${screenReport.adTierDistribution.red_ocean}`}
             </p>

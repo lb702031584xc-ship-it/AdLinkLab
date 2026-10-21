@@ -90,6 +90,8 @@ export interface KeywordStarterDict {
     expanding: string;
     expandedLine: string;
     cachedNote: string;
+    /** 扩词缓存说明（14 天内同种子重跑免费）。 */
+    expandCacheNote: string;
     filterTitle: string;
     minVolumeLabel: string;
     minVolumeHint: string;
@@ -104,6 +106,19 @@ export interface KeywordStarterDict {
     pickLine: string;
     selectAll: string;
     selectNone: string;
+    /** 被过滤词展开/收起开关。 */
+    showFiltered: string;
+    hideFiltered: string;
+    /** 被过滤原因（按 outcome）。 */
+    outcomeReasons: Record<"out-volume" | "out-competition" | "out-intent", string>;
+    /** 人工勾选了被过滤词的行标记。 */
+    keptBadge: string;
+    /** 已购用户风险标记（启发式）。 */
+    ownedRiskBadge: string;
+    /** 型号特征标记（启发式）。 */
+    modelBadge: string;
+    /** 标记口径说明小字（标明启发式、非事实）。 */
+    marksNote: string;
     thCpc: string;
     thBidRange: string;
     thCompIndex: string;
@@ -284,6 +299,7 @@ export const zh: KeywordStarterDict = {
     expanding: "扩词中…",
     expandedLine: "已扩 {n} 条候选",
     cachedNote: "来自 14 天内缓存，未重复收费",
+    expandCacheNote: "扩词结果在服务器缓存 14 天：同一种子（同国家 / 语言 / 上限）重跑免费，不重复计费。",
     filterTitle: "多轮筛选（本地过滤不花钱；意图过滤只对幸存词调用）",
     minVolumeLabel: "搜索量下限",
     minVolumeHint: "推荐：核心词 1000 / 长尾 100（一刀切 1000 会误杀长尾）；搜索量未知的词不拦",
@@ -292,12 +308,19 @@ export const zh: KeywordStarterDict = {
     intentToggle: "购买意图过滤（只留商业 / 交易意图）",
     filterBtn: "筛选",
     filtering: "筛选中…",
-    filterLine: "筛选：{x} 条 → {y} 条",
+    filterLine: "筛选：{x} 条 → 通过 {y} 条（被过滤 {k} 条）",
     filterStageLine: "本地过滤（搜索量+竞争度）后 {a} 条 → 意图过滤后 {b} 条",
     intentUnverified: "意图未验证：DataForSEO 未能确认意图，已保留全部词（不丢词）",
     pickLine: "已勾 {n} 条",
     selectAll: "全选",
     selectNone: "全不选",
+    showFiltered: "显示被过滤的 {k} 条",
+    hideFiltered: "隐藏被过滤的词",
+    outcomeReasons: { "out-volume": "搜索量低于下限", "out-competition": "竞争度超出上限", "out-intent": "意图非购买向" },
+    keptBadge: "人工保留",
+    ownedRiskBadge: "疑似已购用户",
+    modelBadge: "含型号特征",
+    marksNote: "标记说明（启发式，不是事实）：「含型号特征」= 词里有字母+数字组合（如 s8、q7），通常更接近购买；「疑似已购用户」= 命中 app / 登录 / 支持等词，搜的人多半已经买过。被过滤的词不会消失，展开后可以人工勾选保留。",
     thCpc: "估算 CPC",
     thBidRange: "页首出价区间",
     thCompIndex: "竞争指数",
@@ -483,6 +506,7 @@ export const en: KeywordStarterDict = {
     expanding: "Expanding…",
     expandedLine: "{n} candidates expanded",
     cachedNote: "Served from the 14-day cache — no repeat charge",
+    expandCacheNote: "Expansion results are cached on the server for 14 days: re-running the same seed (same country / language / limit) is free — no repeat charge.",
     filterTitle: "Filter rounds (local filters are free; intent check only calls the API for survivors)",
     minVolumeLabel: "Min. search volume",
     minVolumeHint: "Recommended: 1000 for core terms / 100 for long-tail (a flat 1000 kills long-tail); unknown volume is never blocked",
@@ -491,12 +515,19 @@ export const en: KeywordStarterDict = {
     intentToggle: "Buying-intent filter (keep commercial / transactional only)",
     filterBtn: "Filter",
     filtering: "Filtering…",
-    filterLine: "Filter: {x} → {y}",
+    filterLine: "Filter: {x} → {y} passed ({k} filtered out)",
     filterStageLine: "After local filters (volume + competition): {a} → after intent filter: {b}",
     intentUnverified: "Intent unverified: DataForSEO could not confirm intent — all keywords kept (nothing dropped)",
     pickLine: "{n} picked",
     selectAll: "Select all",
     selectNone: "Clear",
+    showFiltered: "Show {k} filtered out",
+    hideFiltered: "Hide filtered-out keywords",
+    outcomeReasons: { "out-volume": "Below min. volume", "out-competition": "Above competition limit", "out-intent": "Non-buying intent" },
+    keptBadge: "Kept manually",
+    ownedRiskBadge: "Likely existing user",
+    modelBadge: "Model-like token",
+    marksNote: "Marks are heuristics, not facts: “Model-like token” = a letter+digit combo in the word (e.g. s8, q7), usually closer to buying; “Likely existing user” = hits app / login / support type words — the searcher most likely already owns the product. Filtered-out keywords never disappear: expand the list and tick them to keep them manually.",
     thCpc: "Est. CPC",
     thBidRange: "Top-of-page bid range",
     thCompIndex: "Competition index",

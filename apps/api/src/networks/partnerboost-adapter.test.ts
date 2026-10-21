@@ -6,6 +6,7 @@ import {
   PARTNERBOOST_DEFAULT_BASE_URL,
   PartnerBoostAdapter,
   NetworkAdapterError,
+  datafeedExternalId,
 } from "./partnerboost-adapter.js";
 import type { AdapterContext } from "./types.js";
 
@@ -248,5 +249,265 @@ describe("baseUrl normalization", () => {
       "https://app.partnerboost.com/api/datafeed/get_fba_products"
     );
     expect(calls[0]).not.toContain("//api/");
+  });
+});
+
+/* ── Datafeed 通用 list（第二数据源：DTC + Walmart） ── */
+
+function dfProduct(overrides: Record<string, unknown> = {}) {
+  return {
+    name: "Example T-Shirt",
+    description: "Soft tee",
+    brand_id: 66303,
+    mcid: "ulike0",
+    merchant_name: "Ulike Official",
+    url: "https://ulike.example.com/products/tee",
+    image: "https://img.example.com/tee.jpg",
+    sku: "SKU12345",
+    category: "Apparel",
+    price: "29.99",
+    currency: "USD",
+    old_price: "49.99",
+    brand: "Ulike",
+    availability: "in stock",
+    gtin: "0012345678905",
+    mpn: "MPN-1",
+    creative_id: 777,
+    tracking_url: "https://partnerboost.com/track/tee",
+    tracking_url_short: "https://pb.short/tee",
+    tracking_url_smart: "https://partnerboost.com/smart/tee",
+    updated_at: 1760000000,
+    ...overrides,
+  };
+}
+
+function dfResponse(list: unknown[], code = 0, msg = "Success") {
+  // 文档口径：data 直接是商品数组。
+  return { status: { code, msg }, data: list };
+}
+
+type DfHandler = (
+  brandType: string,
+  page: number,
+  body: Record<string, unknown>
+) => unknown;
+
+/** 按请求体 brand_type/page 路由的 mock fetch（只服务 op=list 的 REST 候选）。 */
+function dfFetch(handler: DfHandler) {
+  const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+    const body = JSON.parse((init?.body as string) ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    calls.push({ url, body });
+    return jsonResponse(
+      handler(String(body.brand_type), Number(body.page ?? 1), body)
+    );
+  }) as unknown as typeof fetch;
+  return { fetchImpl, calls };
+}
+
+describe("PartnerBoostAdapter.pullDatafeedOffers", () => {
+  it("fetches DTC + Walmart, paginating until a short page", async () => {
+    const { fetchImpl, calls } = dfFetch((brandType, page) => {
+      if (brandType === "DTC") {
+        return page === 1
+          ? dfResponse([
+              dfProduct({ sku: "D1" }),
+              dfProduct({ sku: "D2", name: "DTC Two" }),
+            ])
+          : dfResponse([dfProduct({ sku: "D3", name: "DTC Three" })]);
+      }
+      return dfResponse([
+        dfProduct({
+          sku: "W1",
+          name: "Walmart One",
+          url: "https://www.walmart.com/ip/W1",
+        }),
+      ]);
+    });
+    const adapter = new PartnerBoostAdapter();
+    const offers = await adapter.pullDatafeedOffers(ctxWith(fetchImpl), {
+      limit: 2,
+    });
+    // DTC 两页（2 + 1，短页终止）+ Walmart 一页（1 < limit 直接终止）
+    expect(offers).toHaveLength(4);
+    expect(calls.map((c) => [c.body.brand_type, c.body.page])).toEqual([
+      ["DTC", 1],
+      ["DTC", 2],
+      ["Walmart", 1],
+    ]);
+    expect(calls[0].body.limit).toBe(2);
+    expect(calls[0].body.token).toBe("test-channel-token");
+    // 第一候选 = REST 风格路径
+    expect(calls[0].url).toBe(
+      "https://app.partnerboost.test/api/datafeed/list"
+    );
+    const byType = (bt: string) =>
+      offers.filter((o) => o.rawData.brand_type === bt);
+    expect(byType("DTC")).toHaveLength(3);
+    expect(byType("Walmart")).toHaveLength(1);
+  });
+
+  it("maps fields: externalId/brand/price/promoUrl priority/rawData provenance", async () => {
+    const { fetchImpl } = dfFetch(() => dfResponse([dfProduct()]));
+    const adapter = new PartnerBoostAdapter();
+    const offers = await adapter.pullDatafeedOffers(ctxWith(fetchImpl), {
+      brandTypes: ["DTC"],
+    });
+    expect(offers).toHaveLength(1);
+    const o = offers[0];
+    expect(o.externalId).toBe("df:66303:SKU12345");
+    expect(o.name).toBe("Example T-Shirt");
+    expect(o.brand).toBe("Ulike");
+    expect(o.price).toBe(29.99);
+    expect(o.priceCurrency).toBe("USD");
+    expect(o.asin).toBe("SKU12345");
+    // promoUrl 优先级：smart > tracking > short > 原始 url
+    expect(o.url).toBe("https://partnerboost.com/smart/tee");
+    // 落地页类型按原始商品链接判：品牌独立站 → dtc
+    expect(o.landingPageType).toBe("dtc");
+    // list 接口无国家/无佣金 → null，不编造
+    expect(o.countryCode).toBeNull();
+    expect(o.payout).toBeNull();
+    expect(o.currency).toBeNull();
+    // rawData 带溯源字段（brand_type 为注入值，其余随原始对象保留）
+    expect(o.rawData.brand_type).toBe("DTC");
+    expect(o.rawData.source_feed).toBe("datafeed_list");
+    expect(o.rawData.mcid).toBe("ulike0");
+    expect(o.rawData.merchant_name).toBe("Ulike Official");
+    expect(o.rawData.gtin).toBe("0012345678905");
+    expect(o.rawData.mpn).toBe("MPN-1");
+    expect(o.rawData.brand_id).toBe(66303);
+    expect(o.rawData.availability).toBe("in stock");
+  });
+
+  it("promoUrl falls back smart → tracking → short → product url", async () => {
+    const { fetchImpl } = dfFetch(() =>
+      dfResponse([
+        dfProduct({ sku: "A", tracking_url_smart: "" }),
+        dfProduct({ sku: "B", tracking_url_smart: "", tracking_url: "" }),
+        dfProduct({
+          sku: "C",
+          tracking_url_smart: "",
+          tracking_url: "",
+          tracking_url_short: "",
+        }),
+      ])
+    );
+    const adapter = new PartnerBoostAdapter();
+    const offers = await adapter.pullDatafeedOffers(ctxWith(fetchImpl), {
+      brandTypes: ["DTC"],
+    });
+    expect(offers.map((o) => o.url)).toEqual([
+      "https://partnerboost.com/track/tee",
+      "https://pb.short/tee",
+      "https://ulike.example.com/products/tee",
+    ]);
+  });
+
+  it("externalId fallbacks: creative_id, then stable url hash; datafeedExternalId direct", async () => {
+    const { fetchImpl } = dfFetch(() =>
+      dfResponse([
+        dfProduct({ sku: "", creative_id: 888 }),
+        dfProduct({ sku: "", creative_id: "", name: "Hash Me" }),
+        dfProduct({ sku: "", creative_id: "", url: "", name: "No Key" }),
+      ])
+    );
+    const adapter = new PartnerBoostAdapter();
+    const offers = await adapter.pullDatafeedOffers(ctxWith(fetchImpl), {
+      brandTypes: ["DTC"],
+    });
+    // 无任何稳定键的一条被跳过
+    expect(offers).toHaveLength(2);
+    expect(offers[0].externalId).toBe("df:66303:888");
+    expect(offers[1].externalId).toMatch(/^df:u:[0-9a-f]{16}$/);
+    // url 哈希跨调用稳定
+    expect(
+      datafeedExternalId({ brand_id: 1, url: "https://x.example/p" })
+    ).toBe(datafeedExternalId({ brand_id: 2, url: "https://x.example/p" }));
+    expect(datafeedExternalId({ brand_id: 66303, sku: "S1" })).toBe(
+      "df:66303:S1"
+    );
+    expect(datafeedExternalId({})).toBeNull();
+  });
+
+  it("defensive commission: maps commission key when present, null when absent", async () => {
+    const { fetchImpl } = dfFetch(() =>
+      dfResponse([
+        dfProduct({ sku: "C1", commission: "10%" }),
+        dfProduct({ sku: "C2", commission_rate: "7.5%" }),
+        dfProduct({ sku: "C3" }),
+      ])
+    );
+    const adapter = new PartnerBoostAdapter();
+    const offers = await adapter.pullDatafeedOffers(ctxWith(fetchImpl), {
+      brandTypes: ["DTC"],
+    });
+    expect(offers[0].payout).toBe(10);
+    expect(offers[0].currency).toBe("%");
+    expect(offers[1].payout).toBe(7.5);
+    expect(offers[2].payout).toBeNull();
+    expect(offers[2].currency).toBeNull();
+  });
+
+  it("brand falls back to merchant_name when brand is empty", async () => {
+    const { fetchImpl } = dfFetch(() =>
+      dfResponse([dfProduct({ brand: "", merchant_name: "Merchant Only" })])
+    );
+    const adapter = new PartnerBoostAdapter();
+    const offers = await adapter.pullDatafeedOffers(ctxWith(fetchImpl), {
+      brandTypes: ["DTC"],
+    });
+    expect(offers[0].brand).toBe("Merchant Only");
+  });
+
+  it("per-brand-type failure: callback collects, other types still return; without callback it throws", async () => {
+    const handler: DfHandler = (brandType) =>
+      brandType === "Walmart"
+        ? dfResponse([], 1001, "brand type disabled")
+        : dfResponse([dfProduct()]);
+    const { fetchImpl } = dfFetch(handler);
+    const adapter = new PartnerBoostAdapter();
+
+    const errors: Array<[string, string]> = [];
+    const offers = await adapter.pullDatafeedOffers(ctxWith(fetchImpl), {
+      onBrandTypeError: (bt, msg) => errors.push([bt, msg]),
+    });
+    expect(offers).toHaveLength(1);
+    expect(errors).toHaveLength(1);
+    expect(errors[0][0]).toBe("Walmart");
+    expect(errors[0][1]).toContain("brand type disabled");
+
+    await expect(
+      adapter.pullDatafeedOffers(ctxWith(fetchImpl))
+    ).rejects.toMatchObject({ code: "API_ERROR" });
+  });
+
+  it("respects the per-type page hard cap", async () => {
+    const { fetchImpl, calls } = dfFetch((_bt, page) =>
+      dfResponse([
+        dfProduct({ sku: `P${page}-a` }),
+        dfProduct({ sku: `P${page}-b` }),
+      ])
+    );
+    const adapter = new PartnerBoostAdapter();
+    const offers = await adapter.pullDatafeedOffers(ctxWith(fetchImpl), {
+      brandTypes: ["DTC"],
+      limit: 2,
+      maxPages: 3,
+    });
+    expect(calls).toHaveLength(3);
+    expect(offers).toHaveLength(6);
+  });
+
+  it("throws BAD_CREDENTIALS on empty token", async () => {
+    const adapter = new PartnerBoostAdapter();
+    await expect(
+      adapter.pullDatafeedOffers(
+        ctxWith(async () => jsonResponse({}) as Response, "")
+      )
+    ).rejects.toMatchObject({ code: "BAD_CREDENTIALS" });
   });
 });

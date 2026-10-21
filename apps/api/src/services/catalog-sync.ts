@@ -7,6 +7,9 @@
  *     审计 CATALOG_SYNC_SKIPPED_BLACKLIST，不再浪费请求。
  *  3. mode = network.syncMode（非法值 → 按 "api" 处理 + 审计）。
  *  4. 拉取（api / session）→ 统一为 SessionProduct 列表。
+ *     PB api 模式双数据源：FBA get_fba_products（亚马逊）+ Datafeed 通用
+ *     list（DTC/Walmart）合并；抓取数按来源进 summary.sourceBreakdown；
+ *     datafeed 腿失败降级继续（summary.datafeedError 记明，403 除外）。
  *  5. upsert NetworkProduct（@@unique tenantId+networkId+externalId），syncStreak 累计；
  *     brand+networkId 匹配 Merchant → merchantId。
  *  6. 消失商品（syncedAt < 本次开始）→ 自动黑名单（product, reason=sync_disappeared）+ 审计。
@@ -147,6 +150,17 @@ export interface CatalogSyncSummary {
    * "circuit_breaker" = 全量同步熔断（upsert=0 或消失占比 >50%，疑似上游异常）。
    */
   disappearedSkipped?: string;
+  /**
+   * PB api 模式双数据源「抓取」计数（入库前：$8 门槛/去重都还没过）：
+   * amazon = FBA get_fba_products；dtc / walmart = Datafeed 通用 list 两类。
+   * 仅 PB api 模式有值，其他网络/模式为 undefined。
+   */
+  sourceBreakdown?: { amazon: number; dtc: number; walmart: number };
+  /**
+   * PB datafeed 第二数据源的异常信息：整腿失败（FBA 主腿不受影响、已降级
+   * 继续）或单个 brand_type 失败的警告文案。不静默，同步结果里可见。
+   */
+  datafeedError?: string;
 }
 
 const SESSION_EXPIRE_STRIKE_LIMIT = 3;
@@ -516,6 +530,9 @@ export async function syncCatalog(
   };
 
   /* ── 4. 拉取 ── */
+  // PB 双数据源抓取计数 / datafeed 腿异常（doPull 闭包回填，收尾进 summary）。
+  let sourceBreakdown: { amazon: number; dtc: number; walmart: number } | undefined;
+  let datafeedError: string | undefined;
   const doPull = async (): Promise<SessionProduct[]> => {
     if (mode === "api") {
       const adapter = getAdapterImpl(net.kind);
@@ -541,15 +558,51 @@ export async function syncCatalog(
       try {
         // PB 按商家同步：brandId 只传给 PartnerBoostAdapter，其他网络忽略。
         // session 模式不支持按商家过滤（网页端抓取无 brand_id 参数），忽略。
-        const offers =
-          adapter instanceof PartnerBoostAdapter
-            ? await adapter.pullOffers(
-                ctx,
-                input.brandId?.trim()
-                  ? { brandId: input.brandId.trim() }
-                  : {}
-              )
-            : await adapter.pullOffers(ctx);
+        if (adapter instanceof PartnerBoostAdapter) {
+          const pbOpts = input.brandId?.trim()
+            ? { brandId: input.brandId.trim() }
+            : {};
+          const fbaOffers = await adapter.pullOffers(ctx, pbOpts);
+          // 第二数据源：Datafeed 通用 list（DTC + Walmart 商品，FBA 口没有）。
+          // 该腿失败不拖垮 FBA 主腿：错误记入 datafeedError（summary/审计可见，
+          // 不静默）并降级继续；403 账号受限除外——与主腿同口径走黑名单路径。
+          let dfOffers: NetworkOffer[] = [];
+          const dfTypeErrors: string[] = [];
+          try {
+            dfOffers = await adapter.pullDatafeedOffers(ctx, {
+              ...pbOpts,
+              onBrandTypeError: (brandType, message) => {
+                dfTypeErrors.push(`${brandType}: ${message}`);
+              },
+            });
+          } catch (error) {
+            if (
+              error instanceof NetworkAdapterError &&
+              error.status === 403
+            ) {
+              throw error;
+            }
+            datafeedError =
+              error instanceof Error ? error.message : String(error);
+          }
+          if (dfTypeErrors.length > 0) {
+            datafeedError = [datafeedError, ...dfTypeErrors]
+              .filter(Boolean)
+              .join("; ");
+          }
+          const dfCount = (bt: string) =>
+            dfOffers.filter(
+              (o) =>
+                (o.rawData as Record<string, unknown>)?.brand_type === bt
+            ).length;
+          sourceBreakdown = {
+            amazon: fbaOffers.length,
+            dtc: dfCount("DTC"),
+            walmart: dfCount("Walmart"),
+          };
+          return [...fbaOffers, ...dfOffers].map(offerToSessionProduct);
+        }
+        const offers = await adapter.pullOffers(ctx);
         return offers.map(offerToSessionProduct);
       } catch (error) {
         // API 明确 403 = 账号受限/权限回收 → 自动黑名单。
@@ -753,7 +806,11 @@ export async function syncCatalog(
     // unreachable（handlePullError 永不返回）：仅为满足 TS 明确赋值分析。
     throw error;
   }
-  await reportProgress("pulled", { fetched: products.length });
+  await reportProgress("pulled", {
+    fetched: products.length,
+    ...(sourceBreakdown ? { sourceBreakdown } : {}),
+    ...(datafeedError ? { datafeedError } : {}),
+  });
 
   /* ── 5. upsert ── */
   // $8 佣金门槛（第一道，与推演/工作表共用同一常量 + 同一 AI 设置覆盖项）：
@@ -1130,6 +1187,8 @@ export async function syncCatalog(
       disappearedBlacklisted: disappeared.length,
       disappearedSkipped: disappearedSkipped ?? null,
       restoredDisappeared,
+      ...(sourceBreakdown ? { sourceBreakdown } : {}),
+      ...(datafeedError ? { datafeedError } : {}),
     },
   });
   if (grant) await incrementGrantUsage(prisma, grant);
@@ -1144,5 +1203,7 @@ export async function syncCatalog(
     scope: input.brandId?.trim() ? ("brand" as const) : ("full" as const),
     ...(input.brandId?.trim() ? { brandId: input.brandId.trim() } : {}),
     ...(disappearedSkipped ? { disappearedSkipped } : {}),
+    ...(sourceBreakdown ? { sourceBreakdown } : {}),
+    ...(datafeedError ? { datafeedError } : {}),
   };
 }

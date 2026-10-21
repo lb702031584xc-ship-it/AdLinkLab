@@ -19,7 +19,12 @@ import {
   type SessionProduct,
 } from "../networks/session-adapter.js";
 import { encryptApiKey } from "../networks/network-crypto.js";
+import {
+  PartnerBoostAdapter,
+  type PartnerBoostDatafeedPullOpts,
+} from "../networks/partnerboost-adapter.js";
 import type {
+  AdapterContext,
   NetworkAdapter,
   NetworkOffer,
 } from "../networks/types.js";
@@ -813,5 +818,158 @@ describe("syncCatalog 消失判定守卫（P0-1）", () => {
     // 解除后不再被黑名单排除 → 正常评分推荐；手动拉黑的仍不推荐
     const pAuto = ctx.networkProduct.find((r) => r.id === pidAuto)!;
     expect(pAuto.recommended).toBe(true);
+  });
+});
+
+/* ── PB api 模式双数据源（FBA + Datafeed list）合并 ── */
+
+/**
+ * 真实 PartnerBoostAdapter 子类替身：instanceof 分支会被 syncCatalog 命中，
+ * 两个拉取方法返回罐装数据（适配器本身的抓取/映射由 partnerboost-adapter.test 覆盖）。
+ */
+class FakePbAdapter extends PartnerBoostAdapter {
+  fba: NetworkOffer[] = [];
+  df: NetworkOffer[] = [];
+  dfError: unknown = null;
+  dfTypeErrors: Array<[string, string]> = [];
+  override async pullOffers(): Promise<NetworkOffer[]> {
+    return this.fba;
+  }
+  override async pullDatafeedOffers(
+    _ctx: AdapterContext,
+    opts: PartnerBoostDatafeedPullOpts = {}
+  ): Promise<NetworkOffer[]> {
+    for (const [bt, msg] of this.dfTypeErrors) {
+      opts.onBrandTypeError?.(bt, msg);
+    }
+    if (this.dfError) throw this.dfError;
+    return this.df;
+  }
+}
+
+function pbFbaOffer(): NetworkOffer {
+  return {
+    externalId: "B0FBA00001",
+    name: "FBA Widget",
+    payout: 12,
+    currency: "%",
+    price: 100,
+    priceCurrency: "USD",
+    brand: "FbaBrand",
+    asin: "B0FBA00001",
+    countryCode: "US",
+    landingPageType: "amazon_product",
+    url: "https://partnerboost.com/smart/fba-widget",
+    rawData: { product_id: "B0FBA00001", asin: "B0FBA00001" },
+  };
+}
+
+function pbDfOffer(brandType: string, sku: string): NetworkOffer {
+  return {
+    externalId: `df:66303:${sku}`,
+    name: `${brandType} Product ${sku}`,
+    payout: null,
+    currency: null,
+    price: 60,
+    priceCurrency: "USD",
+    brand: "Ulike",
+    asin: sku,
+    countryCode: null,
+    landingPageType: "dtc",
+    url: "https://partnerboost.com/smart/tee",
+    rawData: { sku, brand_type: brandType, source_feed: "datafeed_list" },
+  };
+}
+
+function setupPb(adapter: FakePbAdapter) {
+  process.env.NETWORK_API_PEPPER = PEPPER;
+  const { prisma, ctx } = makeCatalogFakePrisma();
+  ctx.affiliateNetwork.push(
+    testNetwork({
+      kind: "partnerboost",
+      syncMode: "api",
+      apiKeyRef: encryptApiKey("pb-channel-token", PEPPER),
+      sessionRef: null,
+    })
+  );
+  ctx.adminGrant.push(activeGrant("partnerboost"));
+  const deps: CatalogSyncDeps = {
+    prisma,
+    getAdapterImpl: () => adapter,
+    createOfferImpl: async () => ({
+      offer: { id: randomUUID() },
+      created: true,
+      replayed: false,
+    }),
+  };
+  return { prisma, ctx, deps };
+}
+
+describe("syncCatalog PB 双数据源合并", () => {
+  it("FBA + DTC + Walmart 合并入库、externalId 不撞键、summary 分来源计数", async () => {
+    const adapter = new FakePbAdapter();
+    adapter.fba = [pbFbaOffer()];
+    adapter.df = [pbDfOffer("DTC", "SKU1"), pbDfOffer("Walmart", "WM1")];
+    const { ctx, deps } = setupPb(adapter);
+    const summary = await syncCatalog(deps, input);
+    expect(summary.synced).toBe(3);
+    expect(summary.sourceBreakdown).toEqual({
+      amazon: 1,
+      dtc: 1,
+      walmart: 1,
+    });
+    expect(summary.datafeedError).toBeUndefined();
+    const ids = ctx.networkProduct.map((r) => r.externalId).sort();
+    expect(ids).toEqual(["B0FBA00001", "df:66303:SKU1", "df:66303:WM1"]);
+    // datafeed 行：国家未知 null、落地类型 dtc（不编造）
+    const dtcRow = ctx.networkProduct.find(
+      (r) => r.externalId === "df:66303:SKU1"
+    )!;
+    expect(dtcRow.countryCode).toBeNull();
+    expect(dtcRow.landingPageType).toBe("dtc");
+    // 成功审计也带分来源计数
+    const successAudit = ctx.adminGrantAudit.find(
+      (a) => a.action === "CATALOG_SYNC_SUCCESS"
+    );
+    expect((successAudit!.detail as any).sourceBreakdown).toEqual({
+      amazon: 1,
+      dtc: 1,
+      walmart: 1,
+    });
+  });
+
+  it("datafeed 整腿失败 → 降级只入 FBA，summary.datafeedError 记明不静默", async () => {
+    const adapter = new FakePbAdapter();
+    adapter.fba = [pbFbaOffer()];
+    adapter.dfError = new Error("datafeed list unavailable");
+    const { ctx, deps } = setupPb(adapter);
+    const summary = await syncCatalog(deps, input);
+    expect(summary.synced).toBe(1);
+    expect(summary.sourceBreakdown).toEqual({
+      amazon: 1,
+      dtc: 0,
+      walmart: 0,
+    });
+    expect(summary.datafeedError).toContain("datafeed list unavailable");
+    expect(ctx.networkProduct.map((r) => r.externalId)).toEqual([
+      "B0FBA00001",
+    ]);
+  });
+
+  it("单个 brand_type 失败 → 部分成功 + datafeedError 警告带类名", async () => {
+    const adapter = new FakePbAdapter();
+    adapter.fba = [pbFbaOffer()];
+    adapter.df = [pbDfOffer("DTC", "SKU1")];
+    adapter.dfTypeErrors = [["Walmart", "brand type disabled"]];
+    const { deps } = setupPb(adapter);
+    const summary = await syncCatalog(deps, input);
+    expect(summary.synced).toBe(2);
+    expect(summary.sourceBreakdown).toEqual({
+      amazon: 1,
+      dtc: 1,
+      walmart: 0,
+    });
+    expect(summary.datafeedError).toContain("Walmart");
+    expect(summary.datafeedError).toContain("brand type disabled");
   });
 });
