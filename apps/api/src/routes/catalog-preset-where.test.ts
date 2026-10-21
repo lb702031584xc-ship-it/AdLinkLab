@@ -187,4 +187,18 @@ describe("buildProductOrderBy（autoads 式排序）", () => {
       { externalId: "desc" },
     ]);
   });
+  it("品牌排序：组内按推荐指数 → 评论数 → 主键（同品牌最好的在前）", () => {
+    expect(buildProductOrderBy("brand_asc")).toEqual([
+      { brand: "asc" },
+      { recommendationScore: "desc" },
+      { reviewCount: "desc" },
+      { externalId: "desc" },
+    ]);
+    expect(buildProductOrderBy("brand_desc")).toEqual([
+      { brand: "desc" },
+      { recommendationScore: "desc" },
+      { reviewCount: "desc" },
+      { externalId: "desc" },
+    ]);
+  });
 });

@@ -23,7 +23,8 @@ import type { OfferService } from "../services/offer-engine.js";
 
 function buildApp(
   ctx: CatalogFakeCtx,
-  role: string
+  role: string,
+  offersCreateImpl?: (input: any, ctx: CatalogFakeCtx) => Promise<any>
 ): { app: ReturnType<typeof Fastify>; prisma: PrismaClient } {
   const { prisma } = makeCatalogFakePrisma(ctx as any);
   const app = Fastify();
@@ -40,17 +41,20 @@ function buildApp(
   const offers = {
     // 模拟真实 OfferService.create 的持久化：写入 ctx.offer，
     // 使"批量建 Offer → 漏斗 offersCreated 联动"可端到端验证。
-    create: async (input: any) => {
-      const offer = {
-        id: randomUUID(),
-        tenantId: TEST_TENANT,
-        name: input?.name ?? "Offer",
-        idempotencyKey: input?.idempotencyKey ?? null,
-        ...input,
-      };
-      ctx.offer.push(offer);
-      return { offer, created: true, replayed: false };
-    },
+    // offersCreateImpl 可覆盖 create 行为（如模拟幂等回放 created=false）。
+    create: offersCreateImpl
+      ? (input: any) => offersCreateImpl(input, ctx)
+      : async (input: any) => {
+          const offer = {
+            id: randomUUID(),
+            tenantId: TEST_TENANT,
+            name: input?.name ?? "Offer",
+            idempotencyKey: input?.idempotencyKey ?? null,
+            ...input,
+          };
+          ctx.offer.push(offer);
+          return { offer, created: true, replayed: false };
+        },
   } as unknown as OfferService;
   void registerCatalogRoutes(app, { prisma, offers });
   return { app, prisma };
@@ -893,7 +897,9 @@ describe("PUT /api/v1/catalog/screening-preset 留空语义", () => {
  * 漏斗每段数字必须与列表对应过滤的条数一致（"一轮轮筛选到底有没有搞"
  * 的数字证据链）。 */
 describe("商品库全流程数字自洽（漏斗 = 列表过滤）", () => {
-  async function seedFlow() {
+  async function seedFlow(
+    offersCreateImpl?: (input: any, ctx: CatalogFakeCtx) => Promise<any>
+  ) {
     const { ctx } = makeCatalogFakePrisma();
     ctx.affiliateNetwork.push(testNetwork());
     const merchantId = randomUUID();
@@ -933,7 +939,7 @@ describe("商品库全流程数字自洽（漏斗 = 列表过滤）", () => {
     ctx.catalogBlacklist.push(
       blacklistRow({ entityType: "merchant", entityId: merchantId })
     );
-    const { app } = buildApp(ctx, "member");
+    const { app } = buildApp(ctx, "member", offersCreateImpl);
     return { ctx, app, p1, p2 };
   }
 
@@ -991,5 +997,50 @@ describe("商品库全流程数字自洽（漏斗 = 列表过滤）", () => {
     expect(body.failed[0].reason).toMatch(/不存在/);
     const funnel = await getJson(app, "/api/v1/catalog/funnel");
     expect(funnel.offersCreated).toBe(2);
+  });
+
+  it("批量建 Offer 幂等回放 → skippedExisting 单列，不混进 created", async () => {
+    // 忠实模拟 OfferService.create 的幂等：同 idempotencyKey 第二次返回 created=false。
+    const seen = new Map<string, any>();
+    const idempotentCreate = async (input: any, ctx: CatalogFakeCtx) => {
+      const key = input?.idempotencyKey as string;
+      const prev = seen.get(key);
+      if (prev) return { offer: prev, created: false, replayed: true };
+      const offer = {
+        id: randomUUID(),
+        tenantId: TEST_TENANT,
+        name: input?.name ?? "Offer",
+        idempotencyKey: key ?? null,
+        ...input,
+      };
+      seen.set(key, offer);
+      ctx.offer.push(offer);
+      return { offer, created: true, replayed: false };
+    };
+    const { app, p1 } = await seedFlow(idempotentCreate);
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/v1/catalog/offers/batch",
+      payload: { productIds: [p1.id] },
+    });
+    expect(first.statusCode).toBe(200);
+    const firstBody = first.json();
+    expect(firstBody.created).toHaveLength(1);
+    expect(firstBody.skippedExisting).toHaveLength(0);
+    // 同一件商品再点一次「建 Offer」：不重复建，明示已存在。
+    const second = await app.inject({
+      method: "POST",
+      url: "/api/v1/catalog/offers/batch",
+      payload: { productIds: [p1.id] },
+    });
+    expect(second.statusCode).toBe(200);
+    const secondBody = second.json();
+    expect(secondBody.created).toHaveLength(0);
+    expect(secondBody.failed).toHaveLength(0);
+    expect(secondBody.skippedExisting).toHaveLength(1);
+    expect(secondBody.skippedExisting[0].productId).toBe(p1.id);
+    expect(secondBody.skippedExisting[0].offerId).toBe(
+      firstBody.created[0].offerId
+    );
   });
 });

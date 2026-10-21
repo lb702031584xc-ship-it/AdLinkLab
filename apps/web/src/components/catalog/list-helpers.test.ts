@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { selectableProducts } from "./list-helpers";
+import {
+  isValidSortValue,
+  resolveStoredSort,
+  selectableProducts,
+} from "./list-helpers";
 import type { CatalogProduct } from "@/lib/api/catalog-actions";
 
 function product(id: string, flags?: { blacklisted?: boolean; whitelisted?: boolean }): CatalogProduct {
@@ -50,5 +54,26 @@ describe("selectableProducts", () => {
   it("returns an empty array when everything is blacklisted", () => {
     const rows = [product("a", { blacklisted: true })];
     expect(selectableProducts(rows)).toEqual([]);
+  });
+});
+
+describe("sort persistence helpers", () => {
+  it("accepts well-formed sort values", () => {
+    expect(isValidSortValue("brand_asc")).toBe(true);
+    expect(isValidSortValue("id_desc")).toBe(true);
+    expect(isValidSortValue("score_desc")).toBe(true);
+    expect(resolveStoredSort("brand_asc")).toBe("brand_asc");
+  });
+
+  it("rejects malformed or missing values back to null (default applies)", () => {
+    expect(isValidSortValue("brand")).toBe(false);
+    expect(isValidSortValue("brand_up")).toBe(false);
+    expect(isValidSortValue("BRAND_ASC")).toBe(false);
+    expect(isValidSortValue("")).toBe(false);
+    expect(isValidSortValue(null)).toBe(false);
+    expect(isValidSortValue(42)).toBe(false);
+    expect(resolveStoredSort(null)).toBeNull();
+    expect(resolveStoredSort(undefined)).toBeNull();
+    expect(resolveStoredSort("x; DROP TABLE")).toBeNull();
   });
 });

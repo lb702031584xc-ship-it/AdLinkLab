@@ -79,7 +79,7 @@ import {
   localDayRangeToIso,
   localTodayString,
 } from "./added-date-range";
-import { selectableProducts } from "./list-helpers";
+import { resolveStoredSort, selectableProducts } from "./list-helpers";
 import Link from "next/link";
 
 type Dict = typeof catalogZh;
@@ -93,6 +93,30 @@ function killedTotalOf(r: OneClickScreenReport): number {
     r.killedAdCount +
     r.killedTrafficGate
   );
+}
+
+/** 动作抛错时给用户看的错误文本（兜底提示用，异常细节不吞）。 */
+function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** 商品列表排序选择的 localStorage 键（变更即写回，下次进页恢复）。 */
+const SORT_STORAGE_KEY = "catalog:products-sort";
+
+function readStoredSort(): string | null {
+  try {
+    return resolveStoredSort(window.localStorage.getItem(SORT_STORAGE_KEY));
+  } catch {
+    return null;
+  }
+}
+
+function persistSort(v: string): void {
+  try {
+    window.localStorage.setItem(SORT_STORAGE_KEY, v);
+  } catch {
+    /* localStorage 不可用（隐私模式等）时静默降级，不影响列表渲染。 */
+  }
 }
 
 const inputCls =
@@ -297,21 +321,26 @@ function MerchantEvalBlock({
     if (evaluating) return;
     setEvaluating(true);
     showMsg(null);
-    const res = await evaluateMerchantsAction(channel);
-    setEvaluating(false);
-    if (!res.ok) {
-      showMsg(res.error);
-      return;
+    try {
+      const res = await evaluateMerchantsAction(channel);
+      if (!res.ok) {
+        showMsg(res.error);
+        return;
+      }
+      setResult(res.data);
+      setExpandedId(null);
+      showMsg(
+        res.data.blacklisted.length > 0
+          ? d.blacklist.evalDone
+              .replace("{a}", String(res.data.evaluated))
+              .replace("{b}", String(res.data.blacklisted.length))
+          : d.blacklist.evalEmpty
+      );
+    } catch (err) {
+      showMsg(d.products.actionFailed.replace("{error}", errText(err)));
+    } finally {
+      setEvaluating(false);
     }
-    setResult(res.data);
-    setExpandedId(null);
-    showMsg(
-      res.data.blacklisted.length > 0
-        ? d.blacklist.evalDone
-            .replace("{a}", String(res.data.evaluated))
-            .replace("{b}", String(res.data.blacklisted.length))
-        : d.blacklist.evalEmpty
-    );
   }
 
   async function toggleSignals(merchantId: string) {
@@ -322,14 +351,20 @@ function MerchantEvalBlock({
     setExpandedId(merchantId);
     if (signals[merchantId] || signalsLoading === merchantId) return;
     setSignalsLoading(merchantId);
-    const res = await listMerchantSignalsAction(merchantId, channel);
-    setSignalsLoading(null);
-    if (!res.ok) {
-      showMsg(res.error);
+    try {
+      const res = await listMerchantSignalsAction(merchantId, channel);
+      if (!res.ok) {
+        showMsg(res.error);
+        setExpandedId(null);
+        return;
+      }
+      setSignals((m) => ({ ...m, [merchantId]: res.data }));
+    } catch (err) {
+      showMsg(d.products.actionFailed.replace("{error}", errText(err)));
       setExpandedId(null);
-      return;
+    } finally {
+      setSignalsLoading(null);
     }
-    setSignals((m) => ({ ...m, [merchantId]: res.data }));
   }
 
   function fmtPct(v: number | null): string {
@@ -524,15 +559,20 @@ function BlacklistPanel({
   const load = useCallback(
     async (entityType?: string, ch?: CatalogChannel) => {
       setLoading(true);
-      const res = await listBlacklistAction(entityType || undefined, ch);
-      setLoading(false);
-      if (!res.ok) {
-        showMsg(res.error);
-        return;
+      try {
+        const res = await listBlacklistAction(entityType || undefined, ch);
+        if (!res.ok) {
+          showMsg(res.error);
+          return;
+        }
+        setEntries(res.data);
+      } catch (err) {
+        showMsg(d.products.actionFailed.replace("{error}", errText(err)));
+      } finally {
+        setLoading(false);
       }
-      setEntries(res.data);
     },
-    [showMsg]
+    [showMsg, d]
   );
 
   useEffect(() => {
@@ -558,34 +598,44 @@ function BlacklistPanel({
     if (adding) return;
     setAdding(true);
     showMsg(null);
-    const res = await addBlacklistAction({
-      entityType: fType,
-      entityId,
-      reason,
-      channel: fChannel,
-    });
-    setAdding(false);
-    if (!res.ok) {
-      showMsg(res.error);
-      return;
+    try {
+      const res = await addBlacklistAction({
+        entityType: fType,
+        entityId,
+        reason,
+        channel: fChannel,
+      });
+      if (!res.ok) {
+        showMsg(res.error);
+        return;
+      }
+      setFId("");
+      setFReason("");
+      showMsg(d.blacklist.added);
+      await load(filter || undefined, channel);
+    } catch (err) {
+      showMsg(d.products.actionFailed.replace("{error}", errText(err)));
+    } finally {
+      setAdding(false);
     }
-    setFId("");
-    setFReason("");
-    showMsg(d.blacklist.added);
-    await load(filter || undefined, channel);
   }
 
   async function onRecheck(id: string) {
     if (recheckingId) return;
     setRecheckingId(id);
-    const res = await recheckBlacklistAction(id);
-    setRecheckingId(null);
-    if (!res.ok) {
-      showMsg(res.error);
-      return;
+    try {
+      const res = await recheckBlacklistAction(id);
+      if (!res.ok) {
+        showMsg(res.error);
+        return;
+      }
+      setRecheckOutcomes((m) => ({ ...m, [id]: res.data }));
+      showMsg(d.blacklist.recheckDone);
+    } catch (err) {
+      showMsg(d.products.actionFailed.replace("{error}", errText(err)));
+    } finally {
+      setRecheckingId(null);
     }
-    setRecheckOutcomes((m) => ({ ...m, [id]: res.data }));
-    showMsg(d.blacklist.recheckDone);
   }
 
   function openDelete(entry: BlacklistEntry) {
@@ -617,15 +667,20 @@ function BlacklistPanel({
     setImporting(true);
     showMsg(null);
     setImportResult(null);
-    const res = await importBlacklistAction(items);
-    setImporting(false);
-    if (!res.ok) {
-      showMsg(res.error);
-      return;
-    }
-    setImportResult(res.data);
-    if (res.data.added > 0) {
-      await load(filter || undefined, channel);
+    try {
+      const res = await importBlacklistAction(items);
+      if (!res.ok) {
+        showMsg(res.error);
+        return;
+      }
+      setImportResult(res.data);
+      if (res.data.added > 0) {
+        await load(filter || undefined, channel);
+      }
+    } catch (err) {
+      showMsg(d.products.actionFailed.replace("{error}", errText(err)));
+    } finally {
+      setImporting(false);
     }
   }
 
@@ -636,19 +691,24 @@ function BlacklistPanel({
       return;
     }
     setDeleting(true);
-    const res = await deleteBlacklistAction(
-      deletingEntry.id,
-      deleteReason.trim()
-    );
-    setDeleting(false);
-    if (!res.ok) {
-      showMsg(res.error);
-      return;
+    try {
+      const res = await deleteBlacklistAction(
+        deletingEntry.id,
+        deleteReason.trim()
+      );
+      if (!res.ok) {
+        showMsg(res.error);
+        return;
+      }
+      setDeletingEntry(null);
+      setDeleteReason("");
+      showMsg(d.blacklist.deleted);
+      await load(filter || undefined, channel);
+    } catch (err) {
+      showMsg(d.products.actionFailed.replace("{error}", errText(err)));
+    } finally {
+      setDeleting(false);
     }
-    setDeletingEntry(null);
-    setDeleteReason("");
-    showMsg(d.blacklist.deleted);
-    await load(filter || undefined, channel);
   }
 
   const observationCount = entries.filter((e) => isObservation(e)).length;
@@ -1028,15 +1088,20 @@ function WhitelistPanel({
   const load = useCallback(
     async (ch?: CatalogChannel) => {
       setLoading(true);
-      const res = await listWhitelistAction(ch);
-      setLoading(false);
-      if (!res.ok) {
-        showMsg(res.error);
-        return;
+      try {
+        const res = await listWhitelistAction(ch);
+        if (!res.ok) {
+          showMsg(res.error);
+          return;
+        }
+        setEntries(res.data);
+      } catch (err) {
+        showMsg(d.products.actionFailed.replace("{error}", errText(err)));
+      } finally {
+        setLoading(false);
       }
-      setEntries(res.data);
     },
-    [showMsg]
+    [showMsg, d]
   );
 
   useEffect(() => {
@@ -1057,49 +1122,64 @@ function WhitelistPanel({
     if (adding) return;
     setAdding(true);
     showMsg(null);
-    const note = fNote.trim();
-    const res = await addWhitelistAction({
-      entityType: fType,
-      entityId,
-      note: note || undefined,
-      channel: fChannel,
-    });
-    setAdding(false);
-    if (!res.ok) {
-      showMsg(res.error);
-      return;
+    try {
+      const note = fNote.trim();
+      const res = await addWhitelistAction({
+        entityType: fType,
+        entityId,
+        note: note || undefined,
+        channel: fChannel,
+      });
+      if (!res.ok) {
+        showMsg(res.error);
+        return;
+      }
+      setFId("");
+      setFNote("");
+      showMsg(d.whitelist.added);
+      await load(channel);
+    } catch (err) {
+      showMsg(d.products.actionFailed.replace("{error}", errText(err)));
+    } finally {
+      setAdding(false);
     }
-    setFId("");
-    setFNote("");
-    showMsg(d.whitelist.added);
-    await load(channel);
   }
 
   async function onConfirm(id: string) {
     if (confirmingId) return;
     setConfirmingId(id);
-    const res = await confirmWhitelistAction(id);
-    setConfirmingId(null);
-    if (!res.ok) {
-      showMsg(res.error);
-      return;
+    try {
+      const res = await confirmWhitelistAction(id);
+      if (!res.ok) {
+        showMsg(res.error);
+        return;
+      }
+      showMsg(d.whitelist.confirmed);
+      await load(channel);
+    } catch (err) {
+      showMsg(d.products.actionFailed.replace("{error}", errText(err)));
+    } finally {
+      setConfirmingId(null);
     }
-    showMsg(d.whitelist.confirmed);
-    await load(channel);
   }
 
   async function onDelete(id: string) {
     if (deletingId) return;
     if (!window.confirm(d.whitelist.confirmDelete)) return;
     setDeletingId(id);
-    const res = await deleteWhitelistAction(id);
-    setDeletingId(null);
-    if (!res.ok) {
-      showMsg(res.error);
-      return;
+    try {
+      const res = await deleteWhitelistAction(id);
+      if (!res.ok) {
+        showMsg(res.error);
+        return;
+      }
+      showMsg(d.whitelist.deleted);
+      await load(channel);
+    } catch (err) {
+      showMsg(d.products.actionFailed.replace("{error}", errText(err)));
+    } finally {
+      setDeletingId(null);
     }
-    showMsg(d.whitelist.deleted);
-    await load(channel);
   }
 
   return (
@@ -1360,47 +1440,59 @@ export function CatalogClient({
     setSyncResult(null);
     setSyncJob(null);
     // 后端改为后台任务：POST 只建 job 立即返回，之后每 2 秒轮询状态。
-    const res = await syncCatalogAction(selectedId, trimmedBrandId);
-    if (!res.ok) {
+    try {
+      const res = await syncCatalogAction(selectedId, trimmedBrandId);
+      if (!res.ok) {
+        setSyncing(false);
+        setSyncingBrandId(null);
+        if (res.forbidden) {
+          setSyncForbidden(true);
+        } else {
+          setMsg(res.error);
+        }
+        return;
+      }
+      void pollSyncJob(res.data.jobId);
+    } catch (err) {
       setSyncing(false);
       setSyncingBrandId(null);
-      if (res.forbidden) {
-        setSyncForbidden(true);
-      } else {
-        setMsg(res.error);
-      }
-      return;
+      setMsg(d.products.actionFailed.replace("{error}", errText(err)));
     }
-    void pollSyncJob(res.data.jobId);
   }
 
   async function pollSyncJob(jobId: string) {
-    const res = await getSyncJobAction(jobId);
-    if (!res.ok) {
+    try {
+      const res = await getSyncJobAction(jobId);
+      if (!res.ok) {
+        setSyncing(false);
+        setSyncingBrandId(null);
+        setMsg(res.error);
+        return;
+      }
+      const job = res.data;
+      setSyncJob(job);
+      if (job.status === "succeeded" || job.status === "skipped") {
+        setSyncing(false);
+        setSyncingBrandId(null);
+        setSyncResult(job.result ?? null);
+        await reloadProducts(1);
+        void loadFunnel();
+        void loadSyncJobs();
+        return;
+      }
+      if (job.status === "failed") {
+        setSyncing(false);
+        setSyncingBrandId(null);
+        setMsg(job.error ?? d.top.syncJobFailed);
+        void loadSyncJobs();
+        return;
+      }
+      pollTimer.current = setTimeout(() => void pollSyncJob(jobId), 2000);
+    } catch (err) {
       setSyncing(false);
       setSyncingBrandId(null);
-      setMsg(res.error);
-      return;
+      setMsg(d.products.actionFailed.replace("{error}", errText(err)));
     }
-    const job = res.data;
-    setSyncJob(job);
-    if (job.status === "succeeded" || job.status === "skipped") {
-      setSyncing(false);
-      setSyncingBrandId(null);
-      setSyncResult(job.result ?? null);
-      await reloadProducts(1);
-      void loadFunnel();
-      void loadSyncJobs();
-      return;
-    }
-    if (job.status === "failed") {
-      setSyncing(false);
-      setSyncingBrandId(null);
-      setMsg(job.error ?? d.top.syncJobFailed);
-      void loadSyncJobs();
-      return;
-    }
-    pollTimer.current = setTimeout(() => void pollSyncJob(jobId), 2000);
   }
 
   function onSyncByBrand() {
@@ -1469,17 +1561,22 @@ export function CatalogClient({
   ) {
     setModeSaving(true);
     setMsg(null);
-    const res = await setSyncModeAction(networkId, mode, confirmTosRisk);
-    setModeSaving(false);
-    if (!res.ok) {
-      setMsg(res.error);
-      return;
+    try {
+      const res = await setSyncModeAction(networkId, mode, confirmTosRisk);
+      if (!res.ok) {
+        setMsg(res.error);
+        return;
+      }
+      setNetworks((ns) =>
+        ns.map((n) => (n.id === networkId ? { ...n, syncMode: mode } : n))
+      );
+      setModePending(null);
+      setRiskChecked(false);
+    } catch (err) {
+      setMsg(d.products.actionFailed.replace("{error}", errText(err)));
+    } finally {
+      setModeSaving(false);
     }
-    setNetworks((ns) =>
-      ns.map((n) => (n.id === networkId ? { ...n, syncMode: mode } : n))
-    );
-    setModePending(null);
-    setRiskChecked(false);
   }
 
   async function confirmSessionMode() {
@@ -1505,25 +1602,30 @@ export function CatalogClient({
     }
     setSavingCookieId(networkId);
     setMsg(null);
-    const res = await saveSessionCookieAction(networkId, value);
-    setSavingCookieId(null);
-    if (!res.ok) {
-      setMsg(res.error);
-      return;
+    try {
+      const res = await saveSessionCookieAction(networkId, value);
+      if (!res.ok) {
+        setMsg(res.error);
+        return;
+      }
+      setCookieInputs((m) => ({ ...m, [networkId]: "" }));
+      setSessionStatuses((m) => ({
+        ...m,
+        [networkId]: { status: "OK", updatedAt: new Date().toISOString() },
+      }));
+      setNetworks((ns) =>
+        ns.map((n) =>
+          n.id === networkId
+            ? { ...n, sessionConfigured: true, sessionStatus: "OK" as SessionStatus }
+            : n
+        )
+      );
+      setMsg(d.mode.saved);
+    } catch (err) {
+      setMsg(d.products.actionFailed.replace("{error}", errText(err)));
+    } finally {
+      setSavingCookieId(null);
     }
-    setCookieInputs((m) => ({ ...m, [networkId]: "" }));
-    setSessionStatuses((m) => ({
-      ...m,
-      [networkId]: { status: "OK", updatedAt: new Date().toISOString() },
-    }));
-    setNetworks((ns) =>
-      ns.map((n) =>
-        n.id === networkId
-          ? { ...n, sessionConfigured: true, sessionStatus: "OK" as SessionStatus }
-          : n
-      )
-    );
-    setMsg(d.mode.saved);
   }
 
   // ---- session credentials 信息展示（管理 UI 已搬至管理控制台；此处仅展示 + 跳转） ----
@@ -1577,39 +1679,48 @@ export function CatalogClient({
     if (savingPreset) return;
     setSavingPreset(true);
     setMsg(null);
-    const res = await saveScreeningPresetAction(buildPresetPayload(adminFields));
-    setSavingPreset(false);
-    if (!res.ok) {
-      setMsg(res.error);
-      return;
+    try {
+      const res = await saveScreeningPresetAction(buildPresetPayload(adminFields));
+      if (!res.ok) {
+        setMsg(res.error);
+        return;
+      }
+      setMsg(d.preset.saved);
+    } catch (err) {
+      setMsg(d.products.actionFailed.replace("{error}", errText(err)));
+    } finally {
+      setSavingPreset(false);
     }
-    setMsg(d.preset.saved);
   }
 
   async function onScreenNow() {
     if (screening) return;
     setScreening(true);
     setScreenMsg(null);
-    // 先保存表单现值再筛：筛选跑的是已保存预设，只改数字不保存 = 按旧值筛（白改）。
-    const saved = await saveScreeningPresetAction(buildPresetPayload(isAdmin));
-    if (!saved.ok) {
+    try {
+      // 先保存表单现值再筛：筛选跑的是已保存预设，只改数字不保存 = 按旧值筛（白改）。
+      const saved = await saveScreeningPresetAction(buildPresetPayload(isAdmin));
+      if (!saved.ok) {
+        setMsg(saved.error);
+        return;
+      }
+      const res = await screenCatalogAction(selectedId || undefined);
+      if (!res.ok) {
+        setMsg(res.error);
+        return;
+      }
+      setScreenMsg(
+        d.preset.screened
+          .replace("{a}", String(res.data.screened))
+          .replace("{b}", String(res.data.recommended))
+      );
+      await reloadProducts(1);
+      void loadFunnel();
+    } catch (err) {
+      setMsg(d.products.actionFailed.replace("{error}", errText(err)));
+    } finally {
       setScreening(false);
-      setMsg(saved.error);
-      return;
     }
-    const res = await screenCatalogAction(selectedId || undefined);
-    setScreening(false);
-    if (!res.ok) {
-      setMsg(res.error);
-      return;
-    }
-    setScreenMsg(
-      d.preset.screened
-        .replace("{a}", String(res.data.screened))
-        .replace("{b}", String(res.data.recommended))
-    );
-    await reloadProducts(1);
-    void loadFunnel();
   }
 
   // ---- product list ----
@@ -1622,6 +1733,15 @@ export function CatalogClient({
   const [applyPreset, setApplyPreset] = useState(true);
   const [presetExcluded, setPresetExcluded] = useState(0);
   const [sort, setSort] = useState("id_desc");
+  // 排序选择持久化：挂载后从 localStorage 恢复（不在 useState 初始化里读——
+  // 服务端渲染没有 window，读了会 hydration 不一致）；每次变更写回。
+  useEffect(() => {
+    const stored = readStoredSort();
+    if (stored) setSort(stored);
+  }, []);
+  useEffect(() => {
+    persistSort(sort);
+  }, [sort]);
   /** 广告数下限过滤：草稿（输入框）与已生效值分离，回车/失焦才生效。 */
   const [minAdsDraft, setMinAdsDraft] = useState("");
   const [minAds, setMinAds] = useState<number | undefined>(undefined);
@@ -1651,34 +1771,40 @@ export function CatalogClient({
       return;
     }
     setLoadingProducts(true);
-    const query = (qOverride ?? q).trim();
-    const res = await listCatalogProductsAction({
-      networkId: selectedId,
-      recommended: onlyRecommended ? true : undefined,
-      q: query || undefined,
-      page: targetPage,
-      pageSize: PAGE_SIZE,
-      preset: applyPreset ? undefined : false,
-      sort,
-      minAdCount: minAds,
-      maxAdCount: maxAds,
-      country: countryFilter || undefined,
-      poolStage: poolStageFilter || undefined,
-    });
-    setLoadingProducts(false);
-    if (!res.ok) {
-      setMsg(res.error);
-      return;
+    try {
+      const query = (qOverride ?? q).trim();
+      const res = await listCatalogProductsAction({
+        networkId: selectedId,
+        recommended: onlyRecommended ? true : undefined,
+        q: query || undefined,
+        page: targetPage,
+        pageSize: PAGE_SIZE,
+        preset: applyPreset ? undefined : false,
+        sort,
+        minAdCount: minAds,
+        maxAdCount: maxAds,
+        country: countryFilter || undefined,
+        poolStage: poolStageFilter || undefined,
+      });
+      if (!res.ok) {
+        setMsg(res.error);
+        return;
+      }
+      setProducts(res.data.items);
+      void getProductLaunchCountsAction(res.data.items.map((p) => p.id)).then((r) => {
+        if (r.ok) setLaunchCounts(r.data.counts);
+      });
+      setTotal(res.data.total);
+      setPage(res.data.page);
+      setPresetExcluded(res.data.presetExcluded ?? 0);
+      setSelectedIds(new Set());
+      setBatchResult(null);
+    } catch (err) {
+      // 列表加载自身抛错也要出字 + 复位 loading，否则整页静默卡死。
+      setMsg(d.products.actionFailed.replace("{error}", errText(err)));
+    } finally {
+      setLoadingProducts(false);
     }
-    setProducts(res.data.items);
-    void getProductLaunchCountsAction(res.data.items.map((p) => p.id)).then((r) => {
-      if (r.ok) setLaunchCounts(r.data.counts);
-    });
-    setTotal(res.data.total);
-    setPage(res.data.page);
-    setPresetExcluded(res.data.presetExcluded ?? 0);
-    setSelectedIds(new Set());
-    setBatchResult(null);
   }
 
   /** 补强 #3：单条移动备选池阶段（后端 B6 门禁；失败原因直接展示）。 */
@@ -1686,18 +1812,23 @@ export function CatalogClient({
     if (movingStage || (prod.poolStage ?? "inbox") === stage) return;
     setMovingStage(true);
     setMsg(null);
-    const res = await moveProductPoolStageAction(prod.id, stage);
-    setMovingStage(false);
-    if (!res.ok) {
-      setMsg(res.error);
-      return;
+    try {
+      const res = await moveProductPoolStageAction(prod.id, stage);
+      if (!res.ok) {
+        setMsg(res.error);
+        return;
+      }
+      setMsg(
+        d.products.poolStageMoved
+          .replace("{n}", "1")
+          .replace("{stage}", d.products.poolStage[stage])
+      );
+      await reloadProducts(page);
+    } catch (err) {
+      setMsg(d.products.actionFailed.replace("{error}", errText(err)));
+    } finally {
+      setMovingStage(false);
     }
-    setMsg(
-      d.products.poolStageMoved
-        .replace("{n}", "1")
-        .replace("{stage}", d.products.poolStage[stage])
-    );
-    await reloadProducts(page);
   }
 
   /** 补强 #3：批量移动备选池阶段。 */
@@ -1708,22 +1839,27 @@ export function CatalogClient({
     }
     setMovingStage(true);
     setMsg(null);
-    const res = await moveProductsPoolStageAction(
-      Array.from(selectedIds),
-      batchPoolStage
-    );
-    setMovingStage(false);
-    if (!res.ok) {
-      setMsg(res.error);
-      return;
+    try {
+      const res = await moveProductsPoolStageAction(
+        Array.from(selectedIds),
+        batchPoolStage
+      );
+      if (!res.ok) {
+        setMsg(res.error);
+        return;
+      }
+      setMsg(
+        d.products.poolStageMoved
+          .replace("{n}", String(res.data.updated))
+          .replace("{stage}", d.products.poolStage[batchPoolStage])
+      );
+      setSelectedIds(new Set());
+      await reloadProducts(page);
+    } catch (err) {
+      setMsg(d.products.actionFailed.replace("{error}", errText(err)));
+    } finally {
+      setMovingStage(false);
     }
-    setMsg(
-      d.products.poolStageMoved
-        .replace("{n}", String(res.data.updated))
-        .replace("{stage}", d.products.poolStage[batchPoolStage])
-    );
-    setSelectedIds(new Set());
-    await reloadProducts(page);
   }
 
   /** 一键筛选报告「查看被淘汰的」：切到商品视图 + 备选池阶段，并滚动到商品表。 */
@@ -1744,56 +1880,70 @@ export function CatalogClient({
     if (backfilling || !selectedId) return;
     setBackfilling(true);
     setMsg(null);
-    const res = await backfillCatalogProductsAction(selectedId);
-    setBackfilling(false);
-    if (!res.ok) {
-      setMsg(res.error);
-      return;
+    try {
+      const res = await backfillCatalogProductsAction(selectedId);
+      if (!res.ok) {
+        setMsg(res.error);
+        return;
+      }
+      setMsg(
+        d.products.backfillDone
+          .replace("{a}", String(res.data.scanned))
+          .replace("{b}", String(res.data.backfilled)) +
+          (res.data.normalizedIds
+            ? "；" +
+              d.products.backfillIdsNormalized.replace(
+                "{c}",
+                String(res.data.normalizedIds)
+              )
+            : "")
+      );
+      await reloadProducts(page);
+      // 回填可能刚补上国家 → 同步刷新国家下拉选项。
+      void listCatalogCountriesAction(selectedId).then((r) => {
+        if (r.ok) setCountryOptions(r.data.countries);
+      });
+    } catch (err) {
+      setMsg(d.products.actionFailed.replace("{error}", errText(err)));
+    } finally {
+      setBackfilling(false);
     }
-    setMsg(
-      d.products.backfillDone
-        .replace("{a}", String(res.data.scanned))
-        .replace("{b}", String(res.data.backfilled)) +
-        (res.data.normalizedIds
-          ? "；" +
-            d.products.backfillIdsNormalized.replace(
-              "{c}",
-              String(res.data.normalizedIds)
-            )
-          : "")
-    );
-    await reloadProducts(page);
-    // 回填可能刚补上国家 → 同步刷新国家下拉选项。
-    void listCatalogCountriesAction(selectedId).then((r) => {
-      if (r.ok) setCountryOptions(r.data.countries);
-    });
   }
 
   async function onCreateOfferOne(id: string) {
     if (batching) return;
     setBatching(true);
     setMsg(null);
-    const res = await batchCreateOffersAction([id]);
-    setBatching(false);
-    if (!res.ok) {
-      setMsg(res.error);
-      return;
+    try {
+      const res = await batchCreateOffersAction([id]);
+      if (!res.ok) {
+        setMsg(res.error);
+        return;
+      }
+      // 单条四种结局必须分开报，只报"成功创建 N 个"会掩盖原因：
+      // 已建过（幂等）是最常见的"没新建"，误报失败会把人带偏。
+      const failedOne = res.data.failed[0];
+      const skippedOne = res.data.skippedBlacklist?.[0];
+      const existingOne = res.data.skippedExisting?.[0];
+      if (res.data.created.length > 0) {
+        setMsg(d.products.batchResultCreated.replace("{n}", "1"));
+      } else if (existingOne) {
+        setMsg(d.products.offerOneExists);
+      } else if (skippedOne) {
+        setMsg(
+          `${d.products.offerOneSkipped ?? "未创建（黑名单）"}：${skippedOne.reason}`
+        );
+      } else {
+        setMsg(
+          `${d.products.offerOneFailed ?? "创建失败"}：${failedOne?.reason ?? d.products.unknownReason ?? "未知原因"}`
+        );
+      }
+      await reloadProducts(page);
+    } catch (err) {
+      setMsg(d.products.actionFailed.replace("{error}", errText(err)));
+    } finally {
+      setBatching(false);
     }
-    // 单条也可能失败/被黑名单跳过：只报"成功创建 N 个"会掩盖原因。
-    const failedOne = res.data.failed[0];
-    const skippedOne = res.data.skippedBlacklist?.[0];
-    if (res.data.created.length > 0) {
-      setMsg(d.products.batchResultCreated.replace("{n}", "1"));
-    } else if (skippedOne) {
-      setMsg(
-        `${d.products.offerOneSkipped ?? "未创建（黑名单）"}：${skippedOne.reason}`
-      );
-    } else {
-      setMsg(
-        `${d.products.offerOneFailed ?? "创建失败"}：${failedOne?.reason ?? d.products.unknownReason ?? "未知原因"}`
-      );
-    }
-    await reloadProducts(page);
   }
 
   async function onOfflineOne(p: CatalogProduct) {
@@ -1801,14 +1951,19 @@ export function CatalogClient({
     if (!window.confirm(d.products.offlineConfirm.replace("{n}", "1"))) return;
     setOfflining(true);
     setMsg(null);
-    const res = await offlineProductsAction([p.id]);
-    setOfflining(false);
-    if (!res.ok) {
-      setMsg(res.error);
-      return;
+    try {
+      const res = await offlineProductsAction([p.id]);
+      if (!res.ok) {
+        setMsg(res.error);
+        return;
+      }
+      setMsg(d.products.offlineDone.replace("{n}", String(res.data.updated)));
+      await reloadProducts(page);
+    } catch (err) {
+      setMsg(d.products.actionFailed.replace("{error}", errText(err)));
+    } finally {
+      setOfflining(false);
     }
-    setMsg(d.products.offlineDone.replace("{n}", String(res.data.updated)));
-    await reloadProducts(page);
   }
 
   useEffect(() => {
@@ -1962,15 +2117,20 @@ export function CatalogClient({
     setBatching(true);
     setMsg(null);
     setBatchResult(null);
-    const res = await batchCreateOffersAction(Array.from(selectedIds));
-    setBatching(false);
-    if (!res.ok) {
-      setMsg(res.error);
-      return;
+    try {
+      const res = await batchCreateOffersAction(Array.from(selectedIds));
+      if (!res.ok) {
+        setMsg(res.error);
+        return;
+      }
+      setBatchResult(res.data);
+      setSelectedIds(new Set());
+      await reloadProducts(page);
+    } catch (err) {
+      setMsg(d.products.actionFailed.replace("{error}", errText(err)));
+    } finally {
+      setBatching(false);
     }
-    setBatchResult(res.data);
-    setSelectedIds(new Set());
-    await reloadProducts(page);
   }
 
   const [calcScoring, setCalcScoring] = useState(false);
@@ -2023,17 +2183,22 @@ export function CatalogClient({
     }
     setCalcScoring(true);
     setMsg(null);
-    const res = await calcScoreAction(Array.from(selectedIds));
-    setCalcScoring(false);
-    if (!res.ok) {
-      setMsg(res.error);
-      return;
+    try {
+      const res = await calcScoreAction(Array.from(selectedIds));
+      if (!res.ok) {
+        setMsg(res.error);
+        return;
+      }
+      setMsg(
+        d.products.calcScoreDone.replace("{n}", String(res.data.updated))
+      );
+      setSelectedIds(new Set());
+      await reloadProducts(page);
+    } catch (err) {
+      setMsg(d.products.actionFailed.replace("{error}", errText(err)));
+    } finally {
+      setCalcScoring(false);
     }
-    setMsg(
-      d.products.calcScoreDone.replace("{n}", String(res.data.updated))
-    );
-    setSelectedIds(new Set());
-    await reloadProducts(page);
   }
 
   /**
@@ -2045,22 +2210,27 @@ export function CatalogClient({
     if (calcAdCounting || adCalcPreviewing || adCalcConfirm) return;
     setAdCalcPreviewing(true);
     setMsg(null);
-    const res = await previewCalcAdCountAction(adCalcScope);
-    setAdCalcPreviewing(false);
-    if (!res.ok) {
-      setMsg(res.error);
-      return;
-    }
-    // 快照当时的范围/强制：确认提交时按快照走，不受其后改动影响。
-    setAdCalcConfirm({
-      preview: res.data,
-      scope: adCalcScope,
-      force: adCalcForce,
-      facts: calcAdCountConfirmFacts(res.data, {
-        force: adCalcForce,
+    try {
+      const res = await previewCalcAdCountAction(adCalcScope);
+      if (!res.ok) {
+        setMsg(res.error);
+        return;
+      }
+      // 快照当时的范围/强制：确认提交时按快照走，不受其后改动影响。
+      setAdCalcConfirm({
+        preview: res.data,
         scope: adCalcScope,
-      }),
-    });
+        force: adCalcForce,
+        facts: calcAdCountConfirmFacts(res.data, {
+          force: adCalcForce,
+          scope: adCalcScope,
+        }),
+      });
+    } catch (err) {
+      setMsg(d.products.actionFailed.replace("{error}", errText(err)));
+    } finally {
+      setAdCalcPreviewing(false);
+    }
   }
 
   /** 确认框点「确认提交计算」才真正调付费计算（带快照的 force/scope）。 */
@@ -2069,51 +2239,57 @@ export function CatalogClient({
     const snapshot = adCalcConfirm;
     setCalcAdCounting(true);
     setMsg(null);
-    // 未选中 = 全量（范围/强制仍按快照）；选中 = 只算勾选的商品。
-    const res = await calcAdCountAction(Array.from(selectedIds), {
-      force: snapshot.force,
-      scope: snapshot.scope,
-    });
-    setCalcAdCounting(false);
-    setAdCalcConfirm(null);
-    if (!res.ok) {
-      setMsg(res.error);
-      return;
+    try {
+      // 未选中 = 全量（范围/强制仍按快照）；选中 = 只算勾选的商品。
+      const res = await calcAdCountAction(Array.from(selectedIds), {
+        force: snapshot.force,
+        scope: snapshot.scope,
+      });
+      setAdCalcConfirm(null);
+      if (!res.ok) {
+        setMsg(res.error);
+        return;
+      }
+      let text = d.products.calcAdCountDone
+        .replace("{q}", String(res.data.groupsQueried))
+        .replace("{s}", String(res.data.groupsSkippedCache))
+        .replace("{u}", String(res.data.productsUpdated));
+      if ((res.data.skippedDeadGroups ?? 0) > 0) {
+        text += d.products.calcAdCountSkippedDead.replace(
+          "{n}",
+          String(res.data.skippedDeadGroups)
+        );
+      }
+      if (res.data.errors.length > 0) {
+        text += d.products.calcAdCountErrors.replace(
+          "{e}",
+          String(res.data.errors.length)
+        );
+        // 失败组的原因要可见：前 3 组明细 + 溢出计数。
+        const detail = res.data.errors
+          .slice(0, 3)
+          .map(
+            (e) =>
+              `${e.brand}${e.countryCode ? `(${e.countryCode})` : ""}: ${e.message}`.slice(0, 120)
+          )
+          .join("；");
+        text += `：${detail}${
+          res.data.errors.length > 3
+            ? d.products.calcAdCountErrorsMore.replace(
+                "{n}",
+                String(res.data.errors.length - 3)
+              )
+            : ""
+        }`;
+      }
+      setMsg(text);
+      await reloadProducts(page);
+    } catch (err) {
+      setAdCalcConfirm(null);
+      setMsg(d.products.actionFailed.replace("{error}", errText(err)));
+    } finally {
+      setCalcAdCounting(false);
     }
-    let text = d.products.calcAdCountDone
-      .replace("{q}", String(res.data.groupsQueried))
-      .replace("{s}", String(res.data.groupsSkippedCache))
-      .replace("{u}", String(res.data.productsUpdated));
-    if ((res.data.skippedDeadGroups ?? 0) > 0) {
-      text += d.products.calcAdCountSkippedDead.replace(
-        "{n}",
-        String(res.data.skippedDeadGroups)
-      );
-    }
-    if (res.data.errors.length > 0) {
-      text += d.products.calcAdCountErrors.replace(
-        "{e}",
-        String(res.data.errors.length)
-      );
-      // 失败组的原因要可见：前 3 组明细 + 溢出计数。
-      const detail = res.data.errors
-        .slice(0, 3)
-        .map(
-          (e) =>
-            `${e.brand}${e.countryCode ? `(${e.countryCode})` : ""}: ${e.message}`.slice(0, 120)
-        )
-        .join("；");
-      text += `：${detail}${
-        res.data.errors.length > 3
-          ? d.products.calcAdCountErrorsMore.replace(
-              "{n}",
-              String(res.data.errors.length - 3)
-            )
-          : ""
-      }`;
-    }
-    setMsg(text);
-    await reloadProducts(page);
   }
 
   /**
@@ -2130,32 +2306,37 @@ export function CatalogClient({
     }
     setSelectingAdded(true);
     setMsg(null);
-    const res = await addedProductIdsAction({
-      from: range.from,
-      to: range.to,
-      ...(selectedId ? { networkId: selectedId } : {}),
-    });
-    setSelectingAdded(false);
-    if (!res.ok) {
-      setMsg(res.error);
-      return;
-    }
-    setSelectedIds(new Set(res.data.ids));
-    if (res.data.ids.length === 0) {
-      setMsg(d.products.addedSelectNone.replace("{date}", addedDate));
-    } else if (res.data.truncated) {
-      setMsg(
-        d.products.addedSelectTruncated
-          .replace("{date}", addedDate)
-          .replace("{total}", String(res.data.total))
-          .replace("{n}", String(res.data.ids.length))
-      );
-    } else {
-      setMsg(
-        d.products.addedSelectDone
-          .replace("{date}", addedDate)
-          .replace("{n}", String(res.data.ids.length))
-      );
+    try {
+      const res = await addedProductIdsAction({
+        from: range.from,
+        to: range.to,
+        ...(selectedId ? { networkId: selectedId } : {}),
+      });
+      if (!res.ok) {
+        setMsg(res.error);
+        return;
+      }
+      setSelectedIds(new Set(res.data.ids));
+      if (res.data.ids.length === 0) {
+        setMsg(d.products.addedSelectNone.replace("{date}", addedDate));
+      } else if (res.data.truncated) {
+        setMsg(
+          d.products.addedSelectTruncated
+            .replace("{date}", addedDate)
+            .replace("{total}", String(res.data.total))
+            .replace("{n}", String(res.data.ids.length))
+        );
+      } else {
+        setMsg(
+          d.products.addedSelectDone
+            .replace("{date}", addedDate)
+            .replace("{n}", String(res.data.ids.length))
+        );
+      }
+    } catch (err) {
+      setMsg(d.products.actionFailed.replace("{error}", errText(err)));
+    } finally {
+      setSelectingAdded(false);
     }
   }
 
@@ -2169,29 +2350,34 @@ export function CatalogClient({
     setOneClickBusy(true);
     setMsg(null);
     setScreenReport(null);
-    const res = await oneClickScreenAction({
-      scope,
-      ids: scope === "selected" ? Array.from(selectedIds) : undefined,
-      filter:
-        scope === "current"
-          ? {
-              networkId: selectedId ?? undefined,
-              recommended: onlyRecommended ? true : undefined,
-              q: q.trim() || undefined,
-              minAdCount: minAds,
-              maxAdCount: maxAds,
-              country: countryFilter || undefined,
-              poolStage: poolStageFilter || undefined,
-            }
-          : undefined,
-    });
-    setOneClickBusy(false);
-    if (!res.ok) {
-      setMsg(res.error);
-      return;
+    try {
+      const res = await oneClickScreenAction({
+        scope,
+        ids: scope === "selected" ? Array.from(selectedIds) : undefined,
+        filter:
+          scope === "current"
+            ? {
+                networkId: selectedId ?? undefined,
+                recommended: onlyRecommended ? true : undefined,
+                q: q.trim() || undefined,
+                minAdCount: minAds,
+                maxAdCount: maxAds,
+                country: countryFilter || undefined,
+                poolStage: poolStageFilter || undefined,
+              }
+            : undefined,
+      });
+      if (!res.ok) {
+        setMsg(res.error);
+        return;
+      }
+      setScreenReport(res.data);
+      await reloadProducts(page);
+    } catch (err) {
+      setMsg(d.products.actionFailed.replace("{error}", errText(err)));
+    } finally {
+      setOneClickBusy(false);
     }
-    setScreenReport(res.data);
-    await reloadProducts(page);
   }
 
   /** 人工强制入选（单个被杀商品）：黑名单不可强制，后端拒绝原因直接展示。 */
@@ -2199,22 +2385,27 @@ export function CatalogClient({
     if (forceSelectingId) return;
     setForceSelectingId(productId);
     setMsg(null);
-    const res = await forceSelectProductsAction([productId]);
-    setForceSelectingId(null);
-    if (!res.ok) {
-      setMsg(res.error);
-      return;
+    try {
+      const res = await forceSelectProductsAction([productId]);
+      if (!res.ok) {
+        setMsg(res.error);
+        return;
+      }
+      if (res.data.refusedBlacklist.length > 0) {
+        setMsg(res.data.refusedBlacklist[0].reason);
+        return;
+      }
+      if (res.data.failed.length > 0) {
+        setMsg(res.data.failed[0].reason);
+        return;
+      }
+      setMsg(d.products.forceSelectDone.replace("{n}", "1"));
+      await reloadProducts(page);
+    } catch (err) {
+      setMsg(d.products.actionFailed.replace("{error}", errText(err)));
+    } finally {
+      setForceSelectingId(null);
     }
-    if (res.data.refusedBlacklist.length > 0) {
-      setMsg(res.data.refusedBlacklist[0].reason);
-      return;
-    }
-    if (res.data.failed.length > 0) {
-      setMsg(res.data.failed[0].reason);
-      return;
-    }
-    setMsg(d.products.forceSelectDone.replace("{n}", "1"));
-    await reloadProducts(page);
   }
 
   async function onBatchOffline() {
@@ -2231,28 +2422,38 @@ export function CatalogClient({
     }
     setOfflining(true);
     setMsg(null);
-    const res = await offlineProductsAction(Array.from(selectedIds));
-    setOfflining(false);
-    if (!res.ok) {
-      setMsg(res.error);
-      return;
+    try {
+      const res = await offlineProductsAction(Array.from(selectedIds));
+      if (!res.ok) {
+        setMsg(res.error);
+        return;
+      }
+      setMsg(d.products.offlineDone.replace("{n}", String(res.data.updated)));
+      setSelectedIds(new Set());
+      await reloadProducts(page);
+    } catch (err) {
+      setMsg(d.products.actionFailed.replace("{error}", errText(err)));
+    } finally {
+      setOfflining(false);
     }
-    setMsg(d.products.offlineDone.replace("{n}", String(res.data.updated)));
-    setSelectedIds(new Set());
-    await reloadProducts(page);
   }
 
   async function onToggleScorePause() {
     if (togglingPause) return;
     setTogglingPause(true);
     setMsg(null);
-    const res = await setScoreCalcPausedAction(!scorePaused);
-    setTogglingPause(false);
-    if (!res.ok) {
-      setMsg(res.error);
-      return;
+    try {
+      const res = await setScoreCalcPausedAction(!scorePaused);
+      if (!res.ok) {
+        setMsg(res.error);
+        return;
+      }
+      setScorePaused(res.data.paused);
+    } catch (err) {
+      setMsg(d.products.actionFailed.replace("{error}", errText(err)));
+    } finally {
+      setTogglingPause(false);
     }
-    setScorePaused(res.data.paused);
   }
 
   return (
@@ -3015,7 +3216,7 @@ export function CatalogClient({
                 <th className="px-3 py-2.5 ">{d.products.colLandingType}</th>
                 {sortTh("reviews", d.products.colReviews)}
                 {sortTh("score", d.products.colScore)}
-                <th className="px-3 py-2.5 ">{d.products.colAds}</th>
+                <th className="w-[190px] px-3 py-2.5">{d.products.colAds}</th>
                 <th className="min-w-[220px] max-w-[280px] px-3 py-2.5 ">
                   {d.products.colName}
                 </th>
@@ -3026,7 +3227,7 @@ export function CatalogClient({
                 <th className="px-3 py-2.5 ">{d.products.colPromo}</th>
                 <th className="px-3 py-2.5 ">{d.products.colOfferCount}</th>
                 {sortTh("created", d.products.colCreated)}
-                <th className="sticky right-0 z-30 bg-inherit px-3 py-2.5  shadow-[-1px_0_0_0_rgba(0,0,0,0.06)]">
+                <th className="sticky right-0 z-30 bg-[#f7f8fa] px-3 py-2.5 shadow-[-1px_0_0_0_rgba(0,0,0,0.06)]">
                   {d.products.colActions}
                 </th>
               </tr>
@@ -3066,7 +3267,10 @@ export function CatalogClient({
                         {kindAbbr(p.networkKind)}
                       </span>
                     </td>
-                    <td className="whitespace-nowrap px-3 py-2 text-ink/70">
+                    <td
+                      className="max-w-[160px] truncate whitespace-nowrap px-3 py-2 text-ink/70"
+                      title={p.networkName ?? kindLabel(p.networkKind ?? "")}
+                    >
                       {p.networkName ?? kindLabel(p.networkKind ?? "")}
                     </td>
                     <td className="px-3 py-2">
@@ -3083,7 +3287,10 @@ export function CatalogClient({
                     <td className="whitespace-nowrap px-3 py-2 font-mono text-xs tabular-nums text-ink/70">
                       {p.mid ?? "—"}
                     </td>
-                    <td className="whitespace-nowrap px-3 py-2 text-ink/70">
+                    <td
+                      className="max-w-[180px] truncate whitespace-nowrap px-3 py-2 text-ink/70"
+                      title={p.merchantName ?? undefined}
+                    >
                       {p.merchantName ?? "—"}
                     </td>
                     <td className="whitespace-nowrap px-3 py-2 tabular-nums text-ink/70">
@@ -3124,7 +3331,12 @@ export function CatalogClient({
                         )}
                       </select>
                     </td>
-                    <td className="whitespace-nowrap px-3 py-2 text-ink/70">{p.brand ?? "—"}</td>
+                    <td
+                      className="max-w-[150px] truncate whitespace-nowrap px-3 py-2 text-ink/70"
+                      title={p.brand ?? undefined}
+                    >
+                      {p.brand ?? "—"}
+                    </td>
                     <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-ink/70">
                       {p.asin ?? "—"}
                     </td>
@@ -3147,7 +3359,7 @@ export function CatalogClient({
                         "—"
                       )}
                     </td>
-                    <td className="whitespace-nowrap px-3 py-2">
+                    <td className="w-[190px] min-w-[170px] max-w-[210px] px-3 py-2">
                       {p.adCount == null && probe.longtail == null ? (
                         <span className="text-xs text-ink/40">
                           {d.products.adsNotCalculated}
@@ -3159,6 +3371,9 @@ export function CatalogClient({
                         </span>
                       ) : (
                         <span className="block">
+                          {/* 首行（条数+档位+趋势+各类徽标）必须可换行收进本格：
+                              整行 nowrap 会横向溢出、盖住右侧 sticky 操作列拦截点击。 */}
+                          <span className="flex flex-wrap items-center gap-x-1 gap-y-0.5">
                           {p.adCount != null && (
                             <>
                           <span className="tabular-nums text-ink/80">
@@ -3220,6 +3435,7 @@ export function CatalogClient({
                               {d.products.adPolicyRisk}
                             </span>
                           )}
+                          </span>
                           {p.adCountSelf != null &&
                             p.adCountOthers != null && (
                               <span className="block text-[11px] text-ink/50">
@@ -3256,7 +3472,7 @@ export function CatalogClient({
                       title={p.name}
                     >
                       <span className="line-clamp-2 text-[15px] font-semibold leading-snug text-ink">{p.name}</span>
-                      <span className="mt-1 inline-flex gap-1 align-middle">
+                      <span className="mt-1 flex flex-wrap gap-1">
                         {p.recommended && (
                           <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
                             {d.products.recommendedBadge}
@@ -3344,7 +3560,11 @@ export function CatalogClient({
                     <td className="whitespace-nowrap px-3 py-2 text-xs tabular-nums text-ink/60">
                       {formatDate(p.createdAt)}
                     </td>
-                    <td className="sticky right-0 z-10 bg-inherit px-3 py-2 shadow-[-1px_0_0_0_rgba(0,0,0,0.06)]">
+                    <td
+                      className={`sticky right-0 z-20 px-3 py-2 shadow-[-1px_0_0_0_rgba(0,0,0,0.06)] ${
+                        blacklisted ? "bg-[#f5f5f6]" : "bg-white"
+                      }`}
+                    >
                       <span className="flex gap-2">
                         <button
                           className="whitespace-nowrap text-xs text-signal hover:underline disabled:opacity-40"
@@ -3404,6 +3624,12 @@ export function CatalogClient({
               {d.products.toolbarGroupEveryday}
             </p>
             <div className="flex flex-wrap items-center gap-3">
+              <button
+                className={sort.startsWith("brand_") ? btnPrimary : btnGhost}
+                onClick={() => setSort("brand_asc")}
+              >
+                {d.products.sortBrandFirst}
+              </button>
               <label className="flex items-center gap-2 text-sm text-ink/80">
                 {d.products.addedDateLabel}
                 <input
@@ -3675,6 +3901,15 @@ export function CatalogClient({
                 </Link>
               </p>
             )}
+            {batchResult.skippedExisting &&
+              batchResult.skippedExisting.length > 0 && (
+                <p className="rounded-lg bg-slate-50 px-4 py-2 text-sm text-ink/70">
+                  {d.products.batchResultSkippedExisting.replace(
+                    "{n}",
+                    String(batchResult.skippedExisting.length)
+                  )}
+                </p>
+              )}
             {batchResult.skippedBlacklist &&
               batchResult.skippedBlacklist.length > 0 && (
                 <div className="rounded-lg bg-amber-50 px-4 py-2 text-sm text-amber-900">

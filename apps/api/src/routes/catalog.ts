@@ -356,9 +356,20 @@ export function buildProductOrderBy(sort: unknown): Array<Record<string, string>
     case "score_asc":
       return [{ recommendationScore: "asc" }, { externalId: "desc" }];
     case "brand_desc":
-      return [{ brand: "desc" }, { externalId: "desc" }];
+      // 品牌内次级序：推荐指数 → 评论数 → 主键（同品牌最好的排最前，不再按编号乱序）。
+      return [
+        { brand: "desc" },
+        { recommendationScore: "desc" },
+        { reviewCount: "desc" },
+        { externalId: "desc" },
+      ];
     case "brand_asc":
-      return [{ brand: "asc" }, { externalId: "desc" }];
+      return [
+        { brand: "asc" },
+        { recommendationScore: "desc" },
+        { reviewCount: "desc" },
+        { externalId: "desc" },
+      ];
     case "asin_desc":
       return [{ asin: "desc" }, { externalId: "desc" }];
     case "asin_asc":
@@ -2531,6 +2542,8 @@ export async function registerCatalogRoutes(
         reason: string;
       }>;
       const created: Array<{ offerId: string; productId: string }> = [];
+      /** 幂等命中：Offer 早已建过（同步自动建/一键筛选/此前手动建），未重复创建。 */
+      const skippedExisting: Array<{ offerId: string; productId: string }> = [];
       const failed: Array<{ productId: string; reason: string }> = [];
       const skippedBlacklist: Array<{ productId: string; reason: string }> = [];
       for (const pid of productIds) {
@@ -2557,7 +2570,7 @@ export async function registerCatalogRoutes(
           continue;
         }
         try {
-          const { offerId } = await createOfferFromProduct(
+          const res = await createOfferFromProduct(
             { prisma, createOfferImpl: (input) => deps.offers.create(input) },
             { id: p.networkId as string, kind },
             {
@@ -2571,7 +2584,13 @@ export async function registerCatalogRoutes(
               promoUrl: p.promoUrl as string | null,
             }
           );
-          created.push({ offerId, productId: pid });
+          // created=false = 幂等回放（Offer 已存在）：单列 skippedExisting，
+          // 不许混进 created 计数误导前端报「成功创建」。
+          if (res.created) {
+            created.push({ offerId: res.offerId, productId: pid });
+          } else {
+            skippedExisting.push({ offerId: res.offerId, productId: pid });
+          }
         } catch (error) {
           failed.push({
             productId: pid,
@@ -2585,11 +2604,12 @@ export async function registerCatalogRoutes(
         action: "CATALOG_BATCH_OFFER_CREATED",
         detail: {
           created: created.length,
+          skippedExisting: skippedExisting.length,
           failed: failed.length,
           skippedBlacklist: skippedBlacklist.length,
         },
       });
-      return { created, failed, skippedBlacklist };
+      return { created, skippedExisting, failed, skippedBlacklist };
     }
   );
 

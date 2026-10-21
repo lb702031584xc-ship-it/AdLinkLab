@@ -10,3 +10,19 @@ export function selectableProducts(
 ): CatalogProduct[] {
   return products.filter((p) => !p.blacklisted);
 }
+
+/**
+ * 排序值形状：`<列基名>_asc|desc`（如 brand_asc / id_desc）。
+ * localStorage 里的排序是用户可篡改的外部输入，必须校验后才采纳，
+ * 非法值一律回默认 id_desc，避免脏值把列表查询打挂。
+ */
+const SORT_VALUE_RE = /^[a-z]+_(asc|desc)$/;
+
+export function isValidSortValue(v: unknown): v is string {
+  return typeof v === "string" && SORT_VALUE_RE.test(v);
+}
+
+/** 存储中的排序值 → 合法则原样返回，不合法/缺失 → null（调用方回默认）。 */
+export function resolveStoredSort(raw: string | null | undefined): string | null {
+  return isValidSortValue(raw) ? raw : null;
+}

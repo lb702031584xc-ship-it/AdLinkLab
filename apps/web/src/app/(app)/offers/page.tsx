@@ -181,10 +181,13 @@ export default async function OffersPage({
   /** 测试优先排序（把握最大在前）：仅 priority 有意义，其余值按默认。 */
   const sortParam = sp.sort === "priority" ? "priority" : undefined;
   // P1-30：筛选预设参数（preset=1 时用默认预设；显式参数优先）。
-  const presetDefaults =
-    sp.preset === "1"
-      ? { minCommission: 10, minRate: 10, minPrice: 80, maxPrice: 150 }
-      : {};
+  // 价格只设下限不封顶：高价高佣金才是重点测试对象，默认上限会把它们静默藏掉。
+  const presetDefaults: {
+    minCommission?: number;
+    minRate?: number;
+    minPrice?: number;
+    maxPrice?: number;
+  } = sp.preset === "1" ? { minCommission: 10, minRate: 10, minPrice: 80 } : {};
   const presetFilter: OfferPresetFilter = {
     minReviews: parseFilterNum(sp.minReviews),
     minCommission: parseFilterNum(sp.minCommission) ?? presetDefaults.minCommission ?? null,
@@ -662,9 +665,7 @@ export default async function OffersPage({
             maxPrice:
               sp.maxPrice != null && !Array.isArray(sp.maxPrice)
                 ? sp.maxPrice
-                : sp.preset === "1"
-                  ? "150"
-                  : "",
+                : "",
             minScore: sp.minScore != null && !Array.isArray(sp.minScore) ? sp.minScore : "",
           }}
         />

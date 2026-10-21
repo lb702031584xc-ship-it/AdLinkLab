@@ -353,36 +353,51 @@ export function CatalogBrandView({
     if (creatingId) return;
     setCreatingId(prod.id);
     setMsg(null);
-    const res = await batchCreateOffersAction([prod.id]);
-    if (!res.ok) {
-      setCreatingId(null);
-      setMsg(res.error);
-      return;
-    }
-    const created = res.data.created[0];
-    const failedOne = res.data.failed[0];
-    const skippedOne = res.data.skippedBlacklist?.[0];
-    if (created) {
-      let text = p.batchResultCreated.replace("{n}", "1");
-      // 只有品牌有落地页链接时才套用；无链接 = 单品投放正道，用商品自己的
-      // promoUrl，不给任何提示。只有套用成功才注明，失败要如实说。
-      if (b.landingUrl) {
-        const upd = await updateOfferAction(created.offerId, {
-          affiliateUrl: b.landingUrl,
-        });
-        text += upd.ok
-          ? `；${p.brandLandingApplied}`
-          : `；${p.brandLandingApplyFailed}`;
+    try {
+      const res = await batchCreateOffersAction([prod.id]);
+      if (!res.ok) {
+        setMsg(res.error);
+        return;
       }
-      setMsg(text);
-    } else if (skippedOne) {
-      setMsg(`${p.offerOneSkipped ?? "未创建（黑名单）"}：${skippedOne.reason}`);
-    } else {
+      const created = res.data.created[0];
+      // 幂等回放：Offer 早已建过——不是失败，明示已存在；品牌落地页照样套用
+      // （与此前「已存在计入 created」时的实际效果一致）。
+      const existing = res.data.skippedExisting?.[0];
+      const failedOne = res.data.failed[0];
+      const skippedOne = res.data.skippedBlacklist?.[0];
+      const target = created ?? existing;
+      if (target) {
+        let text = created
+          ? p.batchResultCreated.replace("{n}", "1")
+          : p.offerOneExists;
+        // 只有品牌有落地页链接时才套用；无链接 = 单品投放正道，用商品自己的
+        // promoUrl，不给任何提示。只有套用成功才注明，失败要如实说。
+        if (b.landingUrl) {
+          const upd = await updateOfferAction(target.offerId, {
+            affiliateUrl: b.landingUrl,
+          });
+          text += upd.ok
+            ? `；${p.brandLandingApplied}`
+            : `；${p.brandLandingApplyFailed}`;
+        }
+        setMsg(text);
+      } else if (skippedOne) {
+        setMsg(`${p.offerOneSkipped ?? "未创建（黑名单）"}：${skippedOne.reason}`);
+      } else {
+        setMsg(
+          `${p.offerOneFailed ?? "创建失败"}：${failedOne?.reason ?? p.unknownReason ?? "未知原因"}`
+        );
+      }
+    } catch (err) {
       setMsg(
-        `${p.offerOneFailed ?? "创建失败"}：${failedOne?.reason ?? p.unknownReason ?? "未知原因"}`
+        p.actionFailed.replace(
+          "{error}",
+          err instanceof Error ? err.message : String(err)
+        )
       );
+    } finally {
+      setCreatingId(null);
     }
-    setCreatingId(null);
   }
 
   if (loading) {

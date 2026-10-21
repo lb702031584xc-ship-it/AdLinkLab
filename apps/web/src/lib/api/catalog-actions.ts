@@ -212,6 +212,8 @@ export async function saveSessionCredentialsAction(
 
 export interface BatchCreateResult {
   created: Array<{ offerId: string; productId: string }>;
+  /** Idempotent replays: an Offer already exists for the product (not re-created, not a failure). */
+  skippedExisting?: Array<{ offerId: string; productId: string }>;
   failed: Array<{ productId: string; reason: string }>;
   /** Blacklisted products skipped by batch offer creation (not created). Optional until the backend batch lands. */
   skippedBlacklist?: Array<{ productId: string; reason: string }>;

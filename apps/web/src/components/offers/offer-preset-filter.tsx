@@ -40,7 +40,7 @@ export function OfferPresetFilterBar({
   const inputClass =
     "w-24 rounded-lg border border-ink/15 bg-white px-2 py-1.5 text-sm text-ink";
   const labelClass = "flex items-center gap-1.5 text-xs text-ink/70";
-  const presetHref = `/offers?tab=${encodeURIComponent(tab)}&preset=1&minCommission=10&minRate=10&minPrice=80&maxPrice=150`;
+  const presetHref = `/offers?tab=${encodeURIComponent(tab)}&preset=1&minCommission=10&minRate=10&minPrice=80`;
   const clearHref = `/offers?tab=${encodeURIComponent(tab)}`;
   return (
     <form
