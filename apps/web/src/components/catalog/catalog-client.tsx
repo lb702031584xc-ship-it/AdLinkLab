@@ -3175,12 +3175,45 @@ export function CatalogClient({
           className="mt-2 cursor-grab overflow-x-auto rounded-xl border border-ink/10 active:cursor-grabbing"
         >
           <table
-            className="w-full min-w-[1900px] border-collapse text-sm"
+            className="table-fixed border-collapse text-sm"
             style={{
+              width: "2748px",
               fontFamily:
                 '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif',
             }}
           >
+            {/* 固定布局：26 列宽由此唯一决定（合计 2748 = 表宽），auto 布局下
+                各列 min-content 总和过约束会把广告格压成逐字竖排、盖住操作列。
+                左右 sticky 偏移与此严格对应：序号列 left-[36px] = 复选列宽 36，
+                操作列 right-0 自身宽 164。改列宽必须同步改这两处。 */}
+            <colgroup>
+              <col className="w-[36px]" />
+              <col className="w-[44px]" />
+              <col className="w-[84px]" />
+              <col className="w-[112px]" />
+              <col className="w-[76px]" />
+              <col className="w-[80px]" />
+              <col className="w-[132px]" />
+              <col className="w-[96px]" />
+              <col className="w-[72px]" />
+              <col className="w-[84px]" />
+              <col className="w-[116px]" />
+              <col className="w-[112px]" />
+              <col className="w-[126px]" />
+              <col className="w-[104px]" />
+              <col className="w-[112px]" />
+              <col className="w-[100px]" />
+              <col className="w-[190px]" />
+              <col className="w-[230px]" />
+              <col className="w-[84px]" />
+              <col className="w-[104px]" />
+              <col className="w-[88px]" />
+              <col className="w-[122px]" />
+              <col className="w-[88px]" />
+              <col className="w-[92px]" />
+              <col className="w-[100px]" />
+              <col className="w-[164px]" />
+            </colgroup>
             <thead className="sticky top-0 z-20">
               <tr className="bg-[#f7f8fa] text-left text-sm text-ink/55 [&>th]:whitespace-nowrap">
                 <th className="sticky left-0 z-30 w-[36px] min-w-[36px] bg-inherit px-2 py-2.5">
