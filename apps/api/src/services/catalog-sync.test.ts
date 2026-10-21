@@ -10,7 +10,12 @@ import { describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { AppError, ForbiddenError, ValidationError } from "@adlinklab/shared";
 import type { PrismaClient } from "@adlinklab/database";
-import { syncCatalog, type CatalogSyncDeps } from "./catalog-sync.js";
+import {
+  createOfferFromProduct,
+  syncCatalog,
+  type CatalogSyncDeps,
+} from "./catalog-sync.js";
+import { BRAND_NAME_SOURCES } from "./offer-engine.js";
 import {
   BaseSessionAdapter,
   SessionExpiredError,
@@ -971,5 +976,49 @@ describe("syncCatalog PB 双数据源合并", () => {
     });
     expect(summary.datafeedError).toContain("Walmart");
     expect(summary.datafeedError).toContain("brand type disabled");
+  });
+});
+
+describe("createOfferFromProduct 品牌来源合法性（回归：catalog-sync 非法值全灭）", () => {
+  function capturingDeps() {
+    const seen: any[] = [];
+    const deps = {
+      prisma: {} as any,
+      createOfferImpl: async (input: any) => {
+        seen.push(input);
+        return { offer: { id: randomUUID() }, created: true };
+      },
+    } as unknown as CatalogSyncDeps;
+    return { deps, seen };
+  }
+  const baseProduct: any = {
+    tenantId: "tenant-1",
+    externalId: "ext-1",
+    name: "VEVOR Slushy Machine",
+    brand: "VEVOR",
+    promoUrl: "https://example.com/go",
+    landingUrl: null,
+    commissionAmount: 120.99,
+    commissionRate: null,
+    price: 1209.9,
+  };
+
+  it("有品牌 → brandNameSource 必须是 OfferService 合法枚举值", async () => {
+    const { deps, seen } = capturingDeps();
+    const out = await createOfferFromProduct(deps, testNetwork as any, baseProduct);
+    expect(out.created).toBe(true);
+    expect(seen).toHaveLength(1);
+    expect(seen[0].brandName).toBe("VEVOR");
+    expect(BRAND_NAME_SOURCES).toContain(seen[0].brandNameSource);
+    expect(seen[0].brandNameSource).toBe("auto_extracted");
+  });
+
+  it("无品牌 → brandNameSource 不传（undefined）", async () => {
+    const { deps, seen } = capturingDeps();
+    await createOfferFromProduct(deps, testNetwork as any, {
+      ...baseProduct,
+      brand: null,
+    });
+    expect(seen[0].brandNameSource).toBeUndefined();
   });
 });

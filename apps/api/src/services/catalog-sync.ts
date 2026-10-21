@@ -325,7 +325,10 @@ export async function createOfferFromProduct(
           : undefined,
     avgPrice: product.price ?? undefined,
     brandName: product.brand ?? undefined,
-    brandNameSource: product.brand ? "catalog-sync" : undefined,
+    // 品牌名来自网络目录自动提取——必须是 OfferService 认的合法来源值
+    // （BRAND_NAME_SOURCES: manual | auto_extracted | domain_fallback）；
+    // 曾误写 "catalog-sync"，被 create 校验全数打回（目录建 Offer 全灭）。
+    brandNameSource: product.brand ? "auto_extracted" : undefined,
     idempotencyKey: `catalog:${network.id}:${product.externalId}`,
   });
   return { offerId: res.offer.id, created: res.created };
