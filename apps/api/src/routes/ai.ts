@@ -44,6 +44,10 @@ import { fetchPage, fetchPageHtml } from "../ai/fetch-page.js";
 import { ocrImageText, OcrError } from "../offer-metrics/ocr.js";
 import { screenshotPage, PageBlockedError, fetchPageTextWithFallback } from "../ai/page-shot.js";
 import { checkBrandBidding } from "../ai/brand-bidding.js";
+import {
+  recordPaidDataUsage,
+  requirePaidDataAccess,
+} from "../services/paid-data-gateway.js";
 import { parseKeywordCapture } from "../ai/keyword-capture.js";
 import { parseEcommerceCapture } from "../ai/ecommerce-capture.js";
 import { extractKeywordsWithAi } from "../ai/keyword-capture-ai.js";
@@ -2201,11 +2205,32 @@ export async function registerAiRoutes(
    */
   app.post("/api/v1/ai/brand-bidding", async (request) => {
     const info = await requireSession(deps, request);
-    void info;
     const body = (request.body ?? {}) as { brandKeyword?: unknown; officialDomain?: unknown };
     const brandKeyword = typeof body.brandKeyword === "string" ? body.brandKeyword.trim() : "";
     const officialDomain = typeof body.officialDomain === "string" ? body.officialDomain.trim() : "";
-    return checkBrandBidding(brandKeyword, officialDomain, { prisma: deps.prisma });
+    // 付费数据网关：SERP 查询是 DataForSEO 计费调用，统一走网关决策
+    // （站长直通 / 租户自备 key / 平台 key + paid-data 授权）。
+    const access = await requirePaidDataAccess(deps.prisma, {
+      tenantId: info.tenantId,
+      userId: info.id,
+      userRole: info.role,
+      feature: "brand-bidding",
+    });
+    const result = await checkBrandBidding(brandKeyword, officialDomain, {
+      prisma: deps.prisma,
+      credentials: access.credentials ?? undefined,
+    });
+    if (access.credentials) {
+      await recordPaidDataUsage(deps.prisma, {
+        tenantId: info.tenantId,
+        actorId: info.id,
+        feature: "brand-bidding",
+        keySource: access.keySource,
+        calls: 1,
+        grantId: access.grantId,
+      });
+    }
+    return result;
   });
 
   /** 单条抓取记录详情（含插件发来的真实 HTML，给落地页拆解用）。 */

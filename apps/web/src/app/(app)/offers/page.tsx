@@ -25,6 +25,7 @@ import {
   OfferRowCheckbox,
   OfferSelectAllCheckbox,
   OfferBatchDeleteBar,
+  OfferPrescreenBar,
 } from "@/components/offers/offer-selection";
 import { TestSpendCell } from "@/components/offers/test-spend-cell";
 import { OfferApplicationCell } from "@/components/offers/offer-application-cell";
@@ -330,7 +331,35 @@ export default async function OffersPage({
       render: (o) => <OfferRowCheckbox offerId={o.id} />,
       className: "whitespace-nowrap",
     },
-    { header: t.common.misc.name, render: (o) => o.name },
+    {
+      header: t.common.misc.name,
+      render: (o) => (
+        <span>
+          {o.name}
+          {o.prescreenVerdict === "go" && (
+            <span className="ml-2 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
+              {t.entities.forms.offer.prescreenVerdictGo}
+            </span>
+          )}
+          {o.prescreenVerdict === "unknown" && (
+            <span
+              className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800"
+              title={o.prescreenReason ?? undefined}
+            >
+              {t.entities.forms.offer.prescreenVerdictUnknown}
+            </span>
+          )}
+          {o.prescreenVerdict === "stop" && (
+            <span
+              className="ml-2 rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800"
+              title={o.prescreenReason ?? undefined}
+            >
+              {t.entities.forms.offer.prescreenVerdictStop}
+            </span>
+          )}
+        </span>
+      ),
+    },
     {
       header: t.entities.offers.columns.mid,
       render: (o) => (
@@ -586,6 +615,13 @@ export default async function OffersPage({
                 deleteSelectedConfirm:
                   t.entities.offers.columns.deleteSelectedConfirm,
                 deleting: t.entities.offers.columns.deleting,
+              }}
+            />
+            <OfferPrescreenBar
+              dict={{
+                prescreenBatch: t.entities.forms.offer.prescreenBatch,
+                prescreenBatching: t.entities.forms.offer.prescreenBatching,
+                prescreenBatchDone: t.entities.forms.offer.prescreenBatchDone,
               }}
             />
             <DataTable<Offer>

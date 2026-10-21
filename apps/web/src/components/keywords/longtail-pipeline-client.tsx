@@ -21,6 +21,7 @@ import {
   DFS_LOCATIONS,
 } from "@/lib/keywords/dataforseo-locations";
 import type { KeywordStarterDict } from "@/i18n/dict/keyword-starter";
+import { PaidDataBillingNote } from "@/components/paid-data/billing-note";
 
 type CompetitionMode = "lowPlusMedium" | "lowOnly" | "all";
 
@@ -256,6 +257,9 @@ export function LongtailPipelineClient({
     <section className="mt-6 rounded-xl border border-ink/10 bg-white p-4">
       <h2 className="text-base font-bold text-ink">📡 {t.title}</h2>
       <p className="mt-1 text-sm text-ink/60">{t.subtitle}</p>
+      <p className="mt-1">
+        <PaidDataBillingNote feature="keywords-ad-measure" labels={t.billing} />
+      </p>
 
       {/* 流程标注：先点什么、接着什么（每步带数字状态） */}
       <ol className="mt-3 grid gap-1.5 text-sm sm:grid-cols-2 lg:grid-cols-5">

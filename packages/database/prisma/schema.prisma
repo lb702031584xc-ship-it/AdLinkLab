@@ -250,6 +250,8 @@ model Tenant {
   catalogSyncJobs       CatalogSyncJob[]
   /// 每租户系统设置 back-references (additive)
   tenantSettings        TenantSetting[]
+  /// 付费数据网关用量台账 back-reference (additive)
+  paidDataUsages        PaidDataUsage[]
   /// 创意管理库 back-references (additive)
   creatives             Creative[]
 
@@ -487,6 +489,12 @@ model Offer {
   skuCommissionNote String?    @map("sku_commission_note")
   /// 补强 #9：转化流类型 soi_simple | one_click | pin_submit | cc_submit | free_trial | pay_per_call | ftd | cps_sale | mixed（null = 未标注，止损按现有倍数）。
   conversionFlow   String?     @map("conversion_flow")
+  /// 一键初筛结论（与工作表初筛同口径）：go | caution | stop | unknown；null = 未跑过初筛。判停只标注不删除。
+  prescreenVerdict String?     @map("prescreen_verdict")
+  /// 一键初筛原因（命中规则 + 关键值，人读文本）。
+  prescreenReason  String?     @map("prescreen_reason") @db.Text
+  /// 一键初筛最近运行时间。
+  prescreenedAt    DateTime?   @map("prescreened_at") @db.Timestamptz(3)
   createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt        DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
   archivedAt       DateTime?   @map("archived_at") @db.Timestamptz(3)
@@ -1186,6 +1194,12 @@ model NetworkProduct {
   approvalRatePct   Decimal? @map("approval_rate_pct") @db.Decimal(5, 2)
   /// 补强 #4：返款/结算周期天数（null = 未知）。
   payoutCycleDays   Int?     @map("payout_cycle_days")
+  /// 一键筛选最近结论：pass（全过）| kill（被某条规则杀）| review（数据不足待人工复核）；null = 未筛过。
+  screenVerdict     String?  @map("screen_verdict") @db.Text
+  /// 一键筛选结论原因（命中规则名 + 关键值）；pass 时为 null。
+  screenReason      String?  @map("screen_reason") @db.Text
+  /// 一键筛选最近运行时间。
+  screenedAt        DateTime? @map("screened_at") @db.Timestamptz(3)
   createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
   tenant  Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -2369,13 +2383,42 @@ model LaunchArchive {
   endedAt            DateTime? @map("ended_at") @db.Timestamptz(3)
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  /// 自动止损脚本最近生成时间（null = 未生成过）。脚本只在 Google Ads 内运行，站点不直接执行暂停。
+  stopLossScriptAt   DateTime? @map("stop_loss_script_at") @db.Timestamptz(3)
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  adPerfSnapshots AdPerfSnapshot[]
 
   @@index([tenantId, createdAt(sort: Desc)], map: "launch_archives_tenant_created_idx")
   @@index([tenantId, network], map: "launch_archives_tenant_network_idx")
   @@index([tenantId, status], map: "launch_archives_tenant_status_idx")
   @@map("launch_archives")
+}
+
+/// 投流数据人工回填快照（按档案 × 日期一条，同日重填 = 更新）：
+/// Google Ads 无 API 直连、转化不在站内，真实投后数据靠人工回填。
+/// 没回填就没有快照行——判断引擎只吃真实回填，绝不编造。
+model AdPerfSnapshot {
+  id          String   @id @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  archiveId   String   @map("archive_id") @db.Uuid
+  perfDate    DateTime @map("perf_date") @db.Date
+  /// 实际花费（档案币种）。
+  spend       Decimal  @db.Decimal(19, 4)
+  /// 实际平均出价（CPC）；未回填 → null（未知，不参与低价判断）。
+  avgCpc      Decimal? @map("avg_cpc") @db.Decimal(19, 4)
+  impressions Int      @default(0)
+  clicks      Int      @default(0)
+  conversions Int      @default(0)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  archive LaunchArchive @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+
+  @@unique([archiveId, perfDate], name: "ad_perf_snapshots_archive_date_unique")
+  @@index([tenantId, archiveId])
+  @@map("ad_perf_snapshots")
 }
 
 /// P0-3 — DB-backed API keys (additive). Raw key material is NEVER stored:
@@ -2641,6 +2684,27 @@ model AdminGrantAudit {
   @@index([tenantId])
   @@index([grantId])
   @@map("admin_grant_audits")
+}
+
+/// 付费数据网关用量台账：每（租户 × 功能 × 日期 × key 来源）一行，calls 累加。
+/// keySource：owner（站长直通）| tenant-own（租户自备 key）| platform（平台 key，另受 B 级授权 paid-data 的 usageLimit 约束）。
+/// 只记次数，永不记凭证内容。
+model PaidDataUsage {
+  id        String   @id @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  /// 功能键：keywords-expand | keywords-intent | keywords-ad-measure | catalog-ad-count | serp-ads | brand-bidding
+  feature   String   @db.Text
+  usageDate DateTime @map("usage_date") @db.Date
+  keySource String   @map("key_source") @db.Text
+  calls     Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, feature, usageDate, keySource], name: "paid_data_usage_tenant_feature_date_source_unique")
+  @@index([tenantId, usageDate])
+  @@map("paid_data_usage")
 }
 
 /// 每租户系统设置（对标 autoads 系统设置）：key = ai | ads | proxies | system，

@@ -1,0 +1,130 @@
+"use server";
+
+/**
+ * 付费数据（DataForSEO）server actions：
+ * - 网关判定预告（前端在付费按钮旁标注计费路径/剩余额度/拒绝原因）
+ * - 租户自备 key（BYOK）：状态（脱敏）/ 保存 / 验证 / 删除
+ * 凭证只写不回显：GET 只回 configured + verifiedAt（后端 mask 锁死）。
+ */
+import { EntityApiError, getApiBaseUrl, mapEntityErrorMessage } from "./entities-config";
+import { sessionHeaders } from "./session";
+import { getLang } from "@/i18n/lang";
+
+export type PaidDataActionResult<T = unknown> =
+  | { ok: true; data: T }
+  | { ok: false; error: string };
+
+async function apiFetch<T = unknown>(path: string, init?: RequestInit): Promise<T> {
+  const base = getApiBaseUrl();
+  const headers = await sessionHeaders();
+  const res = await fetch(`${base}${path}`, {
+    ...init,
+    headers: { ...headers, ...(init?.headers ?? {}) },
+    cache: "no-store",
+  });
+  const text = await res.text();
+  let data: unknown = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = null;
+  }
+  if (!res.ok) {
+    throw new EntityApiError(
+      res.status,
+      (data as { message?: string } | null)?.message ?? `Request failed (${res.status})`
+    );
+  }
+  return data as T;
+}
+
+async function attempt<T>(fn: () => Promise<T>): Promise<PaidDataActionResult<T>> {
+  try {
+    return { ok: true, data: await fn() };
+  } catch (error) {
+    return { ok: false, error: mapEntityErrorMessage(error, await getLang()) };
+  }
+}
+
+export type PaidDataFeatureKey =
+  | "keywords-expand"
+  | "keywords-intent"
+  | "keywords-ad-measure"
+  | "catalog-ad-count"
+  | "serp-ads"
+  | "brand-bidding";
+
+export interface PaidDataAccessInfo {
+  feature: string;
+  allowed: boolean;
+  keySource: "platform" | "tenant-own" | "owner" | null;
+  credentialsConfigured: boolean;
+  remainingCalls: number | null;
+  reason?: "no_grant" | "expired" | "cap_exceeded";
+  tenantOwnConfigured: boolean;
+}
+
+/** 网关判定预告（只判定不消费）：供付费按钮旁标注计费路径。 */
+export async function getPaidDataAccessAction(feature: PaidDataFeatureKey) {
+  return attempt(() =>
+    apiFetch<PaidDataAccessInfo>(`/api/v1/paid-data/access?feature=${feature}`)
+  );
+}
+
+export interface TenantDataForSeoStatus {
+  configured: boolean;
+  verifiedAt: string | null;
+}
+
+export async function getTenantDataForSeoStatusAction() {
+  return attempt(() => apiFetch<TenantDataForSeoStatus>("/api/v1/settings/dataforseo"));
+}
+
+export async function saveTenantDataForSeoAction(login: string, password: string) {
+  return attempt(() =>
+    apiFetch<TenantDataForSeoStatus & { saved: boolean }>("/api/v1/settings/dataforseo", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ login, password }),
+    })
+  );
+}
+
+export async function deleteTenantDataForSeoAction() {
+  return attempt(() =>
+    apiFetch<{ configured: boolean; deleted: boolean }>("/api/v1/settings/dataforseo", {
+      method: "DELETE",
+    })
+  );
+}
+
+export async function verifyTenantDataForSeoAction(login?: string, password?: string) {
+  return attempt(() =>
+    apiFetch<{ verified: boolean; login: string | null; balance: number | null }>(
+      "/api/v1/settings/dataforseo/verify",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ login, password }),
+      }
+    )
+  );
+}
+
+/* ── Offer 一键初筛（与商品库同一阶梯，结论写回 Offer 徽标字段） ── */
+
+export interface OfferPrescreenResult {
+  outcomes: Array<{ offerId: string; verdict: "go" | "unknown" | "stop"; reason: string }>;
+  counts: { go: number; unknown: number; stop: number; notFound: number };
+  skippedPaidLayer: boolean;
+}
+
+export async function prescreenOffersAction(ids: string[]) {
+  return attempt(() =>
+    apiFetch<OfferPrescreenResult>("/api/v1/offers/prescreen", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ids: ids.slice(0, 50) }),
+    })
+  );
+}

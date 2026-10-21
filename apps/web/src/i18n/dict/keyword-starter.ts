@@ -120,6 +120,15 @@ export interface KeywordStarterDict {
     measuredLine: string;
     importBtn: string;
     failed: string;
+    /** 付费数据网关计费路径标注（付费按钮旁）。 */
+    billing: {
+      platform: string;
+      platformNoLimit: string;
+      tenantOwn: string;
+      owner: string;
+      denied: string;
+      loading: string;
+    };
   };
   captureKwFrom: string;
   captureKwPage: string;
@@ -305,6 +314,14 @@ export const zh: KeywordStarterDict = {
     measuredLine: "测算完成：勾选 {x} 条，返回前 {y} 条（按搜索量降序）",
     importBtn: "把已勾 {n} 个词导入投放 →",
     failed: "操作失败，请稍后重试",
+    billing: {
+      platform: "使用平台额度·剩余 {n} 次",
+      platformNoLimit: "使用平台额度",
+      tenantOwn: "使用我的 DataForSEO",
+      owner: "站长直通",
+      denied: "付费数据未授权：请向管理员申请 paid-data 授权，或在设置里填自己的 DataForSEO",
+      loading: "计费路径确认中…",
+    },
   },
   captureKwFrom: "抓取自",
   captureKwPage: "抓取页",
@@ -496,6 +513,14 @@ export const en: KeywordStarterDict = {
     measureNeedPick: "Pick keywords first (measurement only pays for picked ones)",
     importBtn: "Import {n} picked keywords to launch →",
     failed: "Something failed, please try again",
+    billing: {
+      platform: "Platform quota · {n} left",
+      platformNoLimit: "Platform quota",
+      tenantOwn: "Using my DataForSEO",
+      owner: "Owner direct",
+      denied: "Paid data not authorized: ask an admin for a paid-data grant, or add your own DataForSEO in Settings",
+      loading: "Checking billing path…",
+    },
   },
   captureKwFrom: "Captured from",
   captureKwPage: "captured page",

@@ -54,6 +54,16 @@ import {
   type ScreeningPreset,
 } from "../services/catalog-screening.js";
 import { calcBrandAdCounts } from "../services/brand-ad-count.js";
+import {
+  forceSelectProducts,
+  runOneClickScreen,
+  ONE_CLICK_SCREEN_MAX_PRODUCTS,
+  type OneClickProductRow,
+} from "../services/one-click-screen.js";
+import {
+  recordPaidDataUsage,
+  requirePaidDataAccess,
+} from "../services/paid-data-gateway.js";
 import { countryCodeFromMarketPlace } from "../networks/yeahpromos-adapter.js";
 import {
   addToBlacklist,
@@ -203,6 +213,12 @@ function serializeProduct(r: Record<string, unknown>, whitelisted: boolean) {
       (typeof r.adCountCheckedAt === "string" ? r.adCountCheckedAt : null),
     syncStreak: r.syncStreak ?? 0,
     whitelisted,
+    /** 一键筛选结论（未筛 → null）：pass | kill | review + 原因 + 时间。 */
+    screenVerdict: (r.screenVerdict as string) ?? null,
+    screenReason: (r.screenReason as string) ?? null,
+    screenedAt:
+      (r.screenedAt as Date)?.toISOString?.() ??
+      (typeof r.screenedAt === "string" ? r.screenedAt : null),
     syncedAt: (r.syncedAt as Date)?.toISOString?.() ?? null,
     createdAt: (r.createdAt as Date)?.toISOString?.() ?? null,
   };
@@ -332,19 +348,27 @@ export function buildPresetWhere(preset: {
  * 广告投放数量过滤（列表查询参数，与预设过滤可组合）：
  * minAdCount=N → adCount >= N；hasAds=1（或 true）→ adCount > 0（即 >= 1）。
  * 两者同时给取更严的一个；都无效 → 不过滤。
+ * maxAdCount=N → adCount <= N（新增区间上限；与 min 合成区间，
+ * 「甜蜜点」快捷档 = min 1 / max 20）。单独给 max 时同样生效。
  * 注意：adCount 为 null（未计算）不命中——无数据不能当"有广告"，
  * 与预设过滤"null 不拦"的口径不同，这里是用户主动按广告数筛选。
+ * 分档口径见 @adlinklab/shared ad-count-tier（经验口径，非竞价者数）。
  */
 export function buildAdCountWhere(query: {
   minAdCount?: unknown;
   hasAds?: unknown;
+  maxAdCount?: unknown;
 }): Record<string, unknown> {
   let floor = 0;
   const min = asNumber(query.minAdCount);
   if (min != null && min > 0) floor = Math.max(floor, Math.floor(min));
   if (query.hasAds === "1" || query.hasAds === "true")
     floor = Math.max(floor, 1);
-  return floor > 0 ? { adCount: { gte: floor } } : {};
+  const range: { gte?: number; lte?: number } = {};
+  if (floor > 0) range.gte = floor;
+  const max = asNumber(query.maxAdCount);
+  if (max != null && max >= 0) range.lte = Math.floor(max);
+  return Object.keys(range).length > 0 ? { adCount: range } : {};
 }
 
 /**
@@ -1417,9 +1441,19 @@ export async function registerCatalogRoutes(
       if (Array.isArray(rawIds) && rawIds.length > 0) {
         productIds = asIdArray(rawIds, "ids");
       }
+      // 付费数据网关：广告数计算是 DataForSEO 计费调用，统一走网关
+      // （站长直通 / 租户自备 key / 平台 key + paid-data 授权）。
+      const access = await requirePaidDataAccess(prisma, {
+        tenantId: info.tenantId,
+        userId: info.id,
+        userRole: info.role,
+        feature: "catalog-ad-count",
+      });
       let result;
       try {
-        result = await calcBrandAdCounts(prisma, info.tenantId, productIds);
+        result = await calcBrandAdCounts(prisma, info.tenantId, productIds, {
+          credentials: access.credentials ?? undefined,
+        });
       } catch (e) {
         if (
           e instanceof Error &&
@@ -1430,6 +1464,16 @@ export async function registerCatalogRoutes(
           );
         }
         throw e;
+      }
+      if (result.groupsQueried > 0) {
+        await recordPaidDataUsage(prisma, {
+          tenantId: info.tenantId,
+          actorId: info.id,
+          feature: "catalog-ad-count",
+          keySource: access.keySource,
+          calls: result.groupsQueried,
+          grantId: access.grantId,
+        });
       }
       await writeCatalogAudit(prisma, {
         tenantId: info.tenantId,
@@ -1443,7 +1487,115 @@ export async function registerCatalogRoutes(
           errors: result.errors.length,
         },
       });
-      return result;
+      return {
+        ...result,
+        billing: {
+          keySource: access.keySource,
+          remainingCalls: access.remainingCalls,
+        },
+      };
+    }
+  );
+
+  // 一键筛选：黑名单 → $8 门槛 → 已保存预设 → 广告数（付费层经网关，
+  // 拒绝自动跳过）→ 流量门免费档。全过自动建 Offer，被杀留备选池带原因，
+  // 数据不足转人工复核。报告全数字（services/one-click-screen）。
+  app.post<{
+    Body: { scope?: unknown; ids?: unknown; filter?: unknown };
+  }>(
+    "/api/v1/catalog/products/one-click-screen",
+    async (request) => {
+      const info = await requireSession(deps, request);
+      const scope =
+        typeof request.body?.scope === "string" ? request.body.scope : "";
+      const where: Record<string, unknown> = { tenantId: info.tenantId };
+      if (scope === "selected") {
+        const ids = asIdArray(request.body?.ids, "ids");
+        if (ids.length === 0) throw new ValidationError("ids 不能为空");
+        where.id = { in: ids };
+      } else if (scope === "current") {
+        // 与列表同一套 where 构造器（筛选条件口径一致；预设自动过滤不用——
+        // 预设关在流水线里跑，报告里有独立计数）。
+        const filter =
+          request.body?.filter && typeof request.body.filter === "object"
+            ? (request.body.filter as Record<string, unknown>)
+            : {};
+        if (
+          typeof filter.networkId === "string" &&
+          filter.networkId.trim()
+        ) {
+          where.networkId = assertId(filter.networkId, "networkId");
+        }
+        if (filter.recommended === "true" || filter.recommended === true)
+          where.recommended = true;
+        else if (filter.recommended === "false" || filter.recommended === false)
+          where.recommended = false;
+        Object.assign(where, buildPoolStageWhere(filter));
+        const q = asTrimmed(filter.q);
+        if (q) {
+          where.OR = [
+            { name: { contains: q, mode: "insensitive" } },
+            { brand: { contains: q, mode: "insensitive" } },
+            { asin: { contains: q, mode: "insensitive" } },
+          ];
+        }
+        Object.assign(where, buildAdCountWhere(filter));
+        Object.assign(where, buildCountryWhere(filter));
+      } else if (scope === "unscreened") {
+        where.screenedAt = null;
+      } else {
+        throw new ValidationError(
+          "scope 必须为 selected / current / unscreened"
+        );
+      }
+      const rows = await prisma.networkProduct.findMany({
+        where,
+        orderBy: { createdAt: "asc" },
+        take: ONE_CLICK_SCREEN_MAX_PRODUCTS + 1,
+      });
+      const truncated = rows.length > ONE_CLICK_SCREEN_MAX_PRODUCTS;
+      const products = rows.slice(0, ONE_CLICK_SCREEN_MAX_PRODUCTS);
+      const report = await runOneClickScreen(
+        {
+          prisma,
+          createOfferImpl: (input) => deps.offers.create(input),
+        },
+        {
+          tenantId: info.tenantId,
+          actorId: info.id,
+          userRole: info.role,
+          products: products as unknown as OneClickProductRow[],
+        }
+      );
+      return { ...report, scope, truncated };
+    }
+  );
+
+  // 人工强制入选：被一键筛选判杀的商品可强制建 Offer（黑名单不可强制），
+  // 每次强制写审计（services/one-click-screen.forceSelectProducts）。
+  app.post<{ Body: { ids?: unknown } }>(
+    "/api/v1/catalog/products/force-select",
+    async (request) => {
+      const info = await requireSession(deps, request);
+      const ids = asIdArray(request.body?.ids, "ids");
+      if (ids.length === 0) throw new ValidationError("ids 不能为空");
+      if (ids.length > 50)
+        throw new ValidationError("ids 最多 50 个");
+      const products = await prisma.networkProduct.findMany({
+        where: { tenantId: info.tenantId, id: { in: ids } },
+      });
+      const result = await forceSelectProducts(
+        {
+          prisma,
+          createOfferImpl: (input) => deps.offers.create(input),
+        },
+        {
+          tenantId: info.tenantId,
+          actorId: info.id,
+          products: products as unknown as OneClickProductRow[],
+        }
+      );
+      return { ...result, notFound: ids.length - products.length };
     }
   );
 

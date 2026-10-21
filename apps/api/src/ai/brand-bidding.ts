@@ -71,6 +71,11 @@ export interface BrandBiddingResult {
 export interface BrandBiddingDeps {
   prisma: PrismaClient;
   fetchImpl?: typeof fetch;
+  /**
+   * 付费数据网关解析出的凭证：传入时优先用它（租户自备 key 路径）；
+   * 不传 → 读站级流量信号凭证（平台路径/历史行为）。
+   */
+  credentials?: { login: string; password: string } | null;
 }
 
 const SERP_API_URL =
@@ -151,11 +156,11 @@ export async function checkBrandBidding(
   if (!kw) throw new BrandBiddingError("品牌词不能为空");
   if (!od || !od.includes(".")) throw new BrandBiddingError("官方域名无效");
 
-  const login = await readEncryptedTrafficSetting(deps.prisma, DATAFORSEO_LOGIN_SETTING);
-  const password = await readEncryptedTrafficSetting(
+  const login = deps.credentials?.login ?? (await readEncryptedTrafficSetting(deps.prisma, DATAFORSEO_LOGIN_SETTING));
+  const password = deps.credentials?.password ?? (await readEncryptedTrafficSetting(
     deps.prisma,
     DATAFORSEO_PASSWORD_SETTING
-  );
+  ));
   const checkedAt = new Date().toISOString();
   if (!login || !password) {
     return {

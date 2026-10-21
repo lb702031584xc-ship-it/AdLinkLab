@@ -150,6 +150,10 @@ export interface Offer {
   applicationNote?: string | null;
   /** 推荐指数摘要（第三批；无数据时为 null/缺失）。 */
   metricsSummary?: MetricsSummary | null;
+  /** 一键初筛结论（go | unknown | stop；null/缺失 = 未筛）。 */
+  prescreenVerdict?: string | null;
+  prescreenReason?: string | null;
+  prescreenedAt?: string | null;
 }
 
 export interface LandingPage {

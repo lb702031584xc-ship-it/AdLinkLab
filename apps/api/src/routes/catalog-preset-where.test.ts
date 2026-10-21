@@ -88,6 +88,35 @@ describe("buildAdCountWhere（广告投放数量过滤）", () => {
       adCount: { gte: 1 },
     });
   });
+
+  it("maxAdCount → adCount lte（区间上限，单独给也生效）", () => {
+    expect(buildAdCountWhere({ maxAdCount: 20 })).toEqual({
+      adCount: { lte: 20 },
+    });
+    expect(buildAdCountWhere({ maxAdCount: "20" })).toEqual({
+      adCount: { lte: 20 },
+    });
+    expect(buildAdCountWhere({ maxAdCount: 0 })).toEqual({
+      adCount: { lte: 0 },
+    });
+  });
+
+  it("甜蜜点区间：min=1 + max=20 → { gte: 1, lte: 20 }", () => {
+    expect(buildAdCountWhere({ minAdCount: 1, maxAdCount: 20 })).toEqual({
+      adCount: { gte: 1, lte: 20 },
+    });
+    expect(buildAdCountWhere({ hasAds: "1", maxAdCount: 20 })).toEqual({
+      adCount: { gte: 1, lte: 20 },
+    });
+  });
+
+  it("maxAdCount 非法值（负数/非数字）→ 忽略上限", () => {
+    expect(buildAdCountWhere({ maxAdCount: -1 })).toEqual({});
+    expect(buildAdCountWhere({ maxAdCount: "abc" })).toEqual({});
+    expect(buildAdCountWhere({ minAdCount: 2, maxAdCount: -5 })).toEqual({
+      adCount: { gte: 2 },
+    });
+  });
 });
 
 describe("buildCountryWhere（投放国家过滤）", () => {

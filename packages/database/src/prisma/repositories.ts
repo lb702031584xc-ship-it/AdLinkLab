@@ -360,6 +360,10 @@ export type OfferWithApplication = Offer & {
   skuCommissionNote?: string | null;
   /** 补强 #9：转化流类型（null = 未标注）。 */
   conversionFlow?: string | null;
+  /** 一键初筛结论（go | unknown | stop；null = 未筛）。 */
+  prescreenVerdict?: string | null;
+  prescreenReason?: string | null;
+  prescreenedAt?: Date | null;
 };
 
 function toOffer(row: {
@@ -388,6 +392,9 @@ function toOffer(row: {
   payoutCycleDays?: number | null;
   skuCommissionNote?: string | null;
   conversionFlow?: string | null;
+  prescreenVerdict?: string | null;
+  prescreenReason?: string | null;
+  prescreenedAt?: Date | null;
   idempotencyScope: string | null;
   idempotencyKey: string | null;
   createdAt: Date;
@@ -421,6 +428,9 @@ function toOffer(row: {
     payoutCycleDays: row.payoutCycleDays ?? undefined,
     skuCommissionNote: row.skuCommissionNote ?? undefined,
     conversionFlow: row.conversionFlow ?? undefined,
+    prescreenVerdict: row.prescreenVerdict ?? undefined,
+    prescreenReason: row.prescreenReason ?? undefined,
+    prescreenedAt: row.prescreenedAt ?? undefined,
     idempotencyScope: row.idempotencyScope ?? undefined,
     idempotencyKey: row.idempotencyKey ?? undefined,
     createdAt: row.createdAt,

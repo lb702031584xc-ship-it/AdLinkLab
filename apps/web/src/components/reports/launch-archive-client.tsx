@@ -18,6 +18,10 @@ import {
   type LaunchArchiveCreateInput,
   type LaunchArchivePatchInput,
 } from "@/lib/api/launch-archive-actions";
+import {
+  LaunchPerfPanel,
+  PerfVerdictBadge,
+} from "@/components/reports/launch-perf-panel";
 
 const inputClass =
   "w-full rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm text-ink placeholder:text-ink/35 focus:border-signal focus:outline-none";
@@ -698,6 +702,11 @@ export function LaunchArchiveClient({
                     </td>
                     <td className={`${tdClass} max-w-[240px] truncate`} title={it.diagnosis ?? ""}>
                       {it.diagnosis ?? "—"}
+                      {it.perfVerdict && (
+                        <span className="ml-2">
+                          <PerfVerdictBadge verdict={it.perfVerdict} p={d.perf} />
+                        </span>
+                      )}
                     </td>
                     <td className={tdClass}>
                       <button
@@ -1020,6 +1029,16 @@ export function LaunchArchiveClient({
               </div>
             )}
             <p className="mt-2 text-sm"><span className="text-ink/50">{f.diagnosis}: </span>{selected.diagnosis ?? "—"}</p>
+
+            {/* 投流回填 + 止损/低价判断 + 自动止损脚本（人工回填驱动） */}
+            <LaunchPerfPanel
+              archive={selected}
+              d={d}
+              onChanged={() => {
+                void load(applied, offerIdFilter, page);
+                void openDetail(selected);
+              }}
+            />
 
             <div className="mt-6 flex flex-wrap gap-2">
               {editing ? (

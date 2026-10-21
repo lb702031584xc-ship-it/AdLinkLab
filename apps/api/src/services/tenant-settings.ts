@@ -18,7 +18,7 @@ import {
   encryptSecret,
 } from "../ai/crypto.js";
 
-export type TenantSettingKey = "ai" | "ads" | "proxies" | "system";
+export type TenantSettingKey = "ai" | "ads" | "proxies" | "system" | "dataforseo";
 
 export type AiProvider = "deepseek" | "gemini" | "relay";
 

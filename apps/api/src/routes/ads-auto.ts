@@ -60,11 +60,10 @@ import {
   assertPlanCurrencyMatches,
   convertPlanCurrency,
 } from "../ai/plan-currency.js";
-import { readEncryptedTrafficSetting } from "../traffic/settings.js";
 import {
-  DATAFORSEO_LOGIN_SETTING,
-  DATAFORSEO_PASSWORD_SETTING,
-} from "../traffic/dataforseo.js";
+  recordPaidDataUsage,
+  requirePaidDataAccess,
+} from "../services/paid-data-gateway.js";
 import { buildCreateCampaignScript, COUNTRY_LOCATION_IDS } from "../services/script-create-campaign.js";
 import {
   buildRotationScript,
@@ -309,14 +308,16 @@ export async function registerAdsAutoRoutes(
           throw new ValidationError("所选 SERP 抓取记录没有页面文字，请重新抓取");
         }
       } else {
-        const login = await readEncryptedTrafficSetting(
-          prisma,
-          DATAFORSEO_LOGIN_SETTING
-        );
-        const password = await readEncryptedTrafficSetting(
-          prisma,
-          DATAFORSEO_PASSWORD_SETTING
-        );
+        // 付费数据网关：专家模式 SERP 参考广告是 DataForSEO 计费调用，
+        // 统一走网关（站长直通 / 租户自备 key / 平台 key + paid-data 授权）。
+        const access = await requirePaidDataAccess(prisma, {
+          tenantId: info.tenantId,
+          userId: info.id,
+          userRole: info.role,
+          feature: "serp-ads",
+        });
+        const login = access.credentials?.login;
+        const password = access.credentials?.password;
         if (!login || !password) {
           throw new ValidationError(
             "专家模式需要 DataForSEO 凭证，请到 AI 设置 → 流量信号凭证填写，或用插件抓取一条搜索结果页"
@@ -333,6 +334,14 @@ export async function registerAdsAutoRoutes(
             }
           })();
         referenceAds = await fetchSerpAds(serpQuery, { login, password });
+        await recordPaidDataUsage(prisma, {
+          tenantId: info.tenantId,
+          actorId: info.id,
+          feature: "serp-ads",
+          keySource: access.keySource,
+          calls: 1,
+          grantId: access.grantId,
+        });
         if (referenceAds.length === 0) {
           throw new ValidationError(
             `DataForSEO 未搜到“${serpQuery}”的相关广告，请换个关键词重试，或用插件抓取一条搜索结果页`

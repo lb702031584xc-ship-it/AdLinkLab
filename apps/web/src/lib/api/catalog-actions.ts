@@ -105,6 +105,10 @@ export interface CatalogProduct {
   approvalRatePct?: number | null;
   /** 补强 #4：返款/结算周期天数（null = 未知）。 */
   payoutCycleDays?: number | null;
+  /** 一键筛选结论（未筛 → null）：pass | kill | review。 */
+  screenVerdict?: string | null;
+  screenReason?: string | null;
+  screenedAt?: string | null;
 }
 
 /** 补强 #3：备选池阶段。 */
@@ -689,6 +693,8 @@ export async function listCatalogProductsAction(params: {
   sort?: string;
   /** 广告投放数量下限（adCount >= 值；未计算的不命中）。 */
   minAdCount?: number;
+  /** 广告投放数量上限（adCount <= 值；与 minAdCount 合成区间，「甜蜜点」= 1–20）。 */
+  maxAdCount?: number;
   /** 投放国家代码（两位大写，如 CA；不传 = 不限国家）。 */
   country?: string;
   /** true → 只看有广告在投的（adCount > 0）。 */
@@ -705,6 +711,8 @@ export async function listCatalogProductsAction(params: {
   if (params.sort) qs.set("sort", params.sort);
   if (params.minAdCount != null && params.minAdCount > 0)
     qs.set("minAdCount", String(Math.floor(params.minAdCount)));
+  if (params.maxAdCount != null && params.maxAdCount >= 0)
+    qs.set("maxAdCount", String(Math.floor(params.maxAdCount)));
   if (params.country) qs.set("country", params.country);
   if (params.hasAds) qs.set("hasAds", "1");
   if (params.poolStage) qs.set("poolStage", params.poolStage);
@@ -797,6 +805,11 @@ export interface CalcAdCountResult {
   groupsSkippedCache: number;
   productsUpdated: number;
   errors: Array<{ brand: string; countryCode: string | null; message: string }>;
+  /** 付费数据网关计费路径（platform / tenant-own / owner）。 */
+  billing?: {
+    keySource: "platform" | "tenant-own" | "owner";
+    remainingCalls: number | null;
+  } | null;
 }
 
 /** 广告投放数量计算：ids 为空数组 = 全量增量（后端按 14 天缓存跳过已查组）。 */
@@ -809,6 +822,81 @@ export async function calcAdCountAction(productIds: string[]) {
       body: JSON.stringify({ ids: productIds.slice(0, 500) }),
     }
   ), ["/catalog"]);
+}
+
+/* ── 一键筛选（黑名单 → $8 → 预设 → 广告数[付费层] → 流量门） ── */
+
+export interface OneClickScreenReport {
+  processed: number;
+  killedBlacklist: number;
+  killedCommission: number;
+  killedPreset: number;
+  killedAdCount: number;
+  killedTrafficGate: number;
+  review: number;
+  passed: number;
+  skippedPaidLayer: boolean;
+  paidKeySource: "platform" | "tenant-own" | "owner" | null;
+  offersCreated: number;
+  offersSkippedExisting: number;
+  offersFailed: Array<{ productId: string; reason: string }>;
+  adTierDistribution: {
+    none: number;
+    small: number;
+    sweet: number;
+    hot: number;
+    red_ocean: number;
+  };
+  outcomes: Array<{
+    productId: string;
+    outcome: "pass" | "kill" | "review";
+    killedBy?: string;
+    reason?: string;
+  }>;
+  scope: string;
+  truncated: boolean;
+}
+
+/**
+ * 一键筛选：scope 三选——selected（传 ids）/ current（传与列表同款 filter）/
+ * unscreened（全部未筛）。免费层无授权门；广告数层经付费数据网关，
+ * 被拒时后端自动跳过并在报告里标 skippedPaidLayer。
+ */
+export async function oneClickScreenAction(input: {
+  scope: "selected" | "current" | "unscreened";
+  ids?: string[];
+  filter?: Record<string, unknown>;
+}) {
+  return attempt(
+    () =>
+      apiFetch<OneClickScreenReport>("/api/v1/catalog/products/one-click-screen", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      }),
+    ["/catalog"]
+  );
+}
+
+export interface ForceSelectResult {
+  created: Array<{ productId: string; offerId: string }>;
+  skippedExisting: Array<{ productId: string }>;
+  refusedBlacklist: Array<{ productId: string; reason: string }>;
+  failed: Array<{ productId: string; reason: string }>;
+  notFound: number;
+}
+
+/** 人工强制入选：被杀商品强制建 Offer（黑名单不可强制，后端拒绝并说明）。 */
+export async function forceSelectProductsAction(ids: string[]) {
+  return attempt(
+    () =>
+      apiFetch<ForceSelectResult>("/api/v1/catalog/products/force-select", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ids: ids.slice(0, 50) }),
+      }),
+    ["/catalog"]
+  );
 }
 
 export async function getScoreCalcPausedAction() {

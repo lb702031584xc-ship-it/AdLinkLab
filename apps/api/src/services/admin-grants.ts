@@ -22,6 +22,7 @@ export const GRANT_CAPABILITIES = [
   "tracking-link-resolve",
   "catalog-sync",
   "direct-api-write",
+  "paid-data",
 ] as const;
 export type GrantCapability = (typeof GRANT_CAPABILITIES)[number];
 

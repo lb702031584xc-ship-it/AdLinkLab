@@ -78,6 +78,45 @@ export interface LaunchArchive {
   ctrNote: string | null;
   /** P2-6：诊断码（统一阈值，仅真实数据触发）。 */
   diagnosisCodes: string[];
+  /** 自动止损脚本最近生成时间（生成 ≠ 生效，须粘贴到 Google Ads）。 */
+  stopLossScriptAt?: string | null;
+  /** 最新一笔人工回填快照（无回填 → null，不参与判断）。 */
+  latestBackfill?: AdPerfBackfillView | null;
+  /** 基于最新回填的确定性判断（无回填 → null）。 */
+  perfVerdict?: AdPerfVerdictView | null;
+}
+
+/** 人工回填快照（按日期；source 固定 manual）。 */
+export interface AdPerfBackfillView {
+  perfDate: string;
+  spend: number;
+  avgCpc: number | null;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+}
+
+export interface AdPerfSnapshotView extends AdPerfBackfillView {
+  id: string;
+  source: "manual";
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 止损/低价判断（shared evaluateAdPerformance 的 API 序列化形状）。 */
+export interface AdPerfVerdictView {
+  level: "stop" | "market_too_high" | "low_bid" | "ok" | "insufficient";
+  basis: {
+    spend: number | null;
+    payout: number | null;
+    spendPayoutRatio: number | null;
+    stopLossThreshold: number | null;
+    avgCpc: number | null;
+    topOfPageFloor: number | null;
+    breakevenCpc: number | null;
+    impressions: number | null;
+    conversions: number | null;
+  };
 }
 
 export interface LaunchArchiveListFilters {
@@ -245,6 +284,69 @@ export async function updateLaunchArchiveAction(id: string, input: LaunchArchive
 export async function deleteLaunchArchiveAction(id: string) {
   return attempt(
     () => apiFetch<unknown>(`/api/v1/launch-archives/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    ["/reports"]
+  );
+}
+
+/** 人工回填一笔投流数据（按日期快照；同日重复提交覆盖该日）。 */
+export async function createPerfSnapshotAction(
+  archiveId: string,
+  input: {
+    perfDate: string;
+    spend: number;
+    avgCpc?: number | null;
+    impressions: number;
+    clicks: number;
+    conversions: number;
+  }
+) {
+  return attempt(
+    () =>
+      apiFetch<AdPerfSnapshotView>(
+        `/api/v1/launch-archives/${encodeURIComponent(archiveId)}/perf-snapshots`,
+        { method: "POST", body: JSON.stringify(input) }
+      ),
+    ["/reports"]
+  );
+}
+
+/** 回填快照列表（日期倒序）。 */
+export async function listPerfSnapshotsAction(archiveId: string) {
+  return attempt(
+    () =>
+      apiFetch<{ items: AdPerfSnapshotView[] }>(
+        `/api/v1/launch-archives/${encodeURIComponent(archiveId)}/perf-snapshots`
+      ),
+    []
+  );
+}
+
+export interface StopLossScriptResult {
+  script: string;
+  campaignName: string;
+  payout: number;
+  threshold: number;
+  stopLossScriptAt: string;
+  note: string;
+}
+
+/**
+ * 生成自动止损脚本（站内只生成不执行：需粘贴到 Google Ads 才生效）。
+ * campaignName 缺省用档案 offerName（与 Google Ads 系列名须完全一致）。
+ */
+export async function generateStopLossScriptAction(
+  archiveId: string,
+  campaignName?: string
+) {
+  return attempt(
+    () =>
+      apiFetch<StopLossScriptResult>(
+        `/api/v1/launch-archives/${encodeURIComponent(archiveId)}/stop-loss-script`,
+        {
+          method: "POST",
+          body: JSON.stringify(campaignName ? { campaignName } : {}),
+        }
+      ),
     ["/reports"]
   );
 }

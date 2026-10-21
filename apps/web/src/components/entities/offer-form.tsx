@@ -3,6 +3,7 @@
 import { useState, useTransition, useRef, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { createOfferAction } from "@/lib/api/entity-actions";
+import { prescreenOffersAction } from "@/lib/api/paid-data-actions";
 import { setLastOfferId } from "@/lib/current-offer";
 import { useI18n } from "@/i18n/I18nProvider";
 import { coachCheckAction, type CoachFinding } from "@/lib/api/coach-actions";
@@ -84,6 +85,8 @@ export function OfferForm({
   const router = useRouter();
   const [pending, start] = useTransition();
   const [name, setName] = useState(initialName ?? "");
+  /** 保存并一键初筛：创建成功后立即跑初筛阶梯，结论徽标写回 Offer。 */
+  const [prescreenAfterSave, setPrescreenAfterSave] = useState(false);
   const [network, setNetwork] = useState("");
   const [source, setSource] = useState<string>(
     OFFER_SOURCES.includes(initialSource as (typeof OFFER_SOURCES)[number])
@@ -292,6 +295,15 @@ export function OfferForm({
         const newId = result.data?.offer?.id;
         if (typeof newId === "string" && newId) {
           setLastOfferId(newId);
+          /* 保存并一键初筛：与商品库同一阶梯，结论写回 Offer 徽标；
+             初筛失败不阻断跳转（列表里可再批量初筛）。 */
+          if (prescreenAfterSave) {
+            try {
+              await prescreenOffersAction([newId]);
+            } catch {
+              /* 初筛失败不阻断 */
+            }
+          }
           /* 智能填入暂存的 EPC / 转化率 → 同步到该 offer 的投流页快照（只补空不覆盖）。 */
           if (
             extractedEpcCvr &&
@@ -817,6 +829,18 @@ export function OfferForm({
         </div>
       </div>
       {error ? <p className="text-sm text-rose-700">{error}</p> : null}
+      <label className="flex items-start gap-2 text-sm text-ink/80">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={prescreenAfterSave}
+          onChange={(e) => setPrescreenAfterSave(e.target.checked)}
+        />
+        <span>
+          {f.prescreenAfterSave}
+          <span className="block text-xs text-ink/50">{f.prescreenAfterSaveHint}</span>
+        </span>
+      </label>
       <div className="flex flex-wrap gap-3">
         <button
           type="submit"

@@ -16,6 +16,7 @@ import {
   type TenantSettings,
 } from "@/lib/api/settings-actions";
 import type { CatalogNetwork } from "@/lib/api/catalog-actions";
+import { DataForSeoSection } from "./dataforseo-section";
 
 const inputCls =
   "w-full rounded-lg border border-ink/15 bg-paper px-3 py-2 text-sm text-ink placeholder:text-ink/35 focus:border-signal focus:outline-none disabled:opacity-60";
@@ -389,6 +390,9 @@ export function SettingsClient({
         </div>
         <Msg text={aiMsg} ok={aiOk} />
       </Section>
+
+      {/* 我的 DataForSEO（BYOK，租户自备 key 免授权；不受平台管理员只读限制） */}
+      <DataForSeoSection t={t.dataforseo} />
 
       {/* 广告发布设置 */}
       <Section title={t.ads.title} subtitle={t.ads.subtitle}>

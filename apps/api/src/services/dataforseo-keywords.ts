@@ -279,13 +279,22 @@ export function parseAdsSearchVolumeResponse(
 export class DataForSeoKeywordService {
   constructor(
     private readonly prisma: PrismaClient,
-    private readonly fetchImpl: typeof fetch = fetch
+    private readonly fetchImpl: typeof fetch = fetch,
+    /**
+     * 付费数据网关解析出的凭证：传入时优先用它（租户自备 key 路径）；
+     * 不传 → 读站级流量信号凭证（平台路径/历史行为）。
+     */
+    private readonly credentialsOverride?: {
+      login: string;
+      password: string;
+    } | null
   ) {}
 
   private async getCredentials(): Promise<{
     login: string;
     password: string;
   }> {
+    if (this.credentialsOverride) return this.credentialsOverride;
     const login = await readEncryptedTrafficSetting(
       this.prisma,
       DATAFORSEO_LOGIN_SETTING

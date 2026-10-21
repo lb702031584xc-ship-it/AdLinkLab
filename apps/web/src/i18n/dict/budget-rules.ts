@@ -68,8 +68,10 @@ export const zh = {
     createFailed: "创建失败",
     updateFailed: "更新失败",
     loadFailed: "加载失败",
-    toggleConfirm: (name: string, on: boolean) =>
-      `确认${on ? "启用" : "停用"}「${name}」的预算自动调整？`,
+    // 模板字符串（非函数）：本字典切片由服务端 page 以 prop 传给客户端
+    // 组件，函数值无法跨 RSC 序列化（2026-10-11 / 2026-10-20 两次同类事故）。
+    toggleConfirmEnable: "确认启用「{name}」的预算自动调整？",
+    toggleConfirmDisable: "确认停用「{name}」的预算自动调整？",
     unknownError: "未知错误",
   },
 };
@@ -143,8 +145,8 @@ export const en = {
     createFailed: "Failed to create",
     updateFailed: "Failed to update",
     loadFailed: "Failed to load",
-    toggleConfirm: (name: string, on: boolean) =>
-      `Confirm ${on ? "enabling" : "disabling"} budget auto-pacing for "${name}"?`,
+    toggleConfirmEnable: "Confirm enabling budget auto-pacing for \"{name}\"?",
+    toggleConfirmDisable: "Confirm disabling budget auto-pacing for \"{name}\"?",
     unknownError: "Unknown error",
   },
 };

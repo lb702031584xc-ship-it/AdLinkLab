@@ -22,7 +22,11 @@ import {
   NotFoundError,
   UnauthorizedError,
   ValidationError,
+  evaluateAdPerformance,
+  type AdPerfBackfillInput,
+  type AdPerfVerdict,
 } from "@adlinklab/shared";
+import { buildStopLossScript } from "../services/stop-loss-script.js";
 import { parseScalingPhase, parseTestingPhase } from "../services/staged-budget.js";
 import {
   authenticateSessionRequest,
@@ -380,6 +384,8 @@ type LaunchArchiveRow = {
   notes: string | null;
   launchedAt: Date | null;
   endedAt: Date | null;
+  /** 自动止损脚本最近生成时间（生成 ≠ 生效，须粘贴到 Google Ads）。 */
+  stopLossScriptAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -420,10 +426,88 @@ function serializeArchive(row: LaunchArchiveRow) {
     notes: row.notes,
     launchedAt: row.launchedAt?.toISOString() ?? null,
     endedAt: row.endedAt?.toISOString() ?? null,
+    stopLossScriptAt: row.stopLossScriptAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     ...derived,
   };
+}
+
+/* ── 投流数据回填快照（人工回填，按日期） ─────────────────────────── */
+
+interface PerfSnapshotRow {
+  id: string;
+  perfDate: Date;
+  spend: unknown;
+  avgCpc: unknown;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+function serializePerfSnapshot(row: PerfSnapshotRow) {
+  return {
+    id: row.id,
+    // 人工回填快照：source 固定 manual，日期为回填数据所属日期。
+    source: "manual" as const,
+    perfDate: row.perfDate.toISOString().slice(0, 10),
+    spend: Number(row.spend),
+    avgCpc: row.avgCpc === null ? null : Number(row.avgCpc),
+    impressions: row.impressions,
+    clicks: row.clicks,
+    conversions: row.conversions,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+function snapshotToBackfill(
+  row: PerfSnapshotRow
+): AdPerfBackfillInput & { perfDate: string } {
+  const s = serializePerfSnapshot(row);
+  return {
+    perfDate: s.perfDate,
+    spend: s.spend,
+    avgCpc: s.avgCpc,
+    impressions: s.impressions,
+    clicks: s.clicks,
+    conversions: s.conversions,
+  };
+}
+
+/** 批量取每份档案最新一笔回填快照（perfDate 最大的一条）。 */
+async function loadLatestSnapshots(
+  prisma: PrismaClient,
+  archiveIds: string[]
+): Promise<Map<string, PerfSnapshotRow>> {
+  const map = new Map<string, PerfSnapshotRow & { archiveId: string }>();
+  if (archiveIds.length === 0) return map;
+  const rows = (await prisma.adPerfSnapshot.findMany({
+    where: { archiveId: { in: archiveIds } },
+    orderBy: { perfDate: "desc" },
+  })) as Array<PerfSnapshotRow & { archiveId: string }>;
+  for (const r of rows) {
+    if (!map.has(r.archiveId)) map.set(r.archiveId, r);
+  }
+  return map;
+}
+
+/** 档案 + 最新回填 → 判断（无回填 → null，前端显示「未回填」不参与判断）。 */
+function perfVerdictFor(
+  row: LaunchArchiveRow,
+  snapshot: PerfSnapshotRow | undefined
+): { latestBackfill: ReturnType<typeof snapshotToBackfill> | null; perfVerdict: AdPerfVerdict | null } {
+  if (!snapshot) return { latestBackfill: null, perfVerdict: null };
+  const backfill = snapshotToBackfill(snapshot);
+  const verdict = evaluateAdPerformance(backfill, {
+    payout: row.payout,
+    breakevenCpc: row.breakevenCpc,
+    // 页首出价下限：取档案 officialBid（广告测算/官方推荐口径），无则 null 不判低价。
+    topOfPageFloor: row.officialBid,
+  });
+  return { latestBackfill: backfill, perfVerdict: verdict };
 }
 
 function parseDateFilter(
@@ -646,8 +730,18 @@ export async function registerLaunchArchiveRoutes(
         }),
         prisma.launchArchive.count({ where }),
       ]);
+      const snapshots = await loadLatestSnapshots(
+        prisma,
+        rows.map((r) => r.id as string)
+      );
       return {
-        items: rows.map((r) => serializeArchive(r as LaunchArchiveRow)),
+        items: rows.map((r) => {
+          const row = r as unknown as LaunchArchiveRow;
+          return {
+            ...serializeArchive(row),
+            ...perfVerdictFor(row, snapshots.get(r.id as string)),
+          };
+        }),
         total,
         page,
         pageSize,
@@ -696,7 +790,140 @@ export async function registerLaunchArchiveRoutes(
         where: { id: request.params.id, tenantId: info.tenantId },
       });
       if (!row) throw new NotFoundError("LaunchArchive", request.params.id);
-      return serializeArchive(row as LaunchArchiveRow);
+      const snapshots = await loadLatestSnapshots(prisma, [row.id as string]);
+      const archiveRow = row as unknown as LaunchArchiveRow;
+      return {
+        ...serializeArchive(archiveRow),
+        ...perfVerdictFor(archiveRow, snapshots.get(row.id as string)),
+      };
+    }
+  );
+
+  /**
+   * POST /api/v1/launch-archives/:id/perf-snapshots — 人工回填一笔投流数据
+   * （按日期快照，同日重复提交 = 更新该日快照）。字段：perfDate（YYYY-MM-DD）、
+   * spend、avgCpc（可空）、impressions、clicks、conversions。
+   */
+  app.post<{ Params: { id: string }; Body: Record<string, unknown> }>(
+    "/api/v1/launch-archives/:id/perf-snapshots",
+    async (request) => {
+      const info = await requireSession(deps, request);
+      const archive = await prisma.launchArchive.findFirst({
+        where: { id: request.params.id, tenantId: info.tenantId },
+        select: { id: true },
+      });
+      if (!archive) throw new NotFoundError("LaunchArchive", request.params.id);
+      const body = (request.body ?? {}) as Record<string, unknown>;
+      const perfDateStr = asTrimmedString(body.perfDate);
+      if (!perfDateStr || !/^\d{4}-\d{2}-\d{2}$/.test(perfDateStr)) {
+        throw new ValidationError("perfDate must be YYYY-MM-DD");
+      }
+      const perfDate = new Date(`${perfDateStr}T00:00:00.000Z`);
+      if (Number.isNaN(perfDate.getTime())) {
+        throw new ValidationError("perfDate must be a valid date");
+      }
+      const spend = asOptionalNumber(body.spend, "spend");
+      if (spend === undefined) throw new ValidationError("spend is required");
+      if (spend < 0) throw new ValidationError("spend must be >= 0");
+      const impressions = asOptionalInt(body.impressions, "impressions");
+      const clicks = asOptionalInt(body.clicks, "clicks");
+      const conversions = asOptionalInt(body.conversions, "conversions");
+      if (impressions === undefined)
+        throw new ValidationError("impressions is required");
+      if (clicks === undefined) throw new ValidationError("clicks is required");
+      if (conversions === undefined)
+        throw new ValidationError("conversions is required");
+      if (impressions < 0 || clicks < 0 || conversions < 0) {
+        throw new ValidationError("impressions/clicks/conversions must be >= 0");
+      }
+      const avgCpc = asOptionalNumber(body.avgCpc, "avgCpc") ?? null;
+      if (avgCpc !== null && avgCpc < 0)
+        throw new ValidationError("avgCpc must be >= 0");
+      const row = await prisma.adPerfSnapshot.upsert({
+        where: {
+          ad_perf_snapshots_archive_date_unique: {
+            archiveId: archive.id,
+            perfDate,
+          },
+        },
+        create: {
+          id: randomUUID(),
+          tenantId: info.tenantId,
+          archiveId: archive.id,
+          perfDate,
+          spend,
+          avgCpc,
+          impressions,
+          clicks,
+          conversions,
+        },
+        update: { spend, avgCpc, impressions, clicks, conversions },
+      });
+      return serializePerfSnapshot(row as unknown as PerfSnapshotRow);
+    }
+  );
+
+  /** GET /api/v1/launch-archives/:id/perf-snapshots — 回填快照列表（日期倒序）。 */
+  app.get<{ Params: { id: string } }>(
+    "/api/v1/launch-archives/:id/perf-snapshots",
+    async (request) => {
+      const info = await requireSession(deps, request);
+      const archive = await prisma.launchArchive.findFirst({
+        where: { id: request.params.id, tenantId: info.tenantId },
+        select: { id: true },
+      });
+      if (!archive) throw new NotFoundError("LaunchArchive", request.params.id);
+      const rows = await prisma.adPerfSnapshot.findMany({
+        where: { archiveId: archive.id, tenantId: info.tenantId },
+        orderBy: { perfDate: "desc" },
+        take: 90,
+      });
+      return {
+        items: rows.map((r) =>
+          serializePerfSnapshot(r as unknown as PerfSnapshotRow)
+        ),
+      };
+    }
+  );
+
+  /**
+   * POST /api/v1/launch-archives/:id/stop-loss-script — 生成自动止损脚本。
+   * 站内只生成、不执行：脚本须粘贴到 Google Ads（工具 → 脚本，每小时运行）
+   * 后才生效；生成时间写 stopLossScriptAt 供页面标注状态。
+   * 系列匹配沿用建系列脚本约定：按系列名精确匹配（档案 offerName）。
+   */
+  app.post<{ Params: { id: string }; Body: Record<string, unknown> }>(
+    "/api/v1/launch-archives/:id/stop-loss-script",
+    async (request) => {
+      const info = await requireSession(deps, request);
+      const row = await prisma.launchArchive.findFirst({
+        where: { id: request.params.id, tenantId: info.tenantId },
+      });
+      if (!row) throw new NotFoundError("LaunchArchive", request.params.id);
+      const payout = (row as unknown as LaunchArchiveRow).payout;
+      if (payout === null || payout === undefined || !(payout > 0)) {
+        throw new ValidationError(
+          "档案缺少 payout（单次佣金），无法生成止损脚本：请先在档案里补齐 payout"
+        );
+      }
+      const body = (request.body ?? {}) as Record<string, unknown>;
+      const campaignName =
+        asTrimmedString(body.campaignName) ??
+        (row as unknown as LaunchArchiveRow).offerName;
+      const script = buildStopLossScript({ campaignName, payout });
+      const now = new Date();
+      await prisma.launchArchive.update({
+        where: { id: row.id },
+        data: { stopLossScriptAt: now },
+      });
+      return {
+        script,
+        campaignName,
+        payout,
+        threshold: Math.round(payout * 2.5 * 100) / 100,
+        stopLossScriptAt: now.toISOString(),
+        note: "自动止损脚本：已生成（需在 Google Ads 粘贴后生效）",
+      };
     }
   );
 

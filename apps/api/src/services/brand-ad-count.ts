@@ -101,6 +101,11 @@ export interface BrandAdCountResult {
 export interface BrandAdCountDeps {
   /** Injectable for tests. */
   fetchImpl?: typeof fetch;
+  /**
+   * 付费数据网关解析出的凭证：传入时优先用它（租户自备 key 路径）；
+   * 不传 → 读站级流量信号凭证（平台路径/历史行为）。
+   */
+  credentials?: { login: string; password: string } | null;
 }
 
 interface ProductRow {
@@ -191,14 +196,14 @@ export async function calcBrandAdCounts(
   productIds?: string[],
   deps: BrandAdCountDeps = {}
 ): Promise<BrandAdCountResult> {
-  const login = await readEncryptedTrafficSetting(
+  const login = deps.credentials?.login ?? (await readEncryptedTrafficSetting(
     prisma,
     DATAFORSEO_LOGIN_SETTING
-  );
-  const password = await readEncryptedTrafficSetting(
+  ));
+  const password = deps.credentials?.password ?? (await readEncryptedTrafficSetting(
     prisma,
     DATAFORSEO_PASSWORD_SETTING
-  );
+  ));
   if (!login || !password) {
     throw new Error("DataForSEO credentials not configured");
   }

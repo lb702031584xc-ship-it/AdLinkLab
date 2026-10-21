@@ -64,7 +64,8 @@ export default function BudgetRuleRowActions({
 
   async function toggle() {
     const next = !rule.enabled;
-    if (!window.confirm(t.toggleConfirm(rule.campaignName, next))) return;
+    const template = next ? t.toggleConfirmEnable : t.toggleConfirmDisable;
+    if (!window.confirm(template.replace("{name}", rule.campaignName))) return;
     setBusy(true);
     setError(null);
     try {

@@ -10,6 +10,7 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import { deleteOffersAction } from "@/lib/api/entity-actions";
+import { prescreenOffersAction } from "@/lib/api/paid-data-actions";
 
 interface SelectionCtxValue {
   selected: Set<string>;
@@ -144,6 +145,66 @@ export function OfferBatchDeleteBar({
       >
         ✕
       </button>
+    </div>
+  );
+}
+
+/** 批量一键初筛条：有选中时显示；跑同一阶梯，结论徽标写回 Offer 后刷新列表。 */
+export function OfferPrescreenBar({
+  dict,
+}: {
+  dict: {
+    prescreenBatch: string;
+    prescreenBatching: string;
+    prescreenBatchDone: string;
+  };
+}) {
+  const { selected } = useSelection();
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const n = selected.size;
+  if (n === 0 && !note) return null;
+
+  const onPrescreen = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await prescreenOffersAction([...selected]);
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      const c = result.data.counts;
+      setNote(
+        dict.prescreenBatchDone
+          .replace("{g}", String(c.go))
+          .replace("{u}", String(c.unknown))
+          .replace("{s}", String(c.stop))
+      );
+      router.refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mb-3 flex flex-wrap items-center gap-3 rounded-xl border border-ink/10 bg-ink/[0.03] px-4 py-2.5">
+      {n > 0 && (
+        <button
+          type="button"
+          onClick={onPrescreen}
+          disabled={busy}
+          className="rounded-lg bg-ink px-3 py-1.5 text-sm font-medium text-white transition hover:opacity-85 disabled:opacity-50"
+        >
+          {busy ? dict.prescreenBatching : `${dict.prescreenBatch} (${n})`}
+        </button>
+      )}
+      {note && <span className="text-sm text-emerald-700">{note}</span>}
+      {error && <span className="text-sm text-red-600">{error}</span>}
     </div>
   );
 }

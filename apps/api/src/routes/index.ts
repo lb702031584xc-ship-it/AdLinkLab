@@ -265,6 +265,16 @@ export async function registerRoutes(
       "./keywords-dataforseo.js"
     );
     await registerKeywordDataForSeoRoutes(app, { prisma: services.prisma });
+    // 付费数据网关租户侧：自备 DataForSEO key（BYOK）+ 网关判定预告
+    const { registerPaidDataRoutes } = await import("./paid-data.js");
+    await registerPaidDataRoutes(app, { prisma: services.prisma });
+    // Offer 一键初筛（批量跑初筛阶梯，结论写回 Offer 徽标字段）
+    const { registerOfferPrescreenRoutes } = await import(
+      "./offer-prescreen.js"
+    );
+    await registerOfferPrescreenRoutes(app, {
+      prisma: services.prisma,
+    });
     // P1-11：归因透明化 + 冲突处理
     const { registerAttributionRoutes } = await import("./attribution.js");
     await registerAttributionRoutes(app, { prisma: services.prisma });

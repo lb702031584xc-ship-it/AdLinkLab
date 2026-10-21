@@ -31,6 +31,8 @@ import {
   moveProductPoolStageAction,
   moveProductsPoolStageAction,
   offlineProductsAction,
+  forceSelectProductsAction,
+  oneClickScreenAction,
   recheckBlacklistAction,
   saveScreeningPresetAction,
   saveSessionCookieAction,
@@ -48,6 +50,7 @@ import {
   type CatalogSyncJob,
   type MerchantEvaluateResult,
   type MerchantSignal,
+  type OneClickScreenReport,
   type PoolStage,
   type RecheckResult,
   type ScreeningPreset,
@@ -56,6 +59,8 @@ import {
   type SyncResult,
   type WhitelistEntry,
 } from "@/lib/api/catalog-actions";
+import { adCountTier } from "../../../../../packages/shared/src/ad-count-tier";
+import { PaidDataBillingNote } from "@/components/paid-data/billing-note";
 import { LaunchHistoryModal } from "./launch-history-modal";
 import { selectableProducts } from "./list-helpers";
 import Link from "next/link";
@@ -1590,6 +1595,9 @@ export function CatalogClient({
   /** 广告数下限过滤：草稿（输入框）与已生效值分离，回车/失焦才生效。 */
   const [minAdsDraft, setMinAdsDraft] = useState("");
   const [minAds, setMinAds] = useState<number | undefined>(undefined);
+  /** 广告数上限过滤（与下限合成区间；「甜蜜点」快捷 = 1–20）。 */
+  const [maxAdsDraft, setMaxAdsDraft] = useState("");
+  const [maxAds, setMaxAds] = useState<number | undefined>(undefined);
   /** 投放国家过滤："" = 全部国家；选项来自当前网络在库商品的国家清单。 */
   const [countryFilter, setCountryFilter] = useState("");
   const [countryOptions, setCountryOptions] = useState<string[]>([]);
@@ -1623,6 +1631,7 @@ export function CatalogClient({
       preset: applyPreset ? undefined : false,
       sort,
       minAdCount: minAds,
+      maxAdCount: maxAds,
       country: countryFilter || undefined,
       poolStage: poolStageFilter || undefined,
     });
@@ -1763,7 +1772,7 @@ export function CatalogClient({
     setQ("");
     setQDraft("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, onlyRecommended, applyPreset, sort, minAds, countryFilter, poolStageFilter]);
+  }, [selectedId, onlyRecommended, applyPreset, sort, minAds, maxAds, countryFilter, poolStageFilter]);
 
   /** 网络切换时刷新国家选项并清空国家过滤（别网络的国家代码不通用）。 */
   useEffect(() => {
@@ -1785,6 +1794,24 @@ export function CatalogClient({
         ? Math.floor(n)
         : undefined
     );
+  }
+
+  /** 提交广告数上限草稿：非负整数生效（0 = 只看已计算且为 0 的），空/非法 → 清除。 */
+  function commitMaxAds() {
+    const n = Number(maxAdsDraft.trim());
+    setMaxAds(
+      maxAdsDraft.trim() !== "" && Number.isFinite(n) && n >= 0
+        ? Math.floor(n)
+        : undefined
+    );
+  }
+
+  /** 「甜蜜点」快捷：一键设区间 1–20（稳定投放·甜蜜点分档）。 */
+  function applySweetSpot() {
+    setMinAdsDraft("1");
+    setMaxAdsDraft("20");
+    setMinAds(1);
+    setMaxAds(20);
   }
 
   /** 点击表头切换排序：同列在 desc/asc 间切换 */
@@ -1904,6 +1931,10 @@ export function CatalogClient({
 
   const [calcScoring, setCalcScoring] = useState(false);
   const [calcAdCounting, setCalcAdCounting] = useState(false);
+  /** 一键筛选：运行中标记 + 最近一次数字报告。 */
+  const [oneClickBusy, setOneClickBusy] = useState(false);
+  const [screenReport, setScreenReport] = useState<OneClickScreenReport | null>(null);
+  const [forceSelectingId, setForceSelectingId] = useState<string | null>(null);
   const [offlining, setOfflining] = useState(false);
   const [scorePaused, setScorePaused] = useState(false);
   const [togglingPause, setTogglingPause] = useState(false);
@@ -1986,6 +2017,64 @@ export function CatalogClient({
       }`;
     }
     setMsg(text);
+    await reloadProducts(page);
+  }
+
+  /** 一键筛选（范围三选）：免费层直跑，广告数层经网关（被拒后端自动跳过并标注）。 */
+  async function onOneClickScreen(scope: "selected" | "current" | "unscreened") {
+    if (oneClickBusy) return;
+    if (scope === "selected" && selectedIds.size === 0) {
+      setMsg(d.products.noSelection);
+      return;
+    }
+    setOneClickBusy(true);
+    setMsg(null);
+    setScreenReport(null);
+    const res = await oneClickScreenAction({
+      scope,
+      ids: scope === "selected" ? Array.from(selectedIds) : undefined,
+      filter:
+        scope === "current"
+          ? {
+              networkId: selectedId ?? undefined,
+              recommended: onlyRecommended ? true : undefined,
+              q: q.trim() || undefined,
+              minAdCount: minAds,
+              maxAdCount: maxAds,
+              country: countryFilter || undefined,
+              poolStage: poolStageFilter || undefined,
+            }
+          : undefined,
+    });
+    setOneClickBusy(false);
+    if (!res.ok) {
+      setMsg(res.error);
+      return;
+    }
+    setScreenReport(res.data);
+    await reloadProducts(page);
+  }
+
+  /** 人工强制入选（单个被杀商品）：黑名单不可强制，后端拒绝原因直接展示。 */
+  async function onForceSelectOne(productId: string) {
+    if (forceSelectingId) return;
+    setForceSelectingId(productId);
+    setMsg(null);
+    const res = await forceSelectProductsAction([productId]);
+    setForceSelectingId(null);
+    if (!res.ok) {
+      setMsg(res.error);
+      return;
+    }
+    if (res.data.refusedBlacklist.length > 0) {
+      setMsg(res.data.refusedBlacklist[0].reason);
+      return;
+    }
+    if (res.data.failed.length > 0) {
+      setMsg(res.data.failed[0].reason);
+      return;
+    }
+    setMsg(d.products.forceSelectDone.replace("{n}", "1"));
     await reloadProducts(page);
   }
 
@@ -2601,6 +2690,30 @@ export function CatalogClient({
             />
           </label>
           <label className="flex items-center gap-2 text-sm text-ink">
+            {d.products.maxAdCount}
+            <input
+              className={inputCls}
+              style={{ width: 90 }}
+              type="number"
+              min={0}
+              step={1}
+              placeholder={d.products.maxAdCountPlaceholder}
+              value={maxAdsDraft}
+              onChange={(e) => setMaxAdsDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitMaxAds();
+              }}
+              onBlur={commitMaxAds}
+            />
+          </label>
+          <button
+            className={btnGhost}
+            onClick={applySweetSpot}
+            title={d.products.sweetSpotTip}
+          >
+            {d.products.sweetSpot}
+          </button>
+          <label className="flex items-center gap-2 text-sm text-ink">
             {d.products.colCountry}
             <select
               className={inputCls}
@@ -2866,6 +2979,38 @@ export function CatalogClient({
                               String(p.adCount)
                             )}
                           </span>
+                          {(() => {
+                            const tier = adCountTier(p.adCount);
+                            if (!tier) return null;
+                            const tierLabel =
+                              tier.key === "none"
+                                ? d.products.adTierNone
+                                : tier.key === "small"
+                                  ? d.products.adTierSmall
+                                  : tier.key === "sweet"
+                                    ? d.products.adTierSweet
+                                    : tier.key === "hot"
+                                      ? d.products.adTierHot
+                                      : d.products.adTierRedOcean;
+                            const tierCls =
+                              tier.key === "none"
+                                ? "bg-gray-100 text-gray-600"
+                                : tier.key === "small"
+                                  ? "bg-emerald-50 text-emerald-700"
+                                  : tier.key === "sweet"
+                                    ? "bg-emerald-100 text-emerald-800"
+                                    : tier.key === "hot"
+                                      ? "bg-amber-100 text-amber-800"
+                                      : "bg-red-100 text-red-800";
+                            return (
+                              <span
+                                className={`ml-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${tierCls}`}
+                                title={d.products.adTierTip}
+                              >
+                                {tierLabel}
+                              </span>
+                            );
+                          })()}
                           {p.adCountCheckedAt &&
                             Date.now() -
                               new Date(p.adCountCheckedAt).getTime() >
@@ -2904,6 +3049,27 @@ export function CatalogClient({
                         {p.whitelisted && (
                           <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-800">
                             {d.products.whitelistedBadge}
+                          </span>
+                        )}
+                        {p.screenVerdict === "kill" && (
+                          <span
+                            className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800"
+                            title={p.screenReason ?? undefined}
+                          >
+                            {d.products.screenVerdictKill}
+                          </span>
+                        )}
+                        {p.screenVerdict === "review" && (
+                          <span
+                            className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800"
+                            title={p.screenReason ?? undefined}
+                          >
+                            {d.products.screenVerdictReview}
+                          </span>
+                        )}
+                        {p.screenVerdict === "pass" && (
+                          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
+                            {d.products.screenVerdictPass}
                           </span>
                         )}
                       </span>
@@ -2966,6 +3132,18 @@ export function CatalogClient({
                         >
                           {d.products.createOfferOne}
                         </button>
+                        {p.screenVerdict === "kill" && (
+                          <button
+                            className="whitespace-nowrap text-xs text-amber-700 hover:underline disabled:opacity-40"
+                            onClick={() => void onForceSelectOne(p.id)}
+                            disabled={forceSelectingId !== null}
+                            title={p.screenReason ?? undefined}
+                          >
+                            {forceSelectingId === p.id
+                              ? d.products.forceSelecting
+                              : d.products.forceSelect}
+                          </button>
+                        )}
                         <button
                           className="whitespace-nowrap text-xs text-ink/60 hover:underline disabled:opacity-40"
                           onClick={() => void onOfflineOne(p)}
@@ -3029,6 +3207,40 @@ export function CatalogClient({
                     String(selectedIds.size)
                   )
                 : d.products.calcAdCountAll}
+          </button>
+          <PaidDataBillingNote
+            feature="catalog-ad-count"
+            labels={{
+              platform: d.products.billingPlatform,
+              platformNoLimit: d.products.billingPlatformNoLimit,
+              tenantOwn: d.products.billingTenantOwn,
+              owner: d.products.billingOwner,
+              denied: d.products.billingDenied,
+              loading: d.products.billingLoading,
+            }}
+          />
+          <button
+            className={btnGhost}
+            onClick={() => void onOneClickScreen("selected")}
+            disabled={oneClickBusy || selectedIds.size === 0}
+          >
+            {oneClickBusy
+              ? d.products.oneClickScreening
+              : `${d.products.oneClickScreen} · ${d.products.oneClickScopeSelected.replace("{n}", String(selectedIds.size))}`}
+          </button>
+          <button
+            className={btnGhost}
+            onClick={() => void onOneClickScreen("current")}
+            disabled={oneClickBusy}
+          >
+            {`${d.products.oneClickScreen} · ${d.products.oneClickScopeCurrent}`}
+          </button>
+          <button
+            className={btnGhost}
+            onClick={() => void onOneClickScreen("unscreened")}
+            disabled={oneClickBusy}
+          >
+            {`${d.products.oneClickScreen} · ${d.products.oneClickScopeUnscreened}`}
           </button>
           <button
             className={btnGhost}
@@ -3132,6 +3344,48 @@ export function CatalogClient({
                   ))}
                 </ul>
               </div>
+            )}
+          </div>
+        )}
+
+        {screenReport && (
+          <div className="mt-3 rounded-lg bg-slate-50 px-4 py-3 text-sm text-ink/80">
+            <p className="font-medium text-ink">{d.products.oneClickReportTitle}</p>
+            <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+              <span>{d.products.oneClickProcessed.replace("{n}", String(screenReport.processed))}</span>
+              <span>{d.products.oneClickKilledBlacklist.replace("{n}", String(screenReport.killedBlacklist))}</span>
+              <span>{d.products.oneClickKilledCommission.replace("{n}", String(screenReport.killedCommission))}</span>
+              <span>{d.products.oneClickKilledPreset.replace("{n}", String(screenReport.killedPreset))}</span>
+              <span>{d.products.oneClickKilledAdCount.replace("{n}", String(screenReport.killedAdCount))}</span>
+              <span>{d.products.oneClickKilledTrafficGate.replace("{n}", String(screenReport.killedTrafficGate))}</span>
+              <span>{d.products.oneClickReview.replace("{n}", String(screenReport.review))}</span>
+              <span>{d.products.oneClickPassed.replace("{n}", String(screenReport.passed))}</span>
+            </p>
+            <p className="mt-1">
+              {d.products.oneClickOffers
+                .replace("{c}", String(screenReport.offersCreated))
+                .replace("{s}", String(screenReport.offersSkippedExisting))
+                .replace("{f}", String(screenReport.offersFailed.length))}
+            </p>
+            <p className="mt-1 text-xs text-ink/60">
+              {`${d.products.adTierNone} ${screenReport.adTierDistribution.none} · ${d.products.adTierSmall} ${screenReport.adTierDistribution.small} · ${d.products.adTierSweet} ${screenReport.adTierDistribution.sweet} · ${d.products.adTierHot} ${screenReport.adTierDistribution.hot} · ${d.products.adTierRedOcean} ${screenReport.adTierDistribution.red_ocean}`}
+            </p>
+            {screenReport.skippedPaidLayer && (
+              <p className="mt-1 rounded bg-amber-100 px-2 py-1 text-amber-900">
+                {d.products.oneClickSkippedPaid.replace("{reason}", "skipped_paid")}
+              </p>
+            )}
+            {screenReport.truncated && (
+              <p className="mt-1 text-amber-700">{d.products.oneClickTruncated}</p>
+            )}
+            {screenReport.offersFailed.length > 0 && (
+              <ul className="mt-1 list-disc pl-5 text-red-700">
+                {screenReport.offersFailed.slice(0, 5).map((f) => (
+                  <li key={f.productId}>
+                    <span className="font-mono text-xs">{f.productId}</span>：{f.reason}
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
         )}

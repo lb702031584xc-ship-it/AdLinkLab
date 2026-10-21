@@ -32,6 +32,13 @@ import {
   type DfsAdsVolumeRow,
   type DfsRelatedCandidate,
 } from "../services/dataforseo-keywords.js";
+import {
+  PaidDataDeniedError,
+  recordPaidDataUsage,
+  requirePaidDataAccess,
+  resolvePaidDataAccess,
+  type PaidDataAccess,
+} from "../services/paid-data-gateway.js";
 
 /* 参数默认值与范围（用户拍板口径，输入框旁有推荐值标注） */
 export const EXPAND_LIMIT_DEFAULT = 100; // 每种子候选上限（Labs 按条计费阀门）
@@ -203,8 +210,12 @@ export async function registerKeywordDataForSeoRoutes(
 ): Promise<void> {
   const cache: ExpandCache | null =
     deps.cache === undefined ? redisExpandCache : deps.cache;
-  const newService = () =>
-    new DataForSeoKeywordService(deps.prisma, deps.fetchImpl ?? fetch);
+  const newService = (access?: PaidDataAccess) =>
+    new DataForSeoKeywordService(
+      deps.prisma,
+      deps.fetchImpl ?? fetch,
+      access?.credentials ?? undefined
+    );
 
   /**
    * ① 长尾扩词（实测数据）：种子词 → Labs Related Keywords 候选。
@@ -214,7 +225,7 @@ export async function registerKeywordDataForSeoRoutes(
   app.post<{ Body: Record<string, unknown> }>(
     "/api/v1/keywords/expand",
     async (request) => {
-      await requireSession(deps, request);
+      const info = await requireSession(deps, request);
       const body = (request.body ?? {}) as Record<string, unknown>;
       const seed = asTrimmedString(body.seed);
       if (!seed || seed.length < 2 || seed.length > 100) {
@@ -253,9 +264,17 @@ export async function registerKeywordDataForSeoRoutes(
         }
       }
 
+      // 缓存命中不产生付费调用：不经网关、不计费（省钱口径）。
+      // 未命中 → 先过付费数据网关（站长直通 / 租户自备 key / 平台授权）。
+      const access = await requirePaidDataAccess(deps.prisma, {
+        tenantId: info.tenantId,
+        userId: info.id,
+        userRole: info.role,
+        feature: "keywords-expand",
+      });
       let candidates: DfsRelatedCandidate[];
       try {
-        candidates = await newService().getRelatedKeywords({
+        candidates = await newService(access).getRelatedKeywords({
           seed,
           locationCode,
           languageCode,
@@ -264,6 +283,14 @@ export async function registerKeywordDataForSeoRoutes(
       } catch (e) {
         throw toHttpError(e);
       }
+      await recordPaidDataUsage(deps.prisma, {
+        tenantId: info.tenantId,
+        actorId: info.id,
+        feature: "keywords-expand",
+        keySource: access.keySource,
+        calls: 1,
+        grantId: access.grantId,
+      });
       if (cache) {
         await cache.set(
           cacheKey,
@@ -279,6 +306,10 @@ export async function registerKeywordDataForSeoRoutes(
         candidates,
         total: candidates.length,
         cached: false,
+        billing: {
+          keySource: access.keySource,
+          remainingCalls: access.remainingCalls,
+        },
       };
     }
   );
@@ -291,7 +322,7 @@ export async function registerKeywordDataForSeoRoutes(
   app.post<{ Body: Record<string, unknown> }>(
     "/api/v1/keywords/intent-filter",
     async (request) => {
-      await requireSession(deps, request);
+      const info = await requireSession(deps, request);
       const body = (request.body ?? {}) as Record<string, unknown>;
       const keywords = parseKeywords(body.keywords, INTENT_KEYWORD_MAX);
       const locationCode = parseLocationCode(body.locationCode);
@@ -305,11 +336,35 @@ export async function registerKeywordDataForSeoRoutes(
         })),
         ...extra,
       });
+      // 付费数据网关：被拒时同样 fail-soft（不丢词），但把拒绝原因带回，
+      // 前端据此提示申请授权 / 填自备 key 两条路。
+      const access = await resolvePaidDataAccess(deps.prisma, {
+        tenantId: info.tenantId,
+        userId: info.id,
+        userRole: info.role,
+        feature: "keywords-intent",
+      });
+      if (!access.allowed) {
+        const denied = new PaidDataDeniedError(access.feature, access.reason);
+        return unverified({
+          configured: true,
+          paidDataDenied: access.reason,
+          error: denied.message,
+        });
+      }
       try {
-        const results = await newService().getSearchIntents({
+        const results = await newService(access).getSearchIntents({
           keywords,
           locationCode,
           languageCode,
+        });
+        await recordPaidDataUsage(deps.prisma, {
+          tenantId: info.tenantId,
+          actorId: info.id,
+          feature: "keywords-intent",
+          keySource: access.keySource,
+          calls: 1,
+          grantId: access.grantId,
         });
         const byKey = new Map(
           results.map((r) => [r.keyword.toLowerCase(), r])
@@ -350,7 +405,7 @@ export async function registerKeywordDataForSeoRoutes(
   app.post<{ Body: Record<string, unknown> }>(
     "/api/v1/keywords/ad-measure",
     async (request) => {
-      await requireSession(deps, request);
+      const info = await requireSession(deps, request);
       const body = (request.body ?? {}) as Record<string, unknown>;
       const keywords = parseKeywords(body.keywords, MEASURE_KEYWORD_MAX);
       const locationCode = parseLocationCode(body.locationCode);
@@ -363,9 +418,19 @@ export async function registerKeywordDataForSeoRoutes(
         MEASURE_LIMIT_MAX
       );
 
+      // 付费数据网关：测算是最贵的调用（Keywords Data + Labs Overview 两次），
+      // 服务端硬门之外再过网关（站长直通 / 租户自备 key / 平台授权）。
+      const access = await requirePaidDataAccess(deps.prisma, {
+        tenantId: info.tenantId,
+        userId: info.id,
+        userRole: info.role,
+        feature: "keywords-ad-measure",
+      });
+      const service = newService(access);
+
       let volumeRows: DfsAdsVolumeRow[];
       try {
-        volumeRows = await newService().getAdsSearchVolume({
+        volumeRows = await service.getAdsSearchVolume({
           keywords,
           locationCode,
           languageCode,
@@ -375,16 +440,26 @@ export async function registerKeywordDataForSeoRoutes(
       }
 
       let cpcByKeyword = new Map<string, number>();
+      let overviewOk = false;
       try {
-        cpcByKeyword = await newService().getKeywordOverviewCpc({
+        cpcByKeyword = await service.getKeywordOverviewCpc({
           keywords,
           locationCode,
           languageCode,
         });
+        overviewOk = true;
       } catch {
         // CPC 补数失败 fail-soft：cpc 显示未知，不丢整表结果。
         cpcByKeyword = new Map();
       }
+      await recordPaidDataUsage(deps.prisma, {
+        tenantId: info.tenantId,
+        actorId: info.id,
+        feature: "keywords-ad-measure",
+        keySource: access.keySource,
+        calls: overviewOk ? 2 : 1,
+        grantId: access.grantId,
+      });
 
       const byKey = new Map(
         volumeRows.map((r) => [r.keyword.toLowerCase(), r])
@@ -416,6 +491,10 @@ export async function registerKeywordDataForSeoRoutes(
         limit,
         estimate: true,
         measuredAt: new Date().toISOString(),
+        billing: {
+          keySource: access.keySource,
+          remainingCalls: access.remainingCalls,
+        },
       };
     }
   );

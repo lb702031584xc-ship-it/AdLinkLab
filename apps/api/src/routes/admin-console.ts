@@ -10,6 +10,7 @@ import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import type { PrismaClient } from "@adlinklab/database";
 import { requireAdmin } from "./auth.js";
+import { summarizePaidDataUsage } from "../services/paid-data-gateway.js";
 
 export interface AdminConsoleDeps {
   prisma: PrismaClient;
@@ -90,4 +91,22 @@ export async function registerAdminConsoleRoutes(
     await requireAdmin(deps, request);
     return readBackupStatus();
   });
+
+  /**
+   * 付费数据用量汇总（按租户 × 功能 × key 来源，近 N 天，缺省 30）：
+   * 数据来自付费数据网关台账（paid_data_usages），管理员在此核对
+   * 平台额度消耗与各租户自备 key 的调用量。只读，不含任何凭证。
+   */
+  app.get<{ Querystring: { days?: string } }>(
+    "/api/v1/admin/paid-data-usage",
+    async (request) => {
+      await requireAdmin(deps, request);
+      const daysRaw = Number(request.query.days);
+      const days =
+        Number.isFinite(daysRaw) && daysRaw > 0
+          ? Math.min(365, Math.floor(daysRaw))
+          : 30;
+      return summarizePaidDataUsage(deps.prisma, days);
+    }
+  );
 }
