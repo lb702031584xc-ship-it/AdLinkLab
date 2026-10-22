@@ -110,6 +110,9 @@ describe("VariableFields", () => {
     expect(html).toContain("{{productName}}");
     expect(html).toContain('value="Shoes"');
     expect(html).toContain("{{price}}");
+    // 标准变量带可读名对照显示（英文词典下为英文名 + 代码名）。
+    expect(html).toContain("Product name");
+    expect(html).toContain("Price");
   });
 
   it("renders textareas for pros/cons/products with hints", () => {

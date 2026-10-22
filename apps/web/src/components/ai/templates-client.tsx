@@ -186,12 +186,26 @@ export function VariableFields({
     <div className="space-y-4">
       {variables.map((name) => {
         const value = values[name] ?? "";
+        // 标准变量显示可读名 + 代码名对照（如「产品名称 {{productName}}」），
+        // 自定义变量无对照词条时只显示代码名，不臆造翻译。
+        const knownName = (t.varNames as Record<string, string | undefined>)[
+          name
+        ];
         const label = (
           <label
             htmlFor={`tpl-var-${name}`}
             className="mb-1 block text-sm font-medium text-ink/80"
           >
-            {`{{${name}}}`}
+            {knownName ? (
+              <>
+                {knownName}
+                <span className="ml-2 font-mono text-xs font-normal text-ink/50">
+                  {`{{${name}}}`}
+                </span>
+              </>
+            ) : (
+              `{{${name}}}`
+            )}
             {LIST_VARIABLES.has(name) ? (
               <span className="ml-2 text-xs font-normal text-ink/50">
                 {t.hints.lines}
