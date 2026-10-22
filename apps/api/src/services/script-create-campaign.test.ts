@@ -151,6 +151,16 @@ describe("buildCreateCampaignScript", () => {
     expect(src).toContain("descriptions");
   });
 
+  it("rounds ad-group bids to the billable unit (Google rejects 1.2709-style bids)", () => {
+    const src = buildCreateCampaignScript(samplePlan());
+    // Regression 2026-10-22: cpcBidMicros "1270900" was rejected with
+    // "Value must be a multiple of billable unit" — bids must go through
+    // bidMicros_ (nearest 10000 micros), never raw micros_.
+    expect(src).toContain("function bidMicros_");
+    expect(src).toContain("create.cpcBidMicros = bidMicros_(g.maxCpc.amount)");
+    expect(src).not.toContain("create.cpcBidMicros = micros_");
+  });
+
   it("passes the static security audit", () => {
     const src = buildCreateCampaignScript(samplePlan());
     expect(assertScriptSourceSafe(src)).toEqual([]);

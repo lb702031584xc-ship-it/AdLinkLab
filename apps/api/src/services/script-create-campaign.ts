@@ -26,7 +26,7 @@
 import { jsStringLiteral } from "./script-generator-source.js";
 import type { AdPlan } from "../ai/ad-generator.js";
 
-export const CREATE_CAMPAIGN_SCRIPT_VERSION = "1.2.0";
+export const CREATE_CAMPAIGN_SCRIPT_VERSION = "1.2.1";
 
 /** ISO country code → Google Ads geo target location ID (criteria ID). */
 export const COUNTRY_LOCATION_IDS: Record<string, number> = {
@@ -238,6 +238,17 @@ function micros_(amount) {
   return String(Math.round(Number(amount) * 1000000));
 }
 
+// Bid fields (cpcBidMicros) must be a multiple of the billable unit —
+// ¥0.01 / $0.01 = 10000 micros — or Google rejects the mutate with
+// "Value must be a multiple of billable unit". Plan bids come from
+// profit math with 4+ decimals (e.g. 1.2709), so round to the nearest
+// billable unit here, at the point of the API call. Min one unit.
+function bidMicros_(amount) {
+  var units = Math.round((Number(amount) * 1000000) / 10000);
+  if (!(units >= 1)) units = 1;
+  return String(units * 10000);
+}
+
 function validatePlan_(plan) {
   var problems = [];
   if (!plan || typeof plan !== "object") {
@@ -420,7 +431,7 @@ function createAdGroup_(campaignRn, block) {
     status: "PAUSED"
   };
   if (g.maxCpc && typeof g.maxCpc.amount === "number" && g.maxCpc.amount > 0) {
-    create.cpcBidMicros = micros_(g.maxCpc.amount);
+    create.cpcBidMicros = bidMicros_(g.maxCpc.amount);
   }
   var adGroupRn = mutate_({ adGroupOperation: { create: create } });
   if (!adGroupRn) {
