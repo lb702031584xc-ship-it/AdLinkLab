@@ -166,6 +166,19 @@ export function recommendedMaxCpc(breakEven: number | null): number | null {
 }
 
 /**
+ * Round a bid amount to the ad platform's billable unit (¥0.01 / $0.01).
+ * Bids that become real API values must pass through here: Google rejects
+ * cpcBidMicros that is not a multiple of the billable unit, and a 4-decimal
+ * display (1.2709) promises precision the platform cannot take. Analysis
+ * values (EPC, breakeven) stay full precision — round only at the point a
+ * number becomes a bid. Positive inputs never round below one unit.
+ */
+export function roundBidToBillableUnit(amount: number): number {
+  const rounded = Math.round(amount * 100) / 100;
+  return amount > 0 && rounded < 0.01 ? 0.01 : rounded;
+}
+
+/**
  * Max CPC that still hits the target return ratio.
  * ratio r = 产出 / 投入 = EPC / CPC  →  CPC = EPC / r。
  * r = 1 → 保平（CPC = EPC）；r = 1.5 → 投 1 产出 1.5（利润 0.5）；r = 2 → 投 1 产出 2（利润 1）。

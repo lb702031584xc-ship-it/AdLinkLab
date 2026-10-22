@@ -2,7 +2,26 @@
  * calcProfit: isEstimated flag (P0-2). Math itself must stay unchanged.
  */
 import { describe, expect, it } from "vitest";
-import { calcProfit, clicksToOrderFromCvr, defaultCvrForPrice, maxCpcForReturnRatio, returnRatioAtCpc, settlementPayoutHint, suggestCpcByClicksToOrder } from "@/lib/profit-calc";
+import { calcProfit, clicksToOrderFromCvr, defaultCvrForPrice, maxCpcForReturnRatio, returnRatioAtCpc, roundBidToBillableUnit, settlementPayoutHint, suggestCpcByClicksToOrder } from "@/lib/profit-calc";
+
+describe("roundBidToBillableUnit", () => {
+  it("rounds 4-decimal profit math to the ¥0.01 billable unit", () => {
+    // Regression 2026-10-22: 1.2709 reached Google as cpcBidMicros and was
+    // rejected ("Value must be a multiple of billable unit").
+    expect(roundBidToBillableUnit(1.2709)).toBe(1.27);
+    expect(roundBidToBillableUnit(2.5418)).toBe(2.54);
+    expect(roundBidToBillableUnit(1.276)).toBe(1.28);
+    // Exact half-cents resolve DOWN (float repr. of x.xx5 sits just below
+    // the half) — acceptable and safer for a max-CPC ceiling: never above
+    // the computed cap.
+    expect(roundBidToBillableUnit(1.275)).toBe(1.27);
+  });
+
+  it("never rounds a positive bid below one unit", () => {
+    expect(roundBidToBillableUnit(0.004)).toBe(0.01);
+    expect(roundBidToBillableUnit(0)).toBe(0);
+  });
+});
 
 describe("calcProfit isEstimated", () => {
   it("defaults isEstimated to false when inputsEstimated is omitted", () => {

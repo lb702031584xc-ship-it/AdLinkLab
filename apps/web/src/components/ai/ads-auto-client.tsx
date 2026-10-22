@@ -19,7 +19,7 @@ import {
   getOfferAction,
   listGoogleAccountsAction,
 } from "@/lib/api/entity-actions";
-import { calcProfit } from "@/lib/profit-calc";
+import { calcProfit, roundBidToBillableUnit } from "@/lib/profit-calc";
 import { listOfferCapturesAction, parseProductCaptureAiAction } from "@/lib/api/ai-actions";
 import { CapturePicker } from "@/components/ai/capture-picker";
 import { AdPreview } from "@/components/ai/ad-preview";
@@ -217,7 +217,7 @@ function PlanPreview({
             <dd className="mt-1 text-sm text-ink">
               {d.preview.maxCpc}:{" "}
               {c.bidding.maxCpc
-                ? `${c.bidding.maxCpc.amount.toFixed(4)} ${c.bidding.maxCpc.currency}`
+                ? `${c.bidding.maxCpc.amount.toFixed(2)} ${c.bidding.maxCpc.currency}`
                 : "—"}
             </dd>
           </div>
@@ -256,7 +256,7 @@ function PlanPreview({
             <span className="text-xs text-ink/60">
               {d.preview.maxCpc}:{" "}
               {block.group.maxCpc
-                ? `${block.group.maxCpc.amount.toFixed(4)} ${block.group.maxCpc.currency}`
+                ? `${block.group.maxCpc.amount.toFixed(2)} ${block.group.maxCpc.currency}`
                 : "—"}
             </span>
           </div>
@@ -1440,7 +1440,7 @@ export function AdsAutoClient({
   /** 确认/Script 用的最高 CPC：快照推荐出价（USD）→ 计划货币；无快照数据时不传（用计划默认）。 */
   const snapshotMaxCpc =
     recommendedBid != null
-      ? Math.round(recommendedBid * fxFactor * 10000) / 10000
+      ? roundBidToBillableUnit(recommendedBid * fxFactor)
       : null;
   /* Script 数值指纹：出价（快照推荐）/预算/货币/地域/否词/排期任一改动，Script 即过期，提示重新生成。 */
   const currentScriptFingerprint = (() =>
@@ -2041,7 +2041,7 @@ export function AdsAutoClient({
                     <dt className="text-ink/55">{d.bidStrategy.recommendedBreakEven}</dt>
                     <dd className="mt-0.5 font-medium text-ink">
                       {plannerBreakEven !== null
-                        ? `${(plannerBreakEven * fxFactor).toFixed(4)} ${bidCurrency}`
+                        ? `${roundBidToBillableUnit(plannerBreakEven * fxFactor).toFixed(2)} ${bidCurrency}`
                         : "—"}
                     </dd>
                   </div>
@@ -2049,7 +2049,7 @@ export function AdsAutoClient({
                     <dt className="text-ink/55">{d.bidStrategy.recommendedValue}</dt>
                     <dd className="mt-0.5 font-medium text-ink">
                       {snapshotMaxCpc !== null
-                        ? `${snapshotMaxCpc.toFixed(4)} ${bidCurrency}`
+                        ? `${snapshotMaxCpc.toFixed(2)} ${bidCurrency}`
                         : "—"}
                     </dd>
                   </div>
