@@ -29,6 +29,13 @@
  *
  * 合成：任一 stop → "stop"；无 stop 但有 unknown 标记 → "unknown"；
  * 全过 → "go"（caution 档保留给工作表四腿合成，本阶梯无 caution 来源）。
+ *
+ * 清单 #7（初筛松绑）：本阶梯本来就不读条款 SEM / 品牌词 / 直链
+ * 限制（无此输入），故禁令从未参与本 verdict 合成；本次只加两处：
+ * 1) 返回排序改为经济优先——单笔佣金（降序）第一，verdict 成本
+ *    （go < unknown < stop，升序）第二；写回 DB 的顺序不变；
+ * 2) 每条 outcome 附 riskCost（OfferPolicy 最新快照里 FORBIDDEN
+ *    的 SEM / 品牌词 / 直链项）：只展示，不参与 verdict、不排除。
  */
 import type { PrismaClient } from "@adlinklab/database";
 import {
@@ -67,6 +74,13 @@ export interface OfferPrescreenOutcome {
   offerId: string;
   verdict: OfferPrescreenVerdict;
   reason: string;
+  /** 单笔佣金（美元，deriveCommissionPerSaleUsd 口径；算不出为 null）。排序第一键。 */
+  commissionUsd?: number | null;
+  /**
+   * 风险成本栏位（清单 #7）：OfferPolicy 最新快照里 FORBIDDEN 的
+   * SEM / 品牌词 / 直链项。只展示，不参与 verdict 判定、不排除。
+   */
+  riskCost?: string[];
   /** 广告层被 promoMode="product" 分流豁免（广告数仅作参考，未参与判停）。 */
   adReferenceOnly?: boolean;
   /** 仅靠长尾探针广告数过关（裸品牌词无广告、品牌+型号/品类词有广告在投）。 */
@@ -178,21 +192,47 @@ export async function prescreenOffers(
   const adCountCalc = deps.adCountCalc ?? calcBrandAdCounts;
   const gatewayResolve = deps.gatewayResolve ?? resolvePaidDataAccess;
 
-  const [blacklistRows, preset, thresholdUsd, thresholds] = await Promise.all([
-    prisma.catalogBlacklist.findMany({
-      where: { tenantId, status: "active" },
-      select: { channel: true, entityType: true, entityId: true, reason: true },
-    }) as Promise<
-      Array<{ channel: string; entityType: string; entityId: string; reason: string }>
-    >,
-    loadPreset(prisma, tenantId),
-    getMinCommissionUsd(prisma),
-    getTrafficThresholds(prisma),
-  ]);
+  const [blacklistRows, preset, thresholdUsd, thresholds, policyRows] =
+    await Promise.all([
+      prisma.catalogBlacklist.findMany({
+        where: { tenantId, status: "active" },
+        select: { channel: true, entityType: true, entityId: true, reason: true },
+      }) as Promise<
+        Array<{ channel: string; entityType: string; entityId: string; reason: string }>
+      >,
+      loadPreset(prisma, tenantId),
+      getMinCommissionUsd(prisma),
+      getTrafficThresholds(prisma),
+      // 清单 #7 风险成本来源：每 Offer 最新一条政策快照（createdAt 倒序，
+      // 同 Offer 取首条）。测试 fake 无此委托时 ?. 退回空数组。
+      (prisma.offerPolicy?.findMany({
+        where: { tenantId, offerId: { in: offers.map((o) => o.id) } },
+        select: { offerId: true, rules: true },
+        orderBy: { createdAt: "desc" },
+      }) as
+        | Promise<Array<{ offerId: string; rules: unknown }>>
+        | undefined) ?? [],
+    ]);
+
+  // OfferPolicy.rules: Record<规则名, ALLOWED|FORBIDDEN|REQUIRED|UNKNOWN>。
+  // 风险成本只取 FORBIDDEN 的三项（SEM / 品牌词 / 直链），其余规则不进本栏位。
+  const riskCostByOffer = new Map<string, string[]>();
+  for (const p of policyRows) {
+    if (riskCostByOffer.has(p.offerId)) continue; // 已取到最新一条
+    const rules = (p.rules ?? {}) as Record<string, unknown>;
+    const cost: string[] = [];
+    if (rules.PPC === "FORBIDDEN" || rules.SEARCH_ADS === "FORBIDDEN")
+      cost.push("禁付费搜索（SEM）");
+    if (rules.BRAND_BIDDING === "FORBIDDEN") cost.push("禁品牌词竞价");
+    if (rules.DIRECT_LINK === "FORBIDDEN") cost.push("禁直链");
+    riskCostByOffer.set(p.offerId, cost);
+  }
 
   interface Work {
     o: OfferRow;
     stopReason?: string;
+    /** 单笔佣金（美元；黑名单等佣金计算前即判停的为 null）。 */
+    commissionUsd?: number | null;
     flags: string[];
     needsAdData: boolean;
     adReferenceOnly?: boolean;
@@ -233,6 +273,7 @@ export async function prescreenOffers(
       commissionType: o.commissionType,
       avgPrice: o.avgPrice,
     });
+    w.commissionUsd = amount;
     const typeKey = (o.commissionType ?? "").trim().toLowerCase();
     const ratePct =
       typeKey === "percentage" || typeKey === "%"
@@ -588,10 +629,13 @@ export async function prescreenOffers(
           ? `透明中心有 ${w.tcAdvertisersCount ?? 0} 家广告主在投（快照未捕获）：SERP 快照双 0 经透明中心旁证翻案过关`
           : "");
     counts[verdict] += 1;
+    const riskCost = riskCostByOffer.get(o.id) ?? [];
     outcomes.push({
       offerId: o.id,
       verdict,
       reason,
+      commissionUsd: w.commissionUsd ?? null,
+      ...(riskCost.length > 0 ? { riskCost } : {}),
       ...(w.adReferenceOnly ? { adReferenceOnly: true } : {}),
       ...(w.adLongtailOnly ? { adLongtailOnly: true } : {}),
       ...(w.tcRescued
@@ -607,6 +651,24 @@ export async function prescreenOffers(
       },
     });
   }
+
+  // 清单 #7 — 返回排序：第一键单笔佣金降序（未知排后），
+  // 第二键 verdict 成本升序（go < unknown < stop）。仅排返回数组；
+  // 上方写回 DB 的顺序与 counts 均不受影响。Array.sort 稳定，
+  // 两键全等时保持输入顺序。
+  const verdictCost: Record<OfferPrescreenVerdict, number> = {
+    go: 0,
+    unknown: 1,
+    stop: 2,
+  };
+  outcomes.sort((a, b) => {
+    const ac = a.commissionUsd ?? null;
+    const bc = b.commissionUsd ?? null;
+    if (ac !== null && bc !== null && ac !== bc) return bc - ac;
+    if (ac !== null && bc === null) return -1;
+    if (ac === null && bc !== null) return 1;
+    return verdictCost[a.verdict] - verdictCost[b.verdict];
+  });
 
   await writeCatalogAudit(prisma, {
     tenantId,

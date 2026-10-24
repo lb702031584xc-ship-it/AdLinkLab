@@ -253,6 +253,9 @@ export async function registerRoutes(
     await registerLaunchRoutes(app, { prisma: services.prisma });
     await registerCampaignToggleRoutes(app, { prisma: services.prisma });
     await registerAdsAutoRoutes(app, { prisma: services.prisma });
+    // 直链速测（2026-10-24，7 条清单 #2；与 ads-auto 同套会话认证）
+    const { registerDirectTestRoutes } = await import("./direct-test.js");
+    await registerDirectTestRoutes(app, { prisma: services.prisma });
     await registerLaunchArchiveRoutes(app, { prisma: services.prisma });
     await registerKeywordCheckRoutes(app, { prisma: services.prisma });
     // P1-6：Offer 自动状态联动（偏好 + 手动检查 + 批量执行）
@@ -334,6 +337,17 @@ export async function registerRoutes(
     await registerSearchTermRoutes(app, prismaOnly, auth);
     await registerPayoutWatchRoutes(app, prismaOnly, auth);
     await registerBudgetRuleRoutes(app, prismaOnly, auth);
+    // 成本账 + 账号矩阵（2026-10-24，7 条清单）
+    const { registerCostLedgerRoutes } = await import("./cost-ledger.js");
+    await registerCostLedgerRoutes(app, prismaOnly, auth);
+    const { registerAccountMatrixRoutes } = await import("./account-matrix.js");
+    await registerAccountMatrixRoutes(app, prismaOnly, auth);
+    const { registerBanLogRoutes } = await import("./ban-log.js");
+    await registerBanLogRoutes(app, prismaOnly, auth);
+    const { registerBrandKeywordRoutes } = await import("./brand-keywords.js");
+    await registerBrandKeywordRoutes(app, prismaOnly, auth);
+    const { registerKillRuleRoutes } = await import("./kill-rules.js");
+    await registerKillRuleRoutes(app, prismaOnly, auth);
     await registerLpOptimizationRoutes(app, services, auth);
     await registerNetworkRoutes(app, prismaOnly, auth);
     await registerWeeklyReportRoutes(app, prismaOnly, auth);

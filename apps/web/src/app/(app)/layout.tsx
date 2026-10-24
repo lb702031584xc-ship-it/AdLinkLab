@@ -238,6 +238,13 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
             { href: "/reports", label: ni.launchArchive, phase: ph.monitor },
             { href: "/payout-watch", label: ni.payoutWatch, phase: ph.monitor },
             { href: "/budget-rules", label: ni.budgetRules, phase: ph.monitor },
+            // 成本账 + 账号矩阵（2026-10-24，7 条清单）
+            { href: "/cost-ledger", label: lang === "en" ? "Cost Ledger" : "成本账", phase: ph.monitor },
+            { href: "/account-matrix", label: lang === "en" ? "Account Matrix" : "账号矩阵", phase: ph.monitor },
+            { href: "/ban-log", label: lang === "en" ? "Ban Log" : "封号复盘", phase: ph.monitor },
+            { href: "/brand-keywords", label: lang === "en" ? "Brand Keywords" : "品牌词", phase: ph.monitor },
+            { href: "/kill-rules", label: lang === "en" ? "Kill Rules" : "砍线规则", phase: ph.monitor },
+            { href: "/direct-test", label: lang === "en" ? "Direct Test" : "直链速测", phase: ph.traffic },
             { href: "/tracking-links", label: t.common.nav.trackingLinks },
             { href: "/clicks", label: t.common.nav.clicks },
             { href: "/conversions", label: t.common.nav.conversions },

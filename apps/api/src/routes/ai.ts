@@ -1136,7 +1136,11 @@ export async function registerAiRoutes(
   });
 
   /**
-   * P0 anti-ban — batch-screen up to 10 offers' terms, ranked go → caution → stop.
+   * P0 anti-ban — batch-screen up to 10 offers' terms.
+   * 清单 #7（初筛松绑）：排序第一位永远是经济数据——EPC、佣金、
+   * 转化率（降序），合规成本只作第二排序（升序）。禁 SEM / 禁品牌词 /
+   * 禁直链只进 riskCost 栏位展示，不排除任何条目、不参与排序降权；
+   * verdict 仍原样返回 LLM 条款结论（见下方注释）。
    * Sequential LLM calls to avoid rate limits; fail-fast on LLM errors.
    */
   app.post("/api/v1/ai/screen-offers", async (request) => {
@@ -1153,9 +1157,29 @@ export async function registerAiRoutes(
     if (body.items.length > 10) {
       throw new ValidationError("items must contain at most 10 offers");
     }
-    const items: Array<{ name: string | null; text: string }> = [];
+    // 清单 #7：每条 item 可附带经济数据（全部可选；给不出数字时
+    // 按"无数据"处理，不 400）。commission 接受 payout 别名，
+    // conversionRate 接受 cvr 别名。
+    interface ScreenEconomics {
+      epc: number | null;
+      commission: number | null;
+      conversionRate: number | null;
+    }
+    const items: Array<{
+      name: string | null;
+      text: string;
+      economics: ScreenEconomics;
+    }> = [];
     for (let i = 0; i < body.items.length; i++) {
-      const it = body.items[i] as { name?: unknown; text?: unknown };
+      const it = body.items[i] as {
+        name?: unknown;
+        text?: unknown;
+        epc?: unknown;
+        commission?: unknown;
+        payout?: unknown;
+        conversionRate?: unknown;
+        cvr?: unknown;
+      };
       const text = typeof it?.text === "string" ? it.text.trim() : "";
       if (text.length < 50) {
         throw new ValidationError(
@@ -1166,7 +1190,17 @@ export async function registerAiRoutes(
         typeof it?.name === "string" && it.name.trim()
           ? it.name.trim().slice(0, 120)
           : null;
-      items.push({ name, text });
+      items.push({
+        name,
+        text,
+        economics: {
+          epc: asFiniteNumber(it?.epc) ?? null,
+          commission:
+            asFiniteNumber(it?.commission) ?? asFiniteNumber(it?.payout) ?? null,
+          conversionRate:
+            asFiniteNumber(it?.conversionRate) ?? asFiniteNumber(it?.cvr) ?? null,
+        },
+      });
     }
     const settings = await readSettings(prisma, await tenantIdOf(prisma, request));
     if (!isConfigured(settings)) {
@@ -1179,7 +1213,11 @@ export async function registerAiRoutes(
     const pepper = assertAiSettingsPepperConfigured();
     const apiKey = decryptSecret(settings.apiKeyEnc as string, pepper);
 
-    const analyzed: Array<{ name: string | null; terms: TermsShape }> = [];
+    const analyzed: Array<{
+      name: string | null;
+      terms: TermsShape;
+      economics: ScreenEconomics;
+    }> = [];
     // P0-6 — 批量调用累计 usage，一次性记账（calls=items.length）。
     const batchMeta: { usage: LlmUsage; latencyMs: number } = {
       usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
@@ -1209,7 +1247,7 @@ export async function registerAiRoutes(
         if (e instanceof AiError) throw e;
         throw new AiError("LLM request failed");
       }
-      analyzed.push({ name: item.name, terms });
+      analyzed.push({ name: item.name, terms, economics: item.economics });
     }
     await trackLlmUsage(
       info.tenantId,
@@ -1220,6 +1258,27 @@ export async function registerAiRoutes(
 
     const severityRank = { high: 0, medium: 1, low: 2 } as const;
     const verdictRank = { go: 0, caution: 1, stop: 2 } as const;
+    // 清单 #7 — 风险成本栏位：只取 SEM / 品牌词 / 直链三项条款限制，
+    // 仅展示、不参与 verdict 判定、不排除条目、不参与排序降权。
+    // 其他渠道限制（邮件/激励等）仍留在 keyRisks / 条款原文里。
+    const termsRiskCost = (terms: TermsShape): string[] => {
+      const out: string[] = [];
+      if (terms.traffic.search === "forbidden") out.push("禁付费搜索（SEM）");
+      else if (terms.traffic.search === "restricted")
+        out.push("付费搜索（SEM）受限");
+      if (terms.brandBidding === "forbidden") out.push("禁品牌词竞价");
+      else if (terms.brandBidding === "restricted") out.push("品牌词竞价受限");
+      if (terms.directLinking === "forbidden") out.push("禁直链");
+      else if (terms.directLinking === "restricted") out.push("直链受限");
+      return out;
+    };
+    // 全批都没有经济数据时退回旧口径（合规排序），保持旧行为与旧测试。
+    const hasEconomics = analyzed.some(
+      (x) =>
+        x.economics.epc !== null ||
+        x.economics.commission !== null ||
+        x.economics.conversionRate !== null
+    );
     const results = analyzed
       .map((a) => {
         const keyRisks = [...a.terms.redFlags]
@@ -1228,12 +1287,31 @@ export async function registerAiRoutes(
           .map((f) => f.title);
         return {
           name: a.name,
+          // verdict 原样返回 LLM 条款结论（审计口径）：LLM 结论本身
+          // 的合成在条款提示词里（apps/api/src/ai/prompts.ts，本次
+          // 纪律外文件未动）；本端点只做到：禁 SEM / 品牌词 / 直链
+          // 不再左右排序、不排除条目，改以 riskCost 成本项展示。
           verdict: a.terms.overallVerdict,
           keyRisks,
           summary: a.terms.summary,
+          economics: a.economics,
+          riskCost: termsRiskCost(a.terms),
         };
       })
-      .sort((a, b) => verdictRank[a.verdict] - verdictRank[b.verdict]);
+      .sort((a, b) => {
+        // 第一排序：经济数据（EPC → 佣金 → 转化率，降序；无数据排后）。
+        if (hasEconomics) {
+          for (const key of ["epc", "commission", "conversionRate"] as const) {
+            const av = a.economics[key];
+            const bv = b.economics[key];
+            if (av !== null && bv !== null && av !== bv) return bv - av;
+            if (av !== null && bv === null) return -1;
+            if (av === null && bv !== null) return 1;
+          }
+        }
+        // 第二排序：合规成本（升序：go < caution < stop）。
+        return verdictRank[a.verdict] - verdictRank[b.verdict];
+      });
 
     const id = randomUUID();
     const resultJson = JSON.parse(

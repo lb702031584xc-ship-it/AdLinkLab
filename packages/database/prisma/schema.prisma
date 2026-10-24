@@ -256,6 +256,13 @@ model Tenant {
   brandProfiles         BrandProfile[]
   /// 创意管理库 back-references (additive)
   creatives             Creative[]
+  /// 成本账 + 账号矩阵（2026-10-24，7 条清单，additive）
+  accountSlots          AccountSlot[]
+  banEvents             BanEvent[]
+  brandKeywords         BrandKeyword[]
+  killRules             KillRule[]
+  killRuleEvents        KillRuleEvent[]
+  riskParams            RiskParam[]
 
   @@map("tenants")
 }
@@ -521,6 +528,12 @@ model Offer {
   killSwitchEvents   KillSwitchEvent[]
   /// Phase 4 Research Lab — cloaking findings (additive, read-only from research)
   cloakingFindings   CloakingFinding[]
+  /// 成本账 + 账号矩阵（2026-10-24，7 条清单，additive）
+  accountSlots       AccountSlot[]
+  banEvents          BanEvent[]
+  brandKeywords      BrandKeyword[]
+  killRules          KillRule[]
+  killRuleEvents     KillRuleEvent[]
 
   @@unique([tenantId, idempotencyScope, idempotencyKey])
   @@index([tenantId])
@@ -2817,4 +2830,166 @@ model Creative {
   @@index([tenantId, status])
   @@index([offerId])
   @@map("creatives")
+}
+
+/// 成本账 + 账号矩阵（2026-10-24，7 条清单，additive only）。
+/// 硬线：只管理用户合法持有的账号组合；补点击、买号冒用、规避检测的
+/// 多账号分散、规避检测的 IP/UA/指纹轮换、批量起号绕过封禁一律不在此建模。
+
+/// 账号槽位（清单 #4）：起手 10 槽位模板；1 号 1 offer；死号补位。
+model AccountSlot {
+  id        String @id @db.Uuid
+  tenantId  String @map("tenant_id") @db.Uuid
+  /// 槽位序号（起手模板 1-10；补位槽位顺延编号）
+  slotIndex Int    @map("slot_index")
+  /// 用户合法持有的网络账号标识（自由文本标签，如 "GG-主号"；绝不存任何凭证）
+  accountLabel String @map("account_label")
+  network      String
+  /// 1 号 1 offer：同一账号同一时间只挂一个 offer；null = 空槽位
+  offerId String? @map("offer_id") @db.Uuid
+  /// EMPTY | ACTIVE | PAUSED | BANNED
+  status String @default("EMPTY")
+  /// 账上余额（美元）
+  balanceUsd Decimal @default(0) @map("balance_usd") @db.Decimal(12, 2)
+  /// 待结佣金（美元）
+  pendingUsd Decimal @default(0) @map("pending_usd") @db.Decimal(12, 2)
+  /// 累计投入（美元：测试花费 + 养号成本）
+  investedUsd Decimal @default(0) @map("invested_usd") @db.Decimal(12, 2)
+  /// 累计已确认佣金（美元）
+  earnedUsd Decimal @default(0) @map("earned_usd") @db.Decimal(12, 2)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  offer  Offer? @relation(fields: [offerId], references: [id])
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@map("account_slots")
+}
+
+/// 封号 / 拒付复盘（清单 #5）：每次封号或拒付一条；按网络×操作类型
+/// 统计真实存活率，反哺成本账的封号概率参数。
+model BanEvent {
+  id       String @id @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+  network  String
+  offerId  String? @map("offer_id") @db.Uuid
+  /// DIRECT_LINK | BRAND_KEYWORD | OTHER
+  operationType String @map("operation_type")
+  /// 本次损失：被没收的余额（美元）
+  lostBalanceUsd Decimal @default(0) @map("lost_balance_usd") @db.Decimal(12, 2)
+  /// 本次损失：被没收的待结佣金（美元）
+  lostPendingUsd Decimal @default(0) @map("lost_pending_usd") @db.Decimal(12, 2)
+  /// 是否恢复（申诉成功 / 解封）
+  recovered Boolean @default(false)
+  /// 恢复金额（美元）
+  recoveredUsd Decimal @default(0) @map("recovered_usd") @db.Decimal(12, 2)
+  note       String?
+  occurredAt DateTime @default(now()) @map("occurred_at") @db.Timestamptz(3)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  offer  Offer? @relation(fields: [offerId], references: [id])
+
+  @@index([tenantId])
+  @@index([tenantId, network, operationType])
+  @@map("ban_events")
+}
+
+/// 品牌词分级管理（清单 #3）：品牌词竞价开关默认开启；被警告一次
+/// 自动降级（暂停该品牌词竞价），不要事前全禁。
+model BrandKeyword {
+  id       String @id @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+  keyword  String
+  brand    String?
+  offerId  String? @map("offer_id") @db.Uuid
+  /// 品牌词竞价开关（默认开启）
+  biddingEnabled Boolean @default(true) @map("bidding_enabled")
+  /// ACTIVE | DOWNGRADED | PAUSED
+  status String @default("ACTIVE")
+  warningCount Int @default(0) @map("warning_count")
+  /// ADVERTISER_REJECT | NETWORK_WARNING | OTHER
+  lastWarningKind String?   @map("last_warning_kind")
+  lastWarningAt   DateTime? @map("last_warning_at") @db.Timestamptz(3)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  offer  Offer? @relation(fields: [offerId], references: [id])
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@map("brand_keywords")
+}
+
+/// 砍线规则（清单 #6）：点击阈值 + 0 转化触发；动作可配；每条规则有
+/// 明确的自动执行开关（默认规则：300 点击预警、500 点击自动暂停）。
+model KillRule {
+  id       String @id @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+  /// null = 全局规则；指定 offer 则只对该 offer 生效
+  offerId String? @map("offer_id") @db.Uuid
+  name    String
+  /// 触发点击数阈值
+  clicksThreshold Int @map("clicks_threshold")
+  /// 是否要求 0 转化（默认 true）
+  requireZeroConv Boolean @default(true) @map("require_zero_conv")
+  /// WARN | PAUSE | LOWER_BID | EXCLUDE_ZONE
+  action String
+  /// 自动执行开关（用户可在界面关闭；默认规则 500 点击自动暂停默认开启）
+  enabled Boolean @default(true)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  offer  Offer? @relation(fields: [offerId], references: [id])
+  events KillRuleEvent[]
+
+  @@index([tenantId])
+  @@map("kill_rules")
+}
+
+/// 砍线执行审计（清单 #6）：每次规则评估命中写一条，append-only。
+model KillRuleEvent {
+  id          String @id @db.Uuid
+  tenantId    String @map("tenant_id") @db.Uuid
+  ruleId      String @map("rule_id") @db.Uuid
+  offerId     String? @map("offer_id") @db.Uuid
+  clicks      Int
+  conversions Int
+  /// 实际执行动作：WARN | PAUSE | LOWER_BID | EXCLUDE_ZONE | SKIPPED_DISABLED
+  actionTaken String @map("action_taken")
+  /// 执行快照（规则参数 + 当时数据）
+  snapshot  Json     @db.JsonB
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  rule   KillRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  offer  Offer? @relation(fields: [offerId], references: [id])
+
+  @@index([tenantId])
+  @@index([ruleId])
+  @@map("kill_rule_events")
+}
+
+/// 封号概率参数（清单 #1）：按网络×操作类型覆盖代码默认值；
+/// 无覆盖时用代码默认值（见 cost-ledger 服务）。
+model RiskParam {
+  id       String @id @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+  network  String
+  /// DIRECT_LINK | BRAND_KEYWORD | OTHER
+  operationType String @map("operation_type")
+  /// 封号概率 0-1
+  banProbability Float @map("ban_probability")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, network, operationType])
+  @@index([tenantId])
+  @@map("risk_params")
 }
