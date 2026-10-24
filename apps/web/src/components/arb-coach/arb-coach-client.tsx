@@ -179,6 +179,66 @@ export function ArbCoachClient({ dict }: { dict: ArbCoachDict; lang: string }) {
         );
       })}
 
+      {/* 垂直打法卡：CC submit / 抽奖 / Dating / Nutra / 电商 CPS */}
+      <section className="rounded-xl border border-ink/10 bg-white p-5">
+        <h2 className="text-lg font-bold text-ink">{dict.verticals.title}</h2>
+        <p className="mt-1 text-sm text-ink/70">{dict.verticals.desc}</p>
+
+        <div className="mt-3 rounded-lg border border-red-300 bg-red-50 p-3">
+          <p className="text-sm font-semibold text-red-900">
+            {dict.verticals.redLinesTitle}
+          </p>
+          <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-red-800">
+            {dict.verticals.redLines.map((r) => (
+              <li key={r}>{r}</li>
+            ))}
+          </ul>
+        </div>
+
+        {dict.verticals.items.map((v) => (
+          <article
+            key={v.id}
+            className="mt-4 rounded-lg border border-ink/10 p-4"
+          >
+            <h3 className="text-base font-bold text-ink">
+              {v.badge} {v.name}
+            </h3>
+            <p className="mt-2 text-sm text-ink/80">
+              <span className="font-medium">{dict.verticals.howLabel}：</span>
+              {v.howItWorks}
+            </p>
+            <p className="mt-1 text-sm text-ink/80">
+              <span className="font-medium">{dict.verticals.payoutLabel}：</span>
+              {v.payoutShape}
+            </p>
+            <p className="mt-1 text-sm text-ink/80">
+              <span className="font-medium">{dict.verticals.trafficLabel}：</span>
+              {v.trafficFit}
+            </p>
+            <h4 className="mt-3 text-sm font-semibold text-ink">
+              {dict.verticals.gatesLabel}
+            </h4>
+            <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-ink/80">
+              {v.termsGates.map((g) => (
+                <li key={g}>{g}</li>
+              ))}
+            </ul>
+            <h4 className="mt-3 text-sm font-semibold text-ink">
+              {dict.verticals.killLabel}
+            </h4>
+            <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-ink/80">
+              {v.killSignals.map((k) => (
+                <li key={k}>{k}</li>
+              ))}
+            </ul>
+            <div className="mt-3 rounded-lg bg-blue-50 p-3 text-sm text-blue-900">
+              <span className="font-semibold">{dict.verticals.tipLabel}</span>
+              <p className="mt-1">{v.coachTip}</p>
+            </div>
+          </article>
+        ))}
+      </section>
+
       {pct === 100 && (
         <div className="rounded-xl border border-green-300 bg-green-50 p-5 text-center text-sm font-medium text-green-900">
           {dict.complete}

@@ -33,6 +33,24 @@ export interface ArbCoachTemplate {
   stages: { title: string; params: string[] }[];
 }
 
+/**
+ * 垂直打法卡：一个垂直一张卡。只写合规打法——玩法、佣金形态、
+ * 流量适配、条款合规门、砍线信号；不写误导创意与灰色操作。
+ */
+export interface ArbCoachVertical {
+  id: "ccSubmit" | "sweepstakes" | "dating" | "nutra" | "ecom";
+  badge: string;
+  name: string;
+  howItWorks: string;
+  payoutShape: string;
+  trafficFit: string;
+  /** 开测前必须逐条核对的条款合规门。 */
+  termsGates: string[];
+  /** 出现即停的信号（质量/合规类，不只看 ROI）。 */
+  killSignals: string[];
+  coachTip: string;
+}
+
 export interface ArbCoachDict {
   pageTitle: string;
   pageDesc: string;
@@ -108,6 +126,20 @@ export interface ArbCoachDict {
     budget: string;
     items: ArbCoachTemplate[];
   };
+  /** 垂直打法区：CC submit / 抽奖 / Dating / Nutra / 电商 CPS。 */
+  verticals: {
+    title: string;
+    desc: string;
+    redLinesTitle: string;
+    redLines: string[];
+    howLabel: string;
+    payoutLabel: string;
+    trafficLabel: string;
+    gatesLabel: string;
+    killLabel: string;
+    tipLabel: string;
+    items: ArbCoachVertical[];
+  };
   scale: {
     pageTitle: string;
     pageDesc: string;
@@ -134,7 +166,7 @@ export interface ArbCoachDict {
 export const zh: ArbCoachDict = {
   pageTitle: "⚡套利教练",
   pageDesc:
-    "流量套利手把手：pop/push 便宜流量 → 高转化 Offer（抽奖 / CC submit）→ $5 测一个组合 → 小时级砍/留。不骗点击、不买号，拼的是选品和砍单速度。跟着 6 个阶段走，跑出第一个 ROI 为正的组合。",
+    "流量套利手把手：pop/push 便宜流量 → 高转化 Offer（抽奖 / CC submit）→ $5 测一个组合 → 小时级砍/留。不骗点击、不买号，拼的是选品和砍单速度。跟着 6 个阶段走，跑出第一个 ROI 为正的组合。下面新增 5 张垂直打法卡（CC submit / 抽奖 / Dating / Nutra / 电商 CPS）：先看合规门再开测，不同垂直不能用同一套打法。",
   progress: "完成进度",
   reset: "重置进度",
   resetConfirm: "确定要清空所有勾选进度和测试数据吗？",
@@ -175,6 +207,8 @@ export const zh: ArbCoachDict = {
       goal: "筛出 3–5 个值得 $10 测试的 Offer",
       checks: [
         "在联盟后台按 vertical 筛：抽奖（sweepstakes）/ CC submit / pin submit / SOI",
+        "先看下面的垂直打法卡：CC submit / 抽奖 / Dating / Nutra / 电商 CPS 各自的合规门和砍线不一样，别用同一套打法",
+        "跑品牌流量前先查 AM 表格：品牌黑名单（碰了佣金取消）与白名单（先拿一个 ASIN 实测，确认佣金在名单内还是名单外）",
         "新手从 SOI（单页提交）开始——转化最容易，先跑通链路",
         "记录每个候选的 payout、国家（geo）、每日 cap（限量）",
         "排除项：需要预付费的、条款含糊的、CR 异常低的",
@@ -469,6 +503,145 @@ export const zh: ArbCoachDict = {
       },
     ],
   },
+  verticals: {
+    title: "🗂️ 垂直打法卡：先看合规门再开测",
+    desc: "同一个 $5 测法套在不同垂直上会失灵：佣金形态、流量适配、审查强度全不一样。每张卡先写玩法，再写开测前必须核对的条款门，最后写出现即停的信号——质量类砍线和 ROI 砍线一样重要。",
+    redLinesTitle: "🚫 五个垂直共用的红线",
+    redLines: [
+      "条款先行：条款没写允许 ≠ 允许。流量类型、品牌词、直链、地区限制逐条核对，拿不准先问 AM，别先跑再问。",
+      "创意真实：不编造中奖、疗效、身份、评价、名人背书。误导创意 = 封号 + 佣金没收，赚到的也会被清零。",
+      "不碰硬禁：不补点击、不买号、不做检测规避（多号分散、IP/UA/指纹轮换）。",
+      "质量即生命：退款率、拒付率、注册后活跃度异常 → 先停再查，别等广告主来砍单。",
+    ],
+    howLabel: "玩法",
+    payoutLabel: "佣金形态",
+    trafficLabel: "流量适配",
+    gatesLabel: "合规门（开测前逐条核对）",
+    killLabel: "出现即停的信号",
+    tipLabel: "🎯 教练说",
+    items: [
+      {
+        id: "ccSubmit",
+        badge: "💳",
+        name: "CC submit",
+        howItWorks:
+          "用户在落地页提交信用卡信息（试用装运费、低价试用），广告主按首单或后续续订结算。转化链路比 SOI 长一步，但单笔佣金高于纯信息提交类。",
+        payoutShape:
+          "单笔高于 SOI/抽奖，以联盟后台为准；续订类 offer 的佣金与后续留存挂钩，质量差会被广告主掐量甚至扣佣。",
+        trafficFit:
+          "pop/push 直链或简单 lander 常见；必须先确认条款允许的流量类型，不许用的类型（邮件、品牌词、成人等）以条款为准。",
+        termsGates: [
+          "试用价格、试用期、续订价格必须在落地页写清楚，不得隐藏连续扣费",
+          "不得用预勾选框默认开通订阅",
+          "部分 offer 要求用户所在国与卡 BIN 匹配，跑之前先确认",
+          "落地页宣称（折扣、赠品、名额）必须与 offer 实际一致",
+        ],
+        killSignals: [
+          "退款/拒付率异常升高",
+          "广告主发质量警告或开始扣量",
+          "转化后短期内取消率走高",
+        ],
+        coachTip:
+          "CC submit 赚的是“首单 + 续订”的差价：落地页把价格和续订讲清楚，短期转化低一点，长期活得久。藏着掖着换来的转化，广告主一算账就全砍回去。",
+      },
+      {
+        id: "sweepstakes",
+        badge: "🎁",
+        name: "抽奖（Sweepstakes）",
+        howItWorks:
+          "用户提交邮箱/信息参与抽奖（SOI），或提交卡信息参与（CC submit 变体）。教练里的默认起手垂直，新手先从 SOI 开始跑通链路。",
+        payoutShape:
+          "SOI 单笔低（站内口径 $1–5），靠转化率和量撑 EPC；CC submit 变体单笔高些，但审查也更严。",
+        trafficFit:
+          "pop/push 最常见；SOI 链路最短，最适合 $5 档起手验证。",
+        termsGates: [
+          "不得宣称“已中奖 / 保证中奖”",
+          "抽奖规则、开奖方式、无需购买参与途径要可查",
+          "年龄与地区资格按条款来，不得超范围投放",
+          "不得伪造中奖名单、倒计时、剩余名额",
+        ],
+        killSignals: [
+          "1x 佣金零转化（通用砍线）",
+          "邮箱硬退率高、广告主判流量质量差",
+          "同一创意短期内转化率断崖式下跌（可能是 offer 被掐量）",
+        ],
+        coachTip:
+          "抽奖是起手垂直，不是印钞机：SOI 佣金低，EPC 全靠转化率撑。问 AM 要“本周跑得好的 3 个 offer”比你自己筛一下午管用；cap 小的别碰，刚测出数据就没量了，白忙。",
+      },
+      {
+        id: "dating",
+        badge: "💬",
+        name: "Dating（约会）",
+        howItWorks:
+          "约会平台注册（SOI）或付费会员（CPS/分成）。注册数容易做大，但广告主按后续活跃与付费算账，量好看不等于钱到手。",
+        payoutShape:
+          "SOI 单笔低、付费会员单笔高但转化难，以联盟后台为准；部分按注册后付费分成结算，回款看后续行为。",
+        trafficFit:
+          "pop/push 常见；注意很多流量源限制成人向 Dating——教练已排除 Adult 类目，只跑条款允许的主流 Dating，成人向与主流向是两条线，别混。",
+        termsGates: [
+          "18+ 年龄门必须执行，不得向未成年人投放",
+          "不得用假资料、机器人聊天冒充真人，不得盗用他人照片",
+          "禁止的流量类型与地区以条款为准",
+          "落地页不得暗示“附近真人已等你”这类无法兑现的承诺",
+        ],
+        killSignals: [
+          "注册后不活跃比例畸高（广告主会判质量差并砍单）",
+          "用户投诉（虚假身份、诱导付费）",
+          "广告主收紧 cap 或突然停量",
+        ],
+        coachTip:
+          "Dating 的坑在“量好出、质量难”：注册数好看但后续不活跃，广告主照样砍单。盯注册后行为，不只盯注册数；一个 offer 的注册成本再低，留存不行也是亏。",
+      },
+      {
+        id: "nutra",
+        badge: "🌿",
+        name: "Nutra（保健品/个护）",
+        howItWorks:
+          "保健品、个护类试用（Trial）或直销（SS，直销单）。需要较重的落地页（评测、科普向），用户决策比抽奖长，转化链路也更长。",
+        payoutShape:
+          "单笔通常高于 SOI/抽奖，以联盟后台为准；试用续订类与后续留存挂钩，退款会直接吃掉佣金。",
+        trafficFit:
+          "push + lander 常见；pop 直链效果通常不如带内容承接的 lander。",
+        termsGates: [
+          "不得宣称治疗疾病、不得写没有依据的功效",
+          "不得用假前后对比图、假医生/假名人背书",
+          "试用续订条款（价格、周期、取消方式）必须透明",
+          "部分地区对成分宣称有专门法规，跑之前先确认 GEO 限制",
+        ],
+        killSignals: [
+          "退款率走高、拒付率异常",
+          "广告主质量警告或开始扣佣",
+          "落地页宣称被平台或广告主下架要求整改",
+        ],
+        coachTip:
+          "Nutra 利润厚、审查也最狠：一句没根据的功效宣称就能让整条线被掐。落地页只写有依据的、条款允许的说法；宁可转化慢一点，也别用一张假对比图换封号。",
+      },
+      {
+        id: "ecom",
+        badge: "🛒",
+        name: "电商 CPS",
+        howItWorks:
+          "用户经链接在商家处下单，按销售额比例结算；品牌引流奖励类还能看到点击/加购/订单明细。这是慢决策生意，和抽奖的高频小额完全是两种节奏。",
+        payoutShape:
+          "单笔从几美元到上百美元不等，以联盟后台为准；回款周期长（品牌类课程口径 45–60 天），且退货会扣佣金——按确认订单算账，不按点击算。",
+        trafficFit:
+          "Google 搜索长尾词 + 内容站为主；pop/push 不适合高客单慢决策。Q4/黑五是电商旺季，但 CPC 也水涨船高，别用平时出价硬抢旺季流量。",
+        termsGates: [
+          "跑品牌流量前先查 AM 表格：品牌黑名单（碰了佣金取消）与白名单（先拿一个 ASIN 实测，确认佣金在名单内还是名单外）",
+          "品牌词竞价是否允许以条款为准，禁品牌词就别投",
+          "落地页必须是自己的内容页，不能直连电商平台（归因失败 + 违反直连政策）",
+          "促销信息（折扣、满额、时段）必须与商家真实促销一致",
+        ],
+        killSignals: [
+          "大额佣金下通用砍线要放大：单个 target 烧掉 1x 佣金才判——测 $100 佣金的 offer 别用 $5 档，每个创意/target 给 1–2x 佣金测试费",
+          "退货率异常、品牌方投诉",
+          "结算周期内订单被大面积取消（先停，查流量质量与落地页承诺）",
+        ],
+        coachTip:
+          "电商 CPS 是慢生意，别拿抽奖的节奏套它：价格线 ≥$80、默认佣金线 $8（ROI≥2 可例外）是站内已有规则；出价用 EPC÷2 倒推，大额佣金更要按 1–2x 佣金给足测试费——$5 测不出 $100 佣金 offer 的真相，只会误杀。",
+      },
+    ],
+  },
   scale: {
     pageTitle: "放量记录",
     pageDesc:
@@ -502,7 +675,7 @@ export const zh: ArbCoachDict = {
 export const en: ArbCoachDict = {
   pageTitle: "⚡Arbitrage Coach",
   pageDesc:
-    "Mediabuy arbitrage, step by step: cheap pop/push traffic → high-converting offers (sweepstakes / CC submit) → $5 per combo test → hourly kill/scale calls. No fake clicks, no bought accounts — win on offer picking and kill speed. Follow the 6 phases to your first ROI-positive combo.",
+    "Mediabuy arbitrage, step by step: cheap pop/push traffic → high-converting offers (sweepstakes / CC submit) → $5 per combo test → hourly kill/scale calls. No fake clicks, no bought accounts — win on offer picking and kill speed. Follow the 6 phases to your first ROI-positive combo. Five new vertical playbooks below (CC submit / sweepstakes / dating / Nutra / ecom CPS): read the compliance gates before testing — one playbook does not fit all verticals.",
   progress: "Progress",
   reset: "Reset",
   resetConfirm: "Clear all checklist progress and test data?",
@@ -543,6 +716,8 @@ export const en: ArbCoachDict = {
       goal: "Shortlist 3–5 offers worth a $10 test",
       checks: [
         "Filter by vertical in the network panel: sweepstakes / CC submit / pin submit / SOI",
+        "Read the vertical playbooks below first: CC submit / sweepstakes / dating / Nutra / ecom CPS each have different compliance gates and kill lines — don't run one playbook for all",
+        "Before running brand traffic, check the AM tables: brand blacklist (touch it and commission is cancelled) and whitelist (test one ASIN first to confirm commission is inside or outside the list)",
         "Beginners start with SOI (single opt-in) — easiest conversions, learn the loop first",
         "Record payout, geo and daily cap for each candidate",
         "Exclude: prepay required, vague terms, abnormally low CR",
@@ -834,6 +1009,145 @@ export const en: ArbCoachDict = {
             ],
           },
         ],
+      },
+    ],
+  },
+  verticals: {
+    title: "🗂️ Vertical playbooks: read the compliance gates before testing",
+    desc: "The same $5 test breaks across verticals: payout shapes, traffic fit and scrutiny all differ. Each card states how the vertical works, then the terms gates to check before launch, then the stop signals — quality kill lines matter as much as ROI kill lines.",
+    redLinesTitle: "🚫 Red lines shared by all five verticals",
+    redLines: [
+      "Terms first: not written as allowed ≠ allowed. Check traffic type, brand bidding, direct linking and geo limits one by one; when unsure, ask your AM before running, not after.",
+      "Honest creatives: no invented wins, cures, identities, reviews or celebrity endorsements. Misleading creatives = banned accounts + forfeited commissions.",
+      "No hard bans: no click supplementation, no bought accounts, no detection evasion (multi-account spreading, IP/UA/fingerprint rotation).",
+      "Quality is survival: abnormal refunds, chargebacks or post-registration inactivity → pause first, investigate second — don't wait for the advertiser to cut you off.",
+    ],
+    howLabel: "How it works",
+    payoutLabel: "Payout shape",
+    trafficLabel: "Traffic fit",
+    gatesLabel: "Compliance gates (check each before launch)",
+    killLabel: "Stop signals",
+    tipLabel: "🎯 Coach says",
+    items: [
+      {
+        id: "ccSubmit",
+        badge: "💳",
+        name: "CC submit",
+        howItWorks:
+          "The user submits card details on the lander (trial shipping fee, low-price trial); the advertiser pays on the first order or on continued subscription. One step longer than SOI, with higher payouts per conversion.",
+        payoutShape:
+          "Higher per conversion than SOI/sweepstakes — see the network panel for figures; continuity offers tie payout to retention, and poor quality gets shaved or clawed back.",
+        trafficFit:
+          "Pop/push direct link or simple lander is common; confirm the allowed traffic types in the terms first — banned types (email, brand bidding, adult, etc.) follow the terms, not habit.",
+        termsGates: [
+          "Trial price, trial period and rebill price must be stated clearly on the lander — no hidden continuity",
+          "No pre-checked boxes that opt users into a subscription by default",
+          "Some offers require the user's country to match the card BIN — confirm before running",
+          "Lander claims (discounts, gifts, spots left) must match the actual offer",
+        ],
+        killSignals: [
+          "Refund / chargeback rate climbing abnormally",
+          "Advertiser quality warning or volume throttling",
+          "Short-term cancellation rate rising after conversion",
+        ],
+        coachTip:
+          "CC submit earns on “first order + renewal”: state price and renewal plainly on the lander and conversions dip a little but the line lives longer. Conversions bought by hiding the terms get clawed back the moment the advertiser does the math.",
+      },
+      {
+        id: "sweepstakes",
+        badge: "🎁",
+        name: "Sweepstakes",
+        howItWorks:
+          "The user submits email/info to enter a prize draw (SOI), or card details (CC submit variant). The coach's default starter vertical — beginners start with SOI to learn the loop.",
+        payoutShape:
+          "SOI pays low per conversion (house range $1–5) and lives on conversion rate and volume; the CC submit variant pays more but faces stricter review.",
+        trafficFit:
+          "Pop/push is the most common fit; the SOI flow is the shortest, which is why it fits the $5 starter tier.",
+        termsGates: [
+          "Never claim “you've already won / guaranteed win”",
+          "Draw rules, draw method and no-purchase entry route must be findable",
+          "Age and geo eligibility follow the terms — don't run outside them",
+          "No fake winner lists, countdowns or spots-left counters",
+        ],
+        killSignals: [
+          "1× payout with zero conversions (universal kill line)",
+          "High email hard-bounce rate, advertiser flagging traffic quality",
+          "Conversion rate cliff-diving on one creative (the offer may be throttled)",
+        ],
+        coachTip:
+          "Sweepstakes is a starter vertical, not a money printer: SOI payouts are low, so EPC lives or dies on conversion rate. Ask your AM for “3 offers running well this week” — beats an afternoon of solo research; skip tiny caps, or volume dries up right when data arrives.",
+      },
+      {
+        id: "dating",
+        badge: "💬",
+        name: "Dating",
+        howItWorks:
+          "Dating platform registration (SOI) or paid membership (CPS/revshare). Registrations are easy to scale, but advertisers pay on later activity and payment — big volume is not the same as money banked.",
+        payoutShape:
+          "SOI pays low, paid membership pays high but converts hard — see the network panel; some offers settle on post-registration payment share, so payout follows later behavior.",
+        trafficFit:
+          "Pop/push is common; note many traffic sources restrict adult dating — the coach already excludes the Adult category, so run only mainstream dating the terms allow. Adult and mainstream are two different lines; don't mix them.",
+        termsGates: [
+          "18+ age gate is mandatory — never target minors",
+          "No fake profiles, no bots pretending to be real people, no stolen photos",
+          "Banned traffic types and geos follow the terms",
+          "No lander promises that can't be kept (“real people nearby are waiting for you”)",
+        ],
+        killSignals: [
+          "Post-registration inactivity far above normal (advertisers cut such traffic)",
+          "User complaints (fake identity, payment traps)",
+          "Advertiser tightening caps or pausing volume without warning",
+        ],
+        coachTip:
+          "Dating's trap is “easy volume, hard quality”: registrations look great while post-registration activity is dead, and advertisers cut it anyway. Track what happens after registration, not just registration counts; the cheapest registration with no retention still loses money.",
+      },
+      {
+        id: "nutra",
+        badge: "🌿",
+        name: "Nutra (supplements / personal care)",
+        howItWorks:
+          "Supplement and personal-care trials or straight sales (SS). Needs a heavier lander (review / explainer style); the decision takes longer than a sweepstakes entry, and so does the conversion path.",
+        payoutShape:
+          "Usually higher per conversion than SOI/sweepstakes — see the network panel; trial-continuity offers tie payout to retention, and refunds eat commission directly.",
+        trafficFit:
+          "Push + lander is common; pop direct links usually underperform content-backed landers here.",
+        termsGates: [
+          "No disease-treatment claims, no unsubstantiated efficacy claims",
+          "No fake before/after photos, no fake doctor or celebrity endorsements",
+          "Trial renewal terms (price, cycle, cancellation) must be transparent",
+          "Some geos regulate ingredient claims specifically — confirm geo limits before running",
+        ],
+        killSignals: [
+          "Refund rate climbing, chargeback anomalies",
+          "Advertiser quality warning or commission clawbacks",
+          "Lander claims ordered taken down by the platform or advertiser",
+        ],
+        coachTip:
+          "Nutra pays thick and gets reviewed hardest: one unsubstantiated efficacy claim can kill the whole line. Only write claims that are substantiated and terms-allowed; slower conversions beat a ban bought with one fake comparison photo.",
+      },
+      {
+        id: "ecom",
+        badge: "🛒",
+        name: "Ecom CPS",
+        howItWorks:
+          "The user orders at the merchant through your link and you earn a percentage of the sale; brand-referral programs can even show clicks, carts and orders per product. A slow-decision business — the opposite rhythm from high-frequency sweepstakes.",
+        payoutShape:
+          "Per order from a few dollars to over a hundred — see the network panel; settlement is slow (course range for brand programs is 45–60 days) and returns deduct commission — judge on confirmed orders, not clicks.",
+        trafficFit:
+          "Google Search long-tail keywords + content site first; pop/push does not fit high-ticket slow decisions. Q4/Black Friday is ecom peak season, but CPC inflates too — don't chase peak traffic at off-peak bids.",
+        termsGates: [
+          "Before running brand traffic, check the AM tables: brand blacklist (touch it and commission is cancelled) and whitelist (test one ASIN first to confirm commission is inside or outside the list)",
+          "Whether brand bidding is allowed follows the terms — banned means don't bid",
+          "The lander must be your own content page — never direct-link to the merchant platform (attribution fails + violates direct-link policy)",
+          "Promo details (discount, threshold, period) must match the merchant's real promotion",
+        ],
+        killSignals: [
+          "Big payouts change the kill math: one target burning 1× payout before judging — don't test a $100-payout offer on a $5 tier; give each creative/target 1–2× payout in test spend",
+          "Abnormal return rate, merchant complaints",
+          "Orders cancelled en masse inside the settlement window (pause first, check traffic quality and lander promises)",
+        ],
+        coachTip:
+          "Ecom CPS is a slow business — don't force sweepstakes rhythm onto it: price floor ≥$80 and the $8 default commission line (ROI≥2 exception) are house rules; derive bids as EPC ÷ 2, and for big payouts give 1–2× payout in test spend — $5 cannot reveal the truth about a $100-payout offer, it can only kill it by mistake.",
       },
     ],
   },
