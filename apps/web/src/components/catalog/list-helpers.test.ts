@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  PRODUCT_SORT_DROPDOWN_VALUES,
+  formatRiskCost,
   isValidSortValue,
   priorityRankFor,
   resolveStoredSort,
@@ -78,10 +80,41 @@ describe("sort persistence helpers", () => {
     expect(resolveStoredSort("x; DROP TABLE")).toBeNull();
   });
 
+  it("accepts commission_desc (stored sort is not reset)", () => {
+    expect(isValidSortValue("commission_desc")).toBe(true);
+    expect(resolveStoredSort("commission_desc")).toBe("commission_desc");
+  });
+
+  it("every sort-dropdown value passes the stored-sort whitelist", () => {
+    expect(PRODUCT_SORT_DROPDOWN_VALUES).toContain("commission_desc");
+    for (const v of PRODUCT_SORT_DROPDOWN_VALUES) {
+      expect(resolveStoredSort(v)).toBe(v);
+    }
+  });
+
   it("accepts priority sort values (persisted like any other column sort)", () => {
     expect(isValidSortValue("priority_desc")).toBe(true);
     expect(isValidSortValue("priority_asc")).toBe(true);
     expect(resolveStoredSort("priority_desc")).toBe("priority_desc");
+  });
+});
+
+describe("formatRiskCost（商家级政策提示栏）", () => {
+  it("多标签用“ · ”连接", () => {
+    expect(formatRiskCost(["禁品牌词竞价", "禁直链"])).toBe(
+      "禁品牌词竞价 · 禁直链"
+    );
+  });
+
+  it("单标签原样返回", () => {
+    expect(formatRiskCost(["禁付费搜索（SEM）"])).toBe("禁付费搜索（SEM）");
+  });
+
+  it("无 riskCost 时返回 null（单元格留空）", () => {
+    expect(formatRiskCost(undefined)).toBeNull();
+    expect(formatRiskCost(null)).toBeNull();
+    expect(formatRiskCost([])).toBeNull();
+    expect(formatRiskCost(["  "])).toBeNull();
   });
 });
 

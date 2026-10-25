@@ -88,10 +88,13 @@ import {
   localTodayString,
 } from "./added-date-range";
 import {
+  PRODUCT_SORT_DROPDOWN_VALUES,
+  formatRiskCost,
   priorityRankFor,
   resolveStoredSort,
   selectableProducts,
 } from "./list-helpers";
+import { buildScreeningPresetPayload } from "./preset-payload";
 import Link from "next/link";
 
 type Dict = typeof catalogZh;
@@ -1693,6 +1696,10 @@ export function CatalogClient({
   const [pMinPrice, setPMinPrice] = useState(initialPreset?.minPrice != null ? String(initialPreset.minPrice) : "");
   const [pMaxPrice, setPMaxPrice] = useState(initialPreset?.maxPrice != null ? String(initialPreset.maxPrice) : "");
   const [pMinScore, setPMinScore] = useState(initialPreset?.minScore != null ? String(initialPreset.minScore) : "");
+  /** 筛查口径：常规默认；老预设无 mode 字段时同样回常规（行为与今天一致）。 */
+  const [pMode, setPMode] = useState<"regular" | "loose">(
+    initialPreset?.mode === "loose" ? "loose" : "regular"
+  );
   const [pAutoCreate, setPAutoCreate] = useState(initialPreset?.autoCreateOffer ?? false);
   const [pAutoTopN, setPAutoTopN] = useState(initialPreset ? String(initialPreset.autoCreateTopN) : "20");
   const [savingPreset, setSavingPreset] = useState(false);
@@ -1701,19 +1708,20 @@ export function CatalogClient({
 
   function buildPresetPayload(adminFields: boolean) {
     const topN = numOrNull(pAutoTopN);
-    return {
-      minReviews: numOrNull(pMinReviews),
-      minCommissionAmount: numOrNull(pMinCommissionAmount),
-      minCommissionRate: numOrNull(pMinCommissionRate),
-      minPrice: numOrNull(pMinPrice),
-      maxPrice: numOrNull(pMaxPrice),
-      minScore: numOrNull(pMinScore),
-      autoCreateOffer: adminFields ? pAutoCreate : undefined,
-      autoCreateTopN: adminFields
-        ? Math.min(50, Math.max(1, Math.round(topN ?? 20)))
-        : undefined,
-      admin: adminFields,
-    };
+    return buildScreeningPresetPayload(
+      {
+        minReviews: numOrNull(pMinReviews),
+        minCommissionAmount: numOrNull(pMinCommissionAmount),
+        minCommissionRate: numOrNull(pMinCommissionRate),
+        minPrice: numOrNull(pMinPrice),
+        maxPrice: numOrNull(pMaxPrice),
+        minScore: numOrNull(pMinScore),
+        mode: pMode,
+        autoCreateOffer: pAutoCreate,
+        autoCreateTopN: Math.min(50, Math.max(1, Math.round(topN ?? 20))),
+      },
+      adminFields
+    );
   }
 
   async function onSavePreset(adminFields: boolean) {
@@ -2052,6 +2060,30 @@ export function CatalogClient({
     setMaxAdsDraft("20");
     setMinAds(1);
     setMaxAds(20);
+  }
+
+  /** 排序下拉选项文案（值与后端 sort 参数一致；表头排序不在下拉内时显示 sortOther）。 */
+  function sortDropdownLabel(v: string): string {
+    switch (v) {
+      case "id_desc":
+        return d.products.sortIdDesc;
+      case "commission_desc":
+        return d.products.sortCommissionDesc;
+      case "price_desc":
+        return d.products.sortPriceDesc;
+      case "price_asc":
+        return d.products.sortPriceAsc;
+      case "reviews_desc":
+        return d.products.sortReviewsDesc;
+      case "score_desc":
+        return d.products.sortScoreDesc;
+      case "created_desc":
+        return d.products.sortCreatedDesc;
+      case "brand_asc":
+        return d.products.sortBrandAsc;
+      default:
+        return v;
+    }
   }
 
   /** 点击表头切换排序：同列在 desc/asc 间切换 */
@@ -2903,6 +2935,34 @@ export function CatalogClient({
       {/* ===== 筛选预设 ===== */}
       <section className={cardCls}>
         <h2 className="text-lg font-semibold text-ink">{d.preset.title}</h2>
+        <div className="mt-4 flex flex-wrap items-center gap-4">
+          <span className="text-sm font-medium text-ink">{d.preset.modeLabel}</span>
+          <label className="flex items-center gap-2 text-sm text-ink">
+            <input
+              type="radio"
+              name="catalog-preset-mode"
+              value="regular"
+              checked={pMode === "regular"}
+              onChange={() => setPMode("regular")}
+            />
+            {d.preset.modeRegular}
+          </label>
+          <label className="flex items-center gap-2 text-sm text-ink">
+            <input
+              type="radio"
+              name="catalog-preset-mode"
+              value="loose"
+              checked={pMode === "loose"}
+              onChange={() => setPMode("loose")}
+            />
+            {d.preset.modeLoose}
+          </label>
+        </div>
+        {pMode === "loose" && (
+          <p className="mt-2 rounded-lg bg-amber-50 px-4 py-2 text-sm text-amber-900">
+            {d.preset.looseHint}
+          </p>
+        )}
         <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-3">
           <div>
             <label className={labelCls}>{d.preset.minReviews}</label>
@@ -3200,6 +3260,27 @@ export function CatalogClient({
               ))}
             </select>
           </label>
+          <label className="flex items-center gap-2 text-sm text-ink">
+            {d.products.sortLabel}
+            <select
+              className={inputCls}
+              value={sort}
+              onChange={(e) => setSort(e.target.value)}
+            >
+              {PRODUCT_SORT_DROPDOWN_VALUES.map((v) => (
+                <option key={v} value={v}>
+                  {sortDropdownLabel(v)}
+                </option>
+              ))}
+              {!(PRODUCT_SORT_DROPDOWN_VALUES as readonly string[]).includes(
+                sort
+              ) && (
+                <option value={sort} disabled>
+                  {d.products.sortOther}
+                </option>
+              )}
+            </select>
+          </label>
           <button
             className={btnGhost}
             onClick={onBackfill}
@@ -3282,12 +3363,12 @@ export function CatalogClient({
           <table
             className="table-fixed border-collapse text-sm"
             style={{
-              width: "2844px",
+              width: "3024px",
               fontFamily:
                 '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif',
             }}
           >
-            {/* 固定布局：27 列宽由此唯一决定（合计 2844 = 表宽），auto 布局下
+            {/* 固定布局：28 列宽由此唯一决定（合计 3024 = 表宽），auto 布局下
                 各列 min-content 总和过约束会把广告格压成逐字竖排、盖住操作列。
                 左右 sticky 偏移与此严格对应：序号列 left-[36px] = 复选列宽 36，
                 操作列 right-0 自身宽 164。改列宽必须同步改这两处。 */}
@@ -3318,6 +3399,7 @@ export function CatalogClient({
               <col className="w-[88px]" />
               <col className="w-[92px]" />
               <col className="w-[100px]" />
+              <col className="w-[180px]" />
               <col className="w-[164px]" />
             </colgroup>
             <thead className="sticky top-0 z-20">
@@ -3367,6 +3449,7 @@ export function CatalogClient({
                 <th className="px-3 py-2.5 ">{d.products.colPromo}</th>
                 <th className="px-3 py-2.5 ">{d.products.colOfferCount}</th>
                 {sortTh("created", d.products.colCreated)}
+                <th className="px-3 py-2.5 ">{d.products.colRiskCost}</th>
                 <th className="sticky right-0 z-30 bg-[#f7f8fa] px-3 py-2.5 shadow-[-1px_0_0_0_rgba(0,0,0,0.06)]">
                   {d.products.colActions}
                 </th>
@@ -3727,6 +3810,15 @@ export function CatalogClient({
                     </td>
                     <td className="whitespace-nowrap px-3 py-2 text-xs tabular-nums text-ink/60">
                       {formatDate(p.createdAt)}
+                    </td>
+                    <td className="px-3 py-2 text-xs text-ink/70">
+                      {(() => {
+                        const text = formatRiskCost(p.riskCost);
+                        // 商家级政策提示（非商品确定条款）；无内容时留空。
+                        return text ? (
+                          <span title={text}>{text}</span>
+                        ) : null;
+                      })()}
                     </td>
                     <td
                       className={`sticky right-0 z-20 px-3 py-2 shadow-[-1px_0_0_0_rgba(0,0,0,0.06)] ${

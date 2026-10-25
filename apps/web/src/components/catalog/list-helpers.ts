@@ -28,6 +28,33 @@ export function resolveStoredSort(raw: string | null | undefined): string | null
 }
 
 /**
+ * 商品列表排序下拉的选项值（直接透传给后端 sort 参数；每一项都必须通过
+ * resolveStoredSort 白名单，否则存过的排序会在下次进页时被重置）。
+ * commission_desc = 有效佣金降序、未知排后（后端全量内存排序）。
+ */
+export const PRODUCT_SORT_DROPDOWN_VALUES = [
+  "id_desc",
+  "commission_desc",
+  "price_desc",
+  "price_asc",
+  "reviews_desc",
+  "score_desc",
+  "created_desc",
+  "brand_asc",
+] as const;
+
+/**
+ * riskCost 栏展示文本：多标签用“ · ”连接；无内容返回 null——调用方渲染空单元格，
+ * 不写占位符（无 riskCost 的行留空）。riskCost 是商家级政策提示，不是商品确定条款。
+ */
+export function formatRiskCost(
+  riskCost: string[] | null | undefined
+): string | null {
+  const tags = (riskCost ?? []).filter((t) => t.trim() !== "");
+  return tags.length > 0 ? tags.join(" · ") : null;
+}
+
+/**
  * 测试优先分列的「先测」名次：仅在测试优先分降序（priority_desc）时，
  * 行的全局序号（(page-1)*pageSize + 行序）就是全局名次，可点亮名次 ≤5
  * 的「先测」徽标；其他排序（含 priority_asc 升序）下名次无"先测"语义 → null。

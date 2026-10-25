@@ -109,6 +109,11 @@ export interface CatalogProduct {
   /** 商家维度：后端新契约正在落地，可无，防御性读取。 */
   merchantName?: string | null;
   merchantId?: string | null;
+  /**
+   * 商家级政策提示（仅非空时后端返回；取值为“禁付费搜索（SEM）/禁品牌词竞价/禁直链”的子集）：
+   * 来自该商家各 Offer 的最新政策快照，是商家级政策证据，不是该商品的确定条款——展示时必须标注。
+   */
+  riskCost?: string[];
   /** 补强 #1：所属商家结算率（百分比；null = 未验证，不编造）。 */
   settlementRatePct?: number | null;
   /** 补强 #3：备选池阶段 inbox | pool | testing | live。 */
@@ -136,6 +141,9 @@ export interface CatalogProduct {
 /** 补强 #3：备选池阶段。 */
 export type PoolStage = "inbox" | "pool" | "testing" | "live"; // 阶段值域（"use server" 文件禁止导出常量，需要列表时在客户端本地定义）
 
+/** 筛查口径：regular（常规，默认）| loose（宽松型）。后端 GET 未保存时返回 "regular"。 */
+export type ScreeningMode = "regular" | "loose";
+
 export interface ScreeningPreset {
   minReviews: number | null;
   minCommissionAmount: number | null;
@@ -145,6 +153,8 @@ export interface ScreeningPreset {
   minScore: number | null;
   autoCreateOffer: boolean;
   autoCreateTopN: number;
+  /** 筛查口径（后端契约字段名 mode；老预设无此字段时按常规处理）。 */
+  mode?: ScreeningMode;
 }
 
 export interface SyncResult {
@@ -603,11 +613,13 @@ export async function saveScreeningPresetAction(input: {
   minPrice: number | null;
   maxPrice: number | null;
   minScore: number | null;
+  /** 筛查口径：透传给后端 mode 字段；未传时后端按常规处理。 */
+  mode?: ScreeningMode;
   autoCreateOffer?: boolean;
   autoCreateTopN?: number;
   admin?: boolean;
 }) {
-  const body: Record<string, number | boolean | null> = {
+  const body: Record<string, number | boolean | string | null> = {
     minReviews: input.minReviews,
     minCommissionAmount: input.minCommissionAmount,
     minCommissionRate: input.minCommissionRate,
@@ -615,6 +627,7 @@ export async function saveScreeningPresetAction(input: {
     maxPrice: input.maxPrice,
     minScore: input.minScore,
   };
+  if (input.mode) body.mode = input.mode;
   if (input.admin) {
     if (typeof input.autoCreateOffer === "boolean")
       body.autoCreateOffer = input.autoCreateOffer;
@@ -713,7 +726,7 @@ export async function listCatalogProductsAction(params: {
   pageSize?: number;
   /** false → preset=0，关闭预设自动过滤；默认开启。 */
   preset?: boolean;
-  /** 排序：id_desc（默认）/id_asc/price_desc/price_asc/reviews_desc/reviews_asc/score_desc/score_asc/created_desc/created_asc/recommended */
+  /** 排序：id_desc（默认）/id_asc/price_desc/price_asc/reviews_desc/reviews_asc/score_desc/score_asc/created_desc/created_asc/recommended/commission_desc（有效佣金降序，未知排后） */
   sort?: string;
   /** 广告投放数量下限（adCount >= 值；未计算的不命中）。 */
   minAdCount?: number;
