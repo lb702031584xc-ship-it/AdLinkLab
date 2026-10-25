@@ -177,3 +177,83 @@ describe("evaluateProduct（统一评分入口）", () => {
     );
   });
 });
+
+/* ── 松绑模式（2026-10-25，preset.mode === "loose"）──
+ * 准入 = 价格 ≥ $80 或有效佣金 > $5（任一）；无价格上限/佣金率下限/
+ * 评论下限/minScore；有效佣金用 estimateCommissionFigure 同口径；
+ * figure === 0 或原始输入显式为零 → 排除；未知（皆 null）不排除。 */
+describe("evaluateProduct 松绑模式", () => {
+  const LOOSE = { ...DEFAULT_PRESET, mode: "loose" as const };
+
+  it("仅价格 ≥ $80 准入（佣金未知也不拦）", () => {
+    expect(
+      evaluateProduct({ price: 100, reviewCount: 0 }, LOOSE).recommended
+    ).toBe(true);
+  });
+
+  it("仅佣金 > $5 准入（价格 < $80 也过）", () => {
+    expect(
+      evaluateProduct({ price: 50, commissionAmount: 6 }, LOOSE).recommended
+    ).toBe(true);
+    expect(
+      evaluateProduct({ price: 50, commissionRate: 20 }, LOOSE).recommended
+    ).toBe(true); // 50×20% = $10
+  });
+
+  it("两项都不满足 → 不准入", () => {
+    expect(
+      evaluateProduct({ price: 50, commissionAmount: 3 }, LOOSE).recommended
+    ).toBe(false);
+    expect(
+      evaluateProduct({ price: 50 }, LOOSE).recommended
+    ).toBe(false); // 佣金未知且价格 < $80：未知不拦 ≠ 准入
+  });
+
+  it("有效佣金 figure 为 0 → 排除（舍入到 0 的极小佣金，纵使价格 ≥ $80）", () => {
+    // 100 × 0.001% = 0.001 → round2 = 0；若把 0 当未知放行，价格条会误准入。
+    expect(
+      evaluateProduct({ price: 100, commissionRate: 0.001 }, LOOSE).recommended
+    ).toBe(false);
+  });
+
+  it("显式为零 → 排除（佣金率 0 / 金额 0 皆为已知为零，不是未知）", () => {
+    expect(
+      evaluateProduct({ price: 100, commissionRate: 0 }, LOOSE).recommended
+    ).toBe(false);
+    expect(
+      evaluateProduct({ price: 100, commissionAmount: 0 }, LOOSE).recommended
+    ).toBe(false);
+  });
+
+  it("佣金未知（amount 与 rate 皆 null）且价格 ≥ $80 → 不排除", () => {
+    expect(
+      evaluateProduct({ price: 80, commissionAmount: null, commissionRate: null }, LOOSE)
+        .recommended
+    ).toBe(true);
+  });
+
+  it("松绑不设价格上限/佣金率下限/评论下限/minScore", () => {
+    expect(
+      evaluateProduct(
+        { price: 9999, commissionAmount: 30, commissionRate: 1, reviewCount: 0 },
+        { ...LOOSE, minScore: 100 }
+      ).recommended
+    ).toBe(true);
+  });
+
+  it("松绑只改 recommended 的门，不改分", () => {
+    const p = { price: 100, commissionAmount: 30, commissionRate: 20, reviewCount: 5000 };
+    expect(evaluateProduct(p, LOOSE).score).toBe(
+      evaluateProduct(p, DEFAULT_PRESET).score
+    );
+  });
+
+  it("常规模式行为不变：同商品常规判否、松绑判是（价格带外高价）", () => {
+    const p = { price: 9999, commissionAmount: 30, commissionRate: 20, reviewCount: 5000 };
+    expect(evaluateProduct(p, DEFAULT_PRESET).recommended).toBe(false);
+    expect(evaluateProduct(p, LOOSE).recommended).toBe(true);
+    expect(
+      evaluateProduct(p, { ...DEFAULT_PRESET, mode: "regular" }).recommended
+    ).toBe(false);
+  });
+});

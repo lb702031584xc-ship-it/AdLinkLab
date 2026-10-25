@@ -1300,6 +1300,9 @@ model CatalogScreeningPreset {
   minPrice            Decimal? @map("min_price") @db.Decimal(19, 4)
   maxPrice            Decimal? @map("max_price") @db.Decimal(19, 4)
   minScore            Int?     @map("min_score")
+  /// 筛选口径：regular（常规，默认）| loose（松绑：价格≥$80 或佣金>$5 准入，
+  /// 无价格上限/佣金率下限/评论下限；见 catalog-screening.ts）。
+  mode                String   @default("regular") @map("mode")
   autoCreateOffer     Boolean  @default(false) @map("auto_create_offer")
   autoCreateTopN      Int      @default(20) @map("auto_create_top_n")
   createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(3)

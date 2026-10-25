@@ -77,6 +77,7 @@ import {
   catalogPriorityInputFromRow,
   computeCatalogTestPriority,
 } from "../services/catalog-priority.js";
+import { riskCostFromPolicyRules } from "../services/policy-risk-cost.js";
 import {
   recordPaidDataUsage,
   requirePaidDataAccess,
@@ -141,6 +142,15 @@ const numOrNull = (v: unknown): number | null => {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 };
+
+/**
+ * 预设 mode 归一化：缺失/null/非法值 → regular（常规默认）。
+ * 非法值入库本不应发生（PUT 已 400 拦截）；读侧仍防御性回落 regular，
+ * 绝不因脏数据让筛选口径静默走松绑。
+ */
+function normalizePresetMode(v: unknown): "regular" | "loose" {
+  return v === "loose" ? "loose" : "regular";
+}
 
 /**
  * 从 rawData 提取数字型商品主键（PB product_id，如 62837599）。
@@ -352,12 +362,15 @@ async function resolveScreeningPreset(
     minPrice: numOrNull(row.minPrice),
     maxPrice: numOrNull(row.maxPrice),
     minScore: (row.minScore as number | null) ?? null,
+    mode: normalizePresetMode(row.mode),
   };
 }
 
 /**
  * 商品列表排序（autoads 式：默认按数字主键 ID 倒序，最新商品在前）。
  * externalId 归一化后是数字串；同长度数字串的字典序 = 数字序。
+ * 注意：priority / commission_desc 不走本函数——二者是派生值排序，
+ * 由分页端点全量取数后内存排序再分页（见端点内注释）。
  */
 export function buildProductOrderBy(sort: unknown): Array<Record<string, string>> {
   const s = typeof sort === "string" ? sort.trim() : "";
@@ -863,6 +876,8 @@ export async function registerCatalogRoutes(
       sortRaw === "priority" ||
       sortRaw === "priority_desc" ||
       sortRaw === "priority_asc";
+    // commission_desc：有效佣金降序（见下方内存排序分支，与 priority 同机制）。
+    const isCommissionSort = sortRaw === "commission_desc";
     const where: Record<string, unknown> = { tenantId: info.tenantId };
     if (query.networkId) where.networkId = assertId(query.networkId, "networkId");
     if (query.recommended === "true" || query.recommended === "1") {
@@ -970,6 +985,41 @@ export async function registerCatalogRoutes(
       rows = scored
         .slice((page - 1) * pageSize, page * pageSize)
         .map((s) => s.r);
+    } else if (isCommissionSort) {
+      // commission_desc：有效佣金是 Prisma orderBy 表达不了的派生值
+      // （固定佣金优先，否则 price×佣金率，与筛选同口径），故沿用
+      // priority 的机制：过滤后的候选集全量取数 → 内存算佣金排序 → 切片。
+      // 局限（与 priority 同款，必须明说）：全量加载候选集，大库下分页
+      // 成本高于页内排序；total 仍为过滤后候选总数。
+      // 排序口径：有效佣金降序，null（未知）排后，次级序 externalId 降序。
+      // 商品库商品没有 EPC/转化率数据：EPC→佣金→转化率在商品库的投影
+      // 就是有效佣金降序（EPC 与转化率对所有行未知、全部打平，由佣金
+      // 决定顺序），本分支绝不假装算出了 EPC。
+      const allRows = (await prisma.networkProduct.findMany({
+        where,
+      })) as Array<Record<string, unknown>>;
+      const withFigure = allRows.map((r) => ({
+        r,
+        figure: estimateCommissionFigure({
+          amount: numOrNull(r.commissionAmount),
+          ratePct: numOrNull(r.commissionRate),
+          price: numOrNull(r.price),
+        }).figure,
+      }));
+      withFigure.sort((a, b) => {
+        const af = a.figure;
+        const bf = b.figure;
+        if (af !== null && bf !== null && af !== bf) return bf - af;
+        if (af !== null && bf === null) return -1;
+        if (af === null && bf !== null) return 1;
+        const ea = String(a.r.externalId ?? "");
+        const eb = String(b.r.externalId ?? "");
+        return ea < eb ? 1 : ea > eb ? -1 : 0;
+      });
+      total = allRows.length;
+      rows = withFigure
+        .slice((page - 1) * pageSize, page * pageSize)
+        .map((s) => s.r);
     } else {
       const [t, rs] = await Promise.all([
         prisma.networkProduct.count({ where }),
@@ -1056,6 +1106,42 @@ export async function registerCatalogRoutes(
           settlementRatePct: numOrNull(m.settlementRatePct),
         });
     }
+    // 商家级 riskCost（松绑口径，2026-10-25）：商品行本身没有逐条禁令数据，
+    // 故本栏位只能来自商家级证据——该商家各 Offer 的最新 OfferPolicy 快照
+    // （每商家取最新一条；createdAt 倒序后首条胜出，内存排序为准），
+    // 经 policy-risk-cost 共享函数映射。这是商家级证据，不是商品级条款：
+    // 只能读作「该商家某 Offer 的最新政策含禁令」，绝不写成「该商品被禁」。
+    // 无禁令或无政策数据时不挂 riskCost 字段（与 Offer 侧「仅非空才附」一致）。
+    // /screen 不写 riskCost（它只写 recommended/score），本栏位只在列表读取时现算。
+    const riskCostByMerchant = new Map<string, string[]>();
+    if (merchantIds.length > 0) {
+      const offersOfMerchants = (await prisma.offer.findMany({
+        where: { tenantId: info.tenantId, merchantId: { in: merchantIds } },
+        select: { id: true, merchantId: true },
+      })) as Array<{ id: string; merchantId: string | null }>;
+      const offerMerchant = new Map<string, string>();
+      for (const o of offersOfMerchants) {
+        if (o.merchantId) offerMerchant.set(o.id, o.merchantId);
+      }
+      const offerIds = [...offerMerchant.keys()];
+      if (offerIds.length > 0) {
+        const policyRows = ((await prisma.offerPolicy?.findMany({
+          where: { tenantId: info.tenantId, offerId: { in: offerIds } },
+          select: { offerId: true, rules: true, createdAt: true },
+        })) as
+          | Array<{ offerId: string; rules: unknown; createdAt: Date }>
+          | undefined) ?? [];
+        policyRows.sort(
+          (a, b) =>
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+        for (const p of policyRows) {
+          const mid = offerMerchant.get(p.offerId);
+          if (!mid || riskCostByMerchant.has(mid)) continue;
+          riskCostByMerchant.set(mid, riskCostFromPolicyRules(p.rules));
+        }
+      }
+    }
     // 联盟平台/账号列：一次查出本页涉及的网络（kind + name）。
     const networkIds = [
       ...new Set(
@@ -1078,10 +1164,15 @@ export async function registerCatalogRoutes(
       const blacklisted =
         blackProductIds.has(r.id as string) || blackMerchantIds.has(mid);
       const net = networkById.get((r.networkId as string) ?? "");
+      const merchantRisk = riskCostByMerchant.get(mid);
       return {
         ...serializeProduct(r, whiteSet.has(r.id as string)),
         pinned,
         blacklisted,
+        // riskCost：商家级证据（见上方注释），不是商品级条款；空则不挂字段。
+        ...(merchantRisk && merchantRisk.length > 0
+          ? { riskCost: merchantRisk }
+          : {}),
         merchantName: mid ? (merchantById.get(mid)?.name ?? null) : null,
         // 补强 #1：所属商家结算率（查不到商家/未验证 → null，前端显示「未验证」）。
         settlementRatePct: mid
@@ -1091,9 +1182,9 @@ export async function registerCatalogRoutes(
         networkName: net?.name ?? null,
       };
     });
-    // 白名单本页置顶只对普通排序生效：priority 排序下分数序必须纯粹
-    // （用户按"先测"名次从上往下建 Offer），pinned 仅保留标记不重排。
-    if (!isPrioritySort) {
+    // 白名单本页置顶只对普通排序生效：priority / commission_desc 排序下
+    // 顺序必须纯粹（前者按"先测"名次、后者按佣金），pinned 仅保留标记不重排。
+    if (!isPrioritySort && !isCommissionSort) {
       products.sort((a, b) => Number(b.pinned) - Number(a.pinned));
     }
     return {
@@ -2295,7 +2386,12 @@ export async function registerCatalogRoutes(
     });
     if (!row) {
       return {
-        preset: { ...DEFAULT_PRESET, autoCreateOffer: false, autoCreateTopN: 20 },
+        preset: {
+          ...DEFAULT_PRESET,
+          mode: "regular",
+          autoCreateOffer: false,
+          autoCreateTopN: 20,
+        },
         saved: false,
       };
     }
@@ -2308,6 +2404,7 @@ export async function registerCatalogRoutes(
         minPrice: numOrNull(r.minPrice),
         maxPrice: numOrNull(r.maxPrice),
         minScore: r.minScore,
+        mode: normalizePresetMode(r.mode),
         autoCreateOffer: r.autoCreateOffer,
         autoCreateTopN: r.autoCreateTopN,
       },
@@ -2355,6 +2452,18 @@ export async function registerCatalogRoutes(
       }
       if (body.autoCreateOffer !== undefined) {
         patch.autoCreateOffer = body.autoCreateOffer === true;
+      }
+      // mode：字段省略/空串 → 保持旧值（与数字字段同口径）；
+      // 显式 null → 视为 regular（列 NOT NULL，不写 NULL）；
+      // 非法值 → 400 明错，不静默回落。
+      if (body.mode !== undefined && body.mode !== "") {
+        if (body.mode === null) {
+          patch.mode = "regular";
+        } else if (body.mode === "regular" || body.mode === "loose") {
+          patch.mode = body.mode;
+        } else {
+          throw new ValidationError("mode 必须是 regular 或 loose");
+        }
       }
       if (body.autoCreateTopN !== undefined) {
         const n = asNumber(body.autoCreateTopN);

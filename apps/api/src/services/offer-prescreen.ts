@@ -67,6 +67,7 @@ import {
   resolvePaidDataAccess,
 } from "./paid-data-gateway.js";
 import { deriveCommissionPerSaleUsd } from "./offer-priority.js";
+import { riskCostFromPolicyRules } from "./policy-risk-cost.js";
 
 export type OfferPrescreenVerdict = "go" | "unknown" | "stop";
 
@@ -214,18 +215,12 @@ export async function prescreenOffers(
         | undefined) ?? [],
     ]);
 
-  // OfferPolicy.rules: Record<规则名, ALLOWED|FORBIDDEN|REQUIRED|UNKNOWN>。
-  // 风险成本只取 FORBIDDEN 的三项（SEM / 品牌词 / 直链），其余规则不进本栏位。
+  // OfferPolicy.rules 映射见共享实现 policy-risk-cost.ts（与商品库
+  // 列表侧商家级 riskCost 同源；只取 FORBIDDEN 的三项，其余规则不进栏）。
   const riskCostByOffer = new Map<string, string[]>();
   for (const p of policyRows) {
     if (riskCostByOffer.has(p.offerId)) continue; // 已取到最新一条
-    const rules = (p.rules ?? {}) as Record<string, unknown>;
-    const cost: string[] = [];
-    if (rules.PPC === "FORBIDDEN" || rules.SEARCH_ADS === "FORBIDDEN")
-      cost.push("禁付费搜索（SEM）");
-    if (rules.BRAND_BIDDING === "FORBIDDEN") cost.push("禁品牌词竞价");
-    if (rules.DIRECT_LINK === "FORBIDDEN") cost.push("禁直链");
-    riskCostByOffer.set(p.offerId, cost);
+    riskCostByOffer.set(p.offerId, riskCostFromPolicyRules(p.rules));
   }
 
   interface Work {

@@ -206,6 +206,7 @@ export interface CatalogFakeCtx {
   aiSetting: Row[];
   merchant: Row[];
   offer: Row[];
+  offerPolicy: Row[];
   click: Row[];
   conversion: Row[];
   order: Row[];
@@ -231,6 +232,7 @@ export function makeCatalogFakePrisma(
     aiSetting: [],
     merchant: [],
     offer: [],
+    offerPolicy: [],
     click: [],
     conversion: [],
     order: [],
