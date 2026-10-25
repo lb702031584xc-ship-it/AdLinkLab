@@ -128,3 +128,79 @@ export async function prescreenOffersAction(ids: string[]) {
     })
   );
 }
+
+/* ── 宽松型筛查（mode=loose）：只作本轮筛查报告，不写回初筛徽标 ── */
+
+export interface LooseScreenEvidence {
+  seasonal?: Record<string, string>;
+  stock?: Record<string, "in_stock" | "out_of_stock">;
+  rating?: Record<string, number>;
+  reviewCount?: Record<string, number>;
+  monthlySales?: Record<string, number>;
+  epcUsd?: Record<string, number>;
+  conversionRate?: Record<string, number>;
+  lowPriceTraffic?: Record<string, "winnable" | "not_winnable">;
+}
+
+export interface LooseScreenResult {
+  mode: "loose";
+  qualified: Array<{
+    offerId: string;
+    name: string;
+    brandName: string | null;
+    category: string | null;
+    asin: string | null;
+    productId: string | null;
+    price: number | null;
+    commissionRate: number | null;
+    commissionUsd: number;
+    stock: "in_stock";
+    rating: number | null;
+    reviewCount: number | null;
+    monthlySales: number | null;
+    seasonalEvidence: string;
+    lowPriceTraffic: "winnable" | "unknown";
+    epcUsd: number | null;
+    conversionRate: number | null;
+    promoUrl: string;
+    riskCost: string[];
+  }>;
+  dropped: Array<{
+    offerId: string;
+    name: string;
+    brandName: string | null;
+    reasons: string[];
+  }>;
+  counts: { qualified: number; dropped: number; notFound: number };
+}
+
+export async function looseScreenOffersAction(
+  ids: string[],
+  opts: {
+    minCommissionUsd?: number;
+    excludedBrands?: string[];
+    excludedCategories?: string[];
+    evidence?: LooseScreenEvidence;
+  } = {}
+) {
+  return attempt(() =>
+    apiFetch<LooseScreenResult>("/api/v1/offers/prescreen", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ids: ids.slice(0, 50),
+        mode: "loose",
+        ...(opts.minCommissionUsd !== undefined
+          ? { minCommissionUsd: opts.minCommissionUsd }
+          : {}),
+        ...(opts.excludedBrands?.length
+          ? { excludedBrands: opts.excludedBrands }
+          : {}),
+        ...(opts.excludedCategories?.length
+          ? { excludedCategories: opts.excludedCategories }
+          : {}),
+        ...(opts.evidence ? { evidence: opts.evidence } : {}),
+      }),
+    })
+  );
+}

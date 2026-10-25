@@ -706,7 +706,36 @@ export default async function OffersPage({
                 prescreenBatch: t.entities.forms.offer.prescreenBatch,
                 prescreenBatching: t.entities.forms.offer.prescreenBatching,
                 prescreenBatchDone: t.entities.forms.offer.prescreenBatchDone,
+                prescreenMode: t.entities.forms.offer.prescreenMode,
+                prescreenModeDefault:
+                  t.entities.forms.offer.prescreenModeDefault,
+                prescreenModeLoose: t.entities.forms.offer.prescreenModeLoose,
+                looseScreening: t.entities.forms.offer.looseScreening,
+                looseScreenDone: t.entities.forms.offer.looseScreenDone,
+                looseMinCommission:
+                  t.entities.forms.offer.looseMinCommission,
+                looseExcludedBrands:
+                  t.entities.forms.offer.looseExcludedBrands,
+                looseExcludedCategories:
+                  t.entities.forms.offer.looseExcludedCategories,
+                looseSeasonalEvidence:
+                  t.entities.forms.offer.looseSeasonalEvidence,
+                looseSeasonalHint: t.entities.forms.offer.looseSeasonalHint,
+                looseStock: t.entities.forms.offer.looseStock,
+                looseStockUnknown: t.entities.forms.offer.looseStockUnknown,
+                looseStockIn: t.entities.forms.offer.looseStockIn,
+                looseStockOut: t.entities.forms.offer.looseStockOut,
+                looseTraffic: t.entities.forms.offer.looseTraffic,
+                looseTrafficUnknown:
+                  t.entities.forms.offer.looseTrafficUnknown,
+                looseTrafficWinnable:
+                  t.entities.forms.offer.looseTrafficWinnable,
+                looseTrafficNotWinnable:
+                  t.entities.forms.offer.looseTrafficNotWinnable,
+                looseQualified: t.entities.forms.offer.looseQualified,
+                looseDropped: t.entities.forms.offer.looseDropped,
               }}
+              offers={data.items.map((o) => ({ id: o.id, name: o.name }))}
             />
             <DataTable<Offer>
               columns={tableColumns}
