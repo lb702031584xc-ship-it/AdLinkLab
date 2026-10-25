@@ -111,20 +111,69 @@ export async function verifyTenantDataForSeoAction(login?: string, password?: st
   );
 }
 
-/* ── Offer 一键初筛（与商品库同一阶梯，结论写回 Offer 徽标字段） ── */
+/* ── Offer 一键初筛（与商品库同一阶梯，结论写回 Offer 徽标字段） ──
+ * 返回里附加 hotPicks（可能热销推荐榜）：与 outcomes 并存、不互相
+ * 覆盖；推荐仅供人工复核，绝不改变初筛结论。 */
+
+export interface HotPicksResult {
+  picks: Array<{
+    offerId: string;
+    name: string;
+    brandName: string | null;
+    category: string | null;
+    asin: string | null;
+    productId: string | null;
+    price: number | null;
+    commissionRate: number | null;
+    commissionUsd: number;
+    rating: number | null;
+    reviewCount: number | null;
+    monthlySales: number | null;
+    seasonalEvidence: string;
+    promoUrl: string;
+    riskCost: string[];
+    reasons: string[];
+    prescreenVerdict: "go" | "unknown" | "stop" | null;
+    verdictNote: string;
+  }>;
+  droppedByBrand: Array<{
+    offerId: string;
+    name: string;
+    brandName: string | null;
+    reasons: string[];
+  }>;
+  counts: { picks: number; droppedByBrand: number; notRecommended: number };
+}
 
 export interface OfferPrescreenResult {
   outcomes: Array<{ offerId: string; verdict: "go" | "unknown" | "stop"; reason: string }>;
   counts: { go: number; unknown: number; stop: number; notFound: number };
   skippedPaidLayer: boolean;
+  hotPicks?: HotPicksResult;
 }
 
-export async function prescreenOffersAction(ids: string[]) {
+export async function prescreenOffersAction(
+  ids: string[],
+  opts: {
+    excludedBrands?: string[];
+    excludedCategories?: string[];
+    evidence?: LooseScreenEvidence;
+  } = {}
+) {
   return attempt(() =>
     apiFetch<OfferPrescreenResult>("/api/v1/offers/prescreen", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ids: ids.slice(0, 50) }),
+      body: JSON.stringify({
+        ids: ids.slice(0, 50),
+        ...(opts.excludedBrands?.length
+          ? { excludedBrands: opts.excludedBrands }
+          : {}),
+        ...(opts.excludedCategories?.length
+          ? { excludedCategories: opts.excludedCategories }
+          : {}),
+        ...(opts.evidence ? { evidence: opts.evidence } : {}),
+      }),
     })
   );
 }

@@ -13,6 +13,7 @@ import { deleteOffersAction } from "@/lib/api/entity-actions";
 import {
   looseScreenOffersAction,
   prescreenOffersAction,
+  type HotPicksResult,
   type LooseScreenEvidence,
   type LooseScreenResult,
 } from "@/lib/api/paid-data-actions";
@@ -185,6 +186,10 @@ export function OfferPrescreenBar({
     looseTrafficNotWinnable: string;
     looseQualified: string;
     looseDropped: string;
+    hotPicksTitle: string;
+    hotPicksEmpty: string;
+    hotPicksDroppedByBrand: string;
+    hotPicksExcludedHint: string;
   };
   offers: Array<{ id: string; name: string }>;
 }) {
@@ -203,6 +208,7 @@ export function OfferPrescreenBar({
   const [looseDetails, setLooseDetails] = useState<LooseScreenResult | null>(
     null
   );
+  const [hotPicks, setHotPicks] = useState<HotPicksResult | null>(null);
   const n = selected.size;
   if (n === 0 && !note) return null;
 
@@ -219,7 +225,15 @@ export function OfferPrescreenBar({
     setBusy(true);
     setError(null);
     try {
-      const result = await prescreenOffersAction([...selected]);
+      const splitList = (s: string) =>
+        s
+          .split(",")
+          .map((x) => x.trim())
+          .filter(Boolean);
+      const result = await prescreenOffersAction([...selected], {
+        excludedBrands: splitList(excludedBrands),
+        excludedCategories: splitList(excludedCategories),
+      });
       if (!result.ok) {
         setError(result.error);
         return;
@@ -232,6 +246,7 @@ export function OfferPrescreenBar({
           .replace("{s}", String(c.stop))
       );
       setLooseDetails(null);
+      setHotPicks(result.data.hotPicks ?? null);
       router.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -283,6 +298,7 @@ export function OfferPrescreenBar({
           .replace("{d}", String(c.dropped))
       );
       setLooseDetails(result.data);
+      setHotPicks(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -391,6 +407,55 @@ export function OfferPrescreenBar({
               </div>
             );
           })}
+        </div>
+      )}
+      {mode === "default" && n > 0 && (
+        <div className="flex flex-wrap items-center gap-3 text-sm">
+          <label className="text-ink/60">
+            {dict.looseExcludedBrands}{" "}
+            <input
+              value={excludedBrands}
+              onChange={(e) => setExcludedBrands(e.target.value)}
+              className="w-48 rounded-lg border border-ink/10 bg-white px-2 py-1 text-sm text-ink"
+            />
+          </label>
+          <label className="text-ink/60">
+            {dict.looseExcludedCategories}{" "}
+            <input
+              value={excludedCategories}
+              onChange={(e) => setExcludedCategories(e.target.value)}
+              className="w-48 rounded-lg border border-ink/10 bg-white px-2 py-1 text-sm text-ink"
+            />
+          </label>
+          <span className="text-xs text-ink/60">{dict.hotPicksExcludedHint}</span>
+        </div>
+      )}
+      {hotPicks && (
+        <div className="flex flex-col gap-1 text-sm">
+          <p className="font-medium">{dict.hotPicksTitle}</p>
+          {hotPicks.picks.length === 0 && (
+            <p className="text-ink/60">{dict.hotPicksEmpty}</p>
+          )}
+          {hotPicks.picks.map((p) => (
+            <p key={p.offerId}>
+              <span className="font-medium">{p.name}</span>
+              {`（${p.reasons.join("；")}）`}
+              {p.verdictNote && (
+                <span className="text-ink/60">{` — ${p.verdictNote}`}</span>
+              )}
+              {p.riskCost.length > 0 && (
+                <span className="text-ink/60">{`（风险：${p.riskCost.join("、")}）`}</span>
+              )}
+            </p>
+          ))}
+          {hotPicks.droppedByBrand.length > 0 && (
+            <p>
+              <span className="font-medium">{dict.hotPicksDroppedByBrand}：</span>
+              {hotPicks.droppedByBrand
+                .map((d) => `${d.name}（${d.reasons.join("；")}）`)
+                .join("、")}
+            </p>
+          )}
         </div>
       )}
       {looseDetails && (

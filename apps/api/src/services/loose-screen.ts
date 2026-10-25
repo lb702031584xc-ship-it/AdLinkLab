@@ -132,8 +132,9 @@ const money = (v: number): string =>
  * 佣金率（百分比数）推导，与 offer-prescreen 同口径：
  * offer-form 的 percentage/% 取原值；catalog-sync 的 PERCENT 由
  * 金额÷均价反推；FIXED 无费率（null）。商品库费率不用于展示。
+ * 由 hot-picks 复用（同一口径，避免两处推导漂移）。
  */
-function commissionRatePct(row: LooseScreenRow): number | null {
+export function commissionRatePct(row: LooseScreenRow): number | null {
   const value = num(row.commissionValue);
   const t = (row.commissionType ?? "").trim().toLowerCase();
   if (t === "percentage" || t === "%") return value;

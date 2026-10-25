@@ -23,6 +23,13 @@
  * 跑 services/loose-screen 的纯函数筛查：当季热销 + 佣金下限 +
  * 有货 + 需求佐证 + 低价流量判断，条款禁令只进 riskCost 栏，
  * 同品牌只留一条。只作本轮筛查报告，不写回 prescreenVerdict。
+ *
+ * 可能热销推荐（hotPicks）：默认一键初筛返回的附加输出，与
+ * outcomes 并存、不互相覆盖。同一请求里可选传 excludedBrands /
+ * excludedCategories / evidence（与宽松型同形），只影响推荐榜，
+ * 绝不改变初筛阶梯与写回结论。推荐榜跑 services/hot-picks 的
+ * 纯函数：跨品类按热销潜力排序、一品牌一款、无依据不推荐、
+ * 0% 不推荐、禁令只进 riskCost 栏。
  */
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { PrismaClient } from "@adlinklab/database";
@@ -39,6 +46,7 @@ import {
   type LooseTraffic,
 } from "../services/loose-screen.js";
 import { parseCatalogIdempotencyKey } from "../services/offer-priority.js";
+import { rankHotPicks } from "../services/hot-picks.js";
 import { writeCatalogAudit } from "../services/catalog-blacklist.js";
 
 export interface OfferPrescreenRouteDeps {
@@ -95,6 +103,91 @@ function stringList(v: unknown, field: string): string[] {
     throw new ValidationError(`${field} 必须为字符串数组`);
   }
   return v.map((x) => (x as string).trim());
+}
+
+/* ── 关联商品库商品与风险成本：宽松型分支与默认分支的推荐榜共用 ──
+ * 关联口径与 offer-priority 一致（经 idempotencyKey 精确关联）；
+ * 风险成本与 offer-prescreen 同源（最新一条政策快照的 FORBIDDEN 三项）。 */
+interface LinkedProductRow {
+  id: string;
+  networkId: string;
+  externalId: string;
+  asin: string | null;
+  price: unknown;
+  commissionRate: unknown;
+  reviewCount: number | null;
+}
+
+async function loadLinkedProducts(
+  prisma: PrismaClient,
+  tenantId: string,
+  found: Array<Record<string, unknown>>
+): Promise<Map<string, LinkedProductRow | null>> {
+  const links = found
+    .map((o) => ({
+      id: o.id as string,
+      key: parseCatalogIdempotencyKey(o.idempotencyKey as string | null),
+    }))
+    .filter(
+      (l): l is { id: string; key: { networkId: string; externalId: string } } =>
+        l.key !== null
+    );
+  const products =
+    links.length > 0
+      ? ((await prisma.networkProduct.findMany({
+          where: {
+            tenantId,
+            networkId: { in: [...new Set(links.map((l) => l.key.networkId))] },
+            externalId: { in: [...new Set(links.map((l) => l.key.externalId))] },
+          },
+          select: {
+            id: true,
+            networkId: true,
+            externalId: true,
+            asin: true,
+            price: true,
+            commissionRate: true,
+            reviewCount: true,
+          },
+        })) as LinkedProductRow[])
+      : [];
+  const productByPair = new Map(
+    products.map((p) => [`${p.networkId}:${p.externalId}`, p])
+  );
+  return new Map(
+    links.map((l) => [
+      l.id,
+      productByPair.get(`${l.key.networkId}:${l.key.externalId}`) ?? null,
+    ])
+  );
+}
+
+async function loadRiskCost(
+  prisma: PrismaClient,
+  tenantId: string,
+  ids: string[]
+): Promise<Map<string, string[]>> {
+  // 先取 Promise 再 await：offerPolicy 缺失时为 undefined，await 后经 ?? 回空数组。
+  const policyPromise = prisma.offerPolicy?.findMany({
+    where: { tenantId, offerId: { in: ids } },
+    select: { offerId: true, rules: true },
+    orderBy: { createdAt: "desc" },
+  }) as
+    | Promise<Array<{ offerId: string; rules: unknown }>>
+    | undefined;
+  const policyRows = (await policyPromise) ?? [];
+  const riskCostByOffer = new Map<string, string[]>();
+  for (const p of policyRows) {
+    if (riskCostByOffer.has(p.offerId)) continue; // 已取到最新一条
+    const rules = (p.rules ?? {}) as Record<string, unknown>;
+    const cost: string[] = [];
+    if (rules.PPC === "FORBIDDEN" || rules.SEARCH_ADS === "FORBIDDEN")
+      cost.push("禁付费搜索（SEM）");
+    if (rules.BRAND_BIDDING === "FORBIDDEN") cost.push("禁品牌词竞价");
+    if (rules.DIRECT_LINK === "FORBIDDEN") cost.push("禁直链");
+    riskCostByOffer.set(p.offerId, cost);
+  }
+  return riskCostByOffer;
 }
 
 export async function registerOfferPrescreenRoutes(
@@ -167,72 +260,18 @@ export async function registerOfferPrescreenRoutes(
       ]);
 
       // 关联商品库商品（经 idempotencyKey 精确关联，同 offer-priority 口径）。
-      const links = found
-        .map((o) => ({
-          id: o.id as string,
-          key: parseCatalogIdempotencyKey(o.idempotencyKey as string | null),
-        }))
-        .filter((l): l is { id: string; key: { networkId: string; externalId: string } } =>
-          l.key !== null
-        );
-      const products =
-        links.length > 0
-          ? ((await deps.prisma.networkProduct.findMany({
-              where: {
-                tenantId: info.tenantId,
-                networkId: { in: [...new Set(links.map((l) => l.key.networkId))] },
-                externalId: { in: [...new Set(links.map((l) => l.key.externalId))] },
-              },
-              select: {
-                id: true,
-                networkId: true,
-                externalId: true,
-                asin: true,
-                price: true,
-                commissionRate: true,
-                reviewCount: true,
-              },
-            })) as Array<{
-              id: string;
-              networkId: string;
-              externalId: string;
-              asin: string | null;
-              price: unknown;
-              commissionRate: unknown;
-              reviewCount: number | null;
-            }>)
-          : [];
-      const productByPair = new Map(
-        products.map((p) => [`${p.networkId}:${p.externalId}`, p])
-      );
-      const productByOffer = new Map(
-        links.map((l) => [
-          l.id,
-          productByPair.get(`${l.key.networkId}:${l.key.externalId}`) ?? null,
-        ])
+      const productByOffer = await loadLinkedProducts(
+        deps.prisma,
+        info.tenantId,
+        found
       );
 
       // 风险成本：与 offer-prescreen 同源（最新一条政策快照的 FORBIDDEN 三项）。
-      // 先取 Promise 再 await：offerPolicy 缺失时为 undefined，await 后经 ?? 回空数组。
-      const policyPromise = deps.prisma.offerPolicy?.findMany({
-        where: { tenantId: info.tenantId, offerId: { in: ids } },
-        select: { offerId: true, rules: true },
-        orderBy: { createdAt: "desc" },
-      }) as
-        | Promise<Array<{ offerId: string; rules: unknown }>>
-        | undefined;
-      const policyRows = (await policyPromise) ?? [];
-      const riskCostByOffer = new Map<string, string[]>();
-      for (const p of policyRows) {
-        if (riskCostByOffer.has(p.offerId)) continue;
-        const rules = (p.rules ?? {}) as Record<string, unknown>;
-        const cost: string[] = [];
-        if (rules.PPC === "FORBIDDEN" || rules.SEARCH_ADS === "FORBIDDEN")
-          cost.push("禁付费搜索（SEM）");
-        if (rules.BRAND_BIDDING === "FORBIDDEN") cost.push("禁品牌词竞价");
-        if (rules.DIRECT_LINK === "FORBIDDEN") cost.push("禁直链");
-        riskCostByOffer.set(p.offerId, cost);
-      }
+      const riskCostByOffer = await loadRiskCost(
+        deps.prisma,
+        info.tenantId,
+        ids
+      );
 
       const result = screenLooseOffers(
         found.map((o) => {
@@ -289,7 +328,7 @@ export async function registerOfferPrescreenRoutes(
       };
     }
 
-    /* ── 默认：一键初筛阶梯（行为不变） ── */
+    /* ── 默认：一键初筛阶梯（行为不变）+ 附加的可能热销推荐榜 ── */
     const { outcomes, skippedPaidLayer, counts } = await prescreenOffers(
       { prisma: deps.prisma, fetchImpl: deps.fetchImpl },
       {
@@ -310,10 +349,82 @@ export async function registerOfferPrescreenRoutes(
         })),
       }
     );
+    // 推荐榜是附加输出：初筛结论已写回，榜单只读 outcomes、不改写任何 verdict。
+    // 证据与排除清单可选（与宽松型同形），缺失时只用站内已有字段；非法证据值忽略。
+    const hotEv = (body.evidence ?? {}) as Record<string, unknown>;
+    const hotSeasonal = stringMap(hotEv.seasonal);
+    const hotStock = enumMap<LooseStock>(hotEv.stock, [
+      "in_stock",
+      "out_of_stock",
+    ]);
+    const hotRating = numberMap(hotEv.rating);
+    const hotReviewCount = numberMap(hotEv.reviewCount);
+    const hotMonthlySales = numberMap(hotEv.monthlySales);
+    const hotEpc = numberMap(hotEv.epcUsd);
+    const hotConversion = numberMap(hotEv.conversionRate);
+    const hotTraffic = enumMap<LooseTraffic>(hotEv.lowPriceTraffic, [
+      "winnable",
+      "not_winnable",
+    ]);
+    const hotProductByOffer = await loadLinkedProducts(
+      deps.prisma,
+      info.tenantId,
+      found
+    );
+    const hotRiskCostByOffer = await loadRiskCost(
+      deps.prisma,
+      info.tenantId,
+      ids
+    );
+    const verdictByOffer = new Map(
+      outcomes.map((oc) => [oc.offerId, oc])
+    );
+    const hotPicks = rankHotPicks(
+      found.map((o) => {
+        const id = o.id as string;
+        const product = hotProductByOffer.get(id) ?? null;
+        const verdict = verdictByOffer.get(id);
+        return {
+          id,
+          name: o.name as string,
+          brandName: (o.brandName as string | null) ?? null,
+          category: (o.category as string | null) ?? null,
+          destinationUrl: o.destinationUrl as string,
+          affiliateUrl: (o.affiliateUrl as string | null) ?? null,
+          commissionValue: o.commissionValue ?? null,
+          commissionType: (o.commissionType as string | null) ?? null,
+          avgPrice: o.avgPrice ?? null,
+          productId: product?.id ?? null,
+          asin: product?.asin ?? null,
+          productPrice: product?.price ?? null,
+          productReviewCount: product?.reviewCount ?? null,
+          productCommissionRate: product?.commissionRate ?? null,
+          seasonalEvidence: hotSeasonal[id] ?? null,
+          stock: hotStock[id] ?? null,
+          rating: hotRating[id] ?? null,
+          reviewCount: hotReviewCount[id] ?? null,
+          monthlySales: hotMonthlySales[id] ?? null,
+          epcUsd: hotEpc[id] ?? null,
+          conversionRate: hotConversion[id] ?? null,
+          lowPriceTraffic: hotTraffic[id] ?? null,
+          riskCost: hotRiskCostByOffer.get(id) ?? [],
+          prescreenVerdict: verdict?.verdict,
+          prescreenReason: verdict?.reason ?? "",
+        };
+      }),
+      {
+        excludedBrands: stringList(body.excludedBrands, "excludedBrands"),
+        excludedCategories: stringList(
+          body.excludedCategories,
+          "excludedCategories"
+        ),
+      }
+    );
     return {
       outcomes,
       counts: { ...counts, notFound: ids.length - found.length },
       skippedPaidLayer,
+      hotPicks,
     };
   });
 }
