@@ -1024,3 +1024,124 @@ describe("止损历史接入初筛（kill-rules → prescreen）", () => {
     expect(counts.rescreenCount).toBe(0);
   });
 });
+
+
+describe("审计修复：漂移接线与付费层降级", () => {
+  const gateOk = async (): Promise<TrafficGateResult> =>
+    ({
+      passed: true,
+      reason: "ok",
+      officialSite: null,
+      signals: [],
+    }) as TrafficGateResult;
+
+  function world(over: Record<string, unknown> = {}) {
+    return {
+      catalogBlacklist: { findMany: async () => [] },
+      catalogScreeningPreset: { findUnique: async () => null },
+      aiSetting: { findUnique: async () => null },
+      networkProduct: {
+        findMany: async () => [
+          {
+            id: "np1",
+            brand: "WidgetCo",
+            adCount: 6,
+            adCountLongtail: 3,
+            tcAdvertisersCount: 0,
+            adPolicyRisk: false,
+            lastAdCount: 6,
+          },
+        ],
+      },
+      brandProfile: { findMany: async () => [] },
+      offer: { update: async () => ({}) },
+      adminGrantAudit: { create: async () => ({}) },
+      ...over,
+    } as unknown as PrismaClient;
+  }
+
+  it("佣金低于 payout-watch 基线 → COMMISSION_DOWN 触发复筛（此前不可达）", async () => {
+    const prisma = world({
+      payoutWatch: {
+        findMany: async () => [{ offerId: "o-drop", lastPayout: 20 }],
+      },
+    });
+    const { outcomes, counts } = await prescreenOffers(
+      { prisma, gateEvaluator: gateOk, gatewayResolve: gatewayOk },
+      {
+        tenantId: "t1",
+        actorId: "u1",
+        userRole: "owner",
+        offers: [offer({ id: "o-drop", commissionValue: 12 })],
+      }
+    );
+    expect(outcomes[0].rescreenCodes).toContain("COMMISSION_DOWN");
+    expect(outcomes[0].verdict).toBe("unknown");
+    expect(counts.rescreenCount).toBe(1);
+  });
+
+  it("本轮证据标记缺货 → STOCK_OUT 触发复筛（此前不可达）", async () => {
+    const { outcomes } = await prescreenOffers(
+      { prisma: world(), gateEvaluator: gateOk, gatewayResolve: gatewayOk },
+      {
+        tenantId: "t1",
+        actorId: "u1",
+        userRole: "owner",
+        stockByOffer: { "o-out": "out_of_stock" },
+        offers: [offer({ id: "o-out" })],
+      }
+    );
+    expect(outcomes[0].rescreenCodes).toContain("STOCK_OUT");
+  });
+
+  it("付费层抛错不再打挂整次初筛，降级为广告层跳过", async () => {
+    const nullAdWorld = world({
+      networkProduct: {
+        findMany: async () => [
+          {
+            id: "np1",
+            brand: "WidgetCo",
+            adCount: null,
+            adCountLongtail: null,
+            tcAdvertisersCount: null,
+            adPolicyRisk: false,
+            lastAdCount: null,
+          },
+        ],
+      },
+    });
+    const { outcomes, skippedPaidLayer, paidLayerError } = await prescreenOffers(
+      {
+        prisma: nullAdWorld,
+        gateEvaluator: gateOk,
+        gatewayResolve: gatewayOk,
+        adCountCalc: async () => {
+          throw new Error("DataForSEO credentials not configured");
+        },
+      },
+      {
+        tenantId: "t1",
+        actorId: "u1",
+        userRole: "owner",
+        offers: [offer({ id: "o-nocred" })],
+      }
+    );
+    expect(skippedPaidLayer).toBe(true);
+    expect(paidLayerError).toContain("DataForSEO");
+    // 广告数据未知 → 不判死，转复核
+    expect(outcomes[0].verdict).toBe("unknown");
+  });
+
+  it("无付费层异常时 paidLayerError 为 null", async () => {
+    const { paidLayerError } = await prescreenOffers(
+      { prisma: world(), gateEvaluator: gateOk, gatewayResolve: gatewayOk },
+      {
+        tenantId: "t1",
+        actorId: "u1",
+        userRole: "owner",
+        offers: [offer({ id: "o-ok" })],
+      }
+    );
+    expect(paidLayerError ?? null).toBeNull();
+  });
+});

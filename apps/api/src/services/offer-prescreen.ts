@@ -283,11 +283,15 @@ export async function prescreenOffers(
     tenantId: string;
     actorId: string;
     userRole: string;
+    /** 本轮库存证据（来自 evidence.stock）：复筛判定用，缺省视为未知。 */
+    stockByOffer?: Record<string, "in_stock" | "out_of_stock">;
     offers: OfferRow[];
   }
 ): Promise<{
   outcomes: OfferPrescreenOutcome[];
   skippedPaidLayer: boolean;
+  /** 付费数据层被降级的具体原因（站长无凭证等）；正常时为 null。 */
+  paidLayerError?: string | null;
   counts: {
     go: number;
     unknown: number;
@@ -473,6 +477,7 @@ export async function prescreenOffers(
 
   /* ── 4) 广告数（品牌级，付费层经网关） ── */
   let skippedPaidLayer = false;
+  let paidLayerError: string | null = null;
   let adStoppedCount = 0;
   let adWaivedCount = 0;
   let adLongtailOnlyCount = 0;
@@ -603,10 +608,30 @@ export async function prescreenOffers(
         }
       }
       if (calcIds.length > 0) {
-        const result = await adCountCalc(prisma, tenantId, [...new Set(calcIds)], {
-          fetchImpl: deps.fetchImpl,
-          credentials: access.credentials ?? undefined,
-        });
+        // 付费层失败不能拖垮整次初筛：以前站长没配 DataForSEO 会直接抛错，
+        // 整个请求 500。现在降级为「广告层跳过」，每条 Offer 走 unknown
+        // 复核（与网关拒绝同口径），并把原因带回给调用方。
+        let result: Awaited<ReturnType<typeof adCountCalc>>;
+        try {
+          result = await adCountCalc(prisma, tenantId, [...new Set(calcIds)], {
+            fetchImpl: deps.fetchImpl,
+            credentials: access.credentials ?? undefined,
+          });
+        } catch (err) {
+          skippedPaidLayer = true;
+          paidLayerError = err instanceof Error ? err.message : String(err);
+          result = {
+            groupsQueried: 0,
+            groupsSkippedCache: 0,
+            serpQueries: 0,
+            tcQueries: 0,
+            tcChecked: 0,
+            tcFailed: 0,
+            tcRescued: 0,
+            productsUpdated: 0,
+            errors: [],
+          };
+        }
         // 记账门槛：SERP 或 TC 任一实际发出查询都要记（TC 单独补查时
         // groupsQueried 可能为 0，不能漏记）；calls = SERP 实际查询数
         // + TC task_post 数（两种查询在网关用量里合并计数、审计可拆）。
@@ -777,6 +802,23 @@ export async function prescreenOffers(
     });
   }
 
+  // 佣金下调基线：payout-watch 记着上次观察到的 payout。没有这个基线，
+  // evaluateOfferDrift 的 COMMISSION_DOWN 分支永远不可达（此前的缺陷）。
+  const payoutWatches =
+    (await prisma.payoutWatch?.findMany({
+      where: { tenantId, offerId: { in: offers.map((o) => o.id) } },
+      select: { offerId: true, lastPayout: true },
+    })) ?? [];
+  const lastPayoutByOffer = new Map<string, number>();
+  for (const w of payoutWatches as Array<{
+    offerId: string;
+    lastPayout: number | null;
+  }>) {
+    if (w.lastPayout != null && Number.isFinite(w.lastPayout)) {
+      lastPayoutByOffer.set(w.offerId, w.lastPayout);
+    }
+  }
+
   const now = new Date();
   for (const w of works) {
     const o = w.o;
@@ -804,6 +846,8 @@ export async function prescreenOffers(
         updatedAt: o.updatedAt,
         prescreenedAt: o.prescreenedAt,
         commissionUsd: w.commissionUsd ?? null,
+        baselineCommissionUsd: lastPayoutByOffer.get(o.id) ?? null,
+        stock: input.stockByOffer?.[o.id] ?? null,
         killedBefore: killedByOffer.get(o.id) ?? null,
       });
       if (drift.rescreen) {
@@ -890,5 +934,5 @@ export async function prescreenOffers(
     },
   });
 
-  return { outcomes, skippedPaidLayer, counts };
+  return { outcomes, skippedPaidLayer, paidLayerError, counts };
 }

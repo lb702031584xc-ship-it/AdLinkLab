@@ -106,6 +106,15 @@ function stringList(v: unknown, field: string): string[] {
   return v.map((x) => (x as string).trim());
 }
 
+/** 可选的正数参数：缺省返回 undefined，非法值直接报错（不静默忽略）。 */
+function optionalPositive(v: unknown, field: string): number | undefined {
+  if (v === undefined) return undefined;
+  if (typeof v !== "number" || !Number.isFinite(v) || v <= 0) {
+    throw new ValidationError(`${field} 必须为正数`);
+  }
+  return v;
+}
+
 /* ── 关联商品库商品与风险成本：宽松型分支与默认分支的推荐榜共用 ──
  * 关联口径与 offer-priority 一致（经 idempotencyKey 精确关联）；
  * 风险成本与 offer-prescreen 同源（最新一条政策快照的 FORBIDDEN 三项）。 */
@@ -200,8 +209,14 @@ async function loadRiskCost(
 async function loadMeasured(
   prisma: PrismaClient,
   tenantId: string,
-  offerIds: string[]
+  offerIds: string[],
+  opts: { maturityHours?: number; maxAgeDays?: number } = {}
 ): Promise<Map<string, LooseMeasured>> {
+  // 滞后窗口：最近 48h 的点击转化还没回传，纳入会系统性低估 EPC。
+  // 过期窗口：90 天前的投放不再代表当前表现。
+  const nowMs = Date.now();
+  const maturityMs = (opts.maturityHours ?? 48) * 3600_000;
+  const maxAgeMs = (opts.maxAgeDays ?? 90) * 86_400_000;
   const out = new Map<string, LooseMeasured>();
   const rows =
     (await prisma.launchArchive?.findMany({
@@ -211,6 +226,9 @@ async function loadMeasured(
         clicks: true,
         conversions: true,
         revenue: true,
+        launchedAt: true,
+        endedAt: true,
+        createdAt: true,
       },
     })) ?? [];
   const acc = new Map<string, { clicks: number; conversions: number; revenue: number }>();
@@ -219,8 +237,18 @@ async function loadMeasured(
     clicks: number | null;
     conversions: number | null;
     revenue: number | null;
+    launchedAt: Date | null;
+    endedAt: Date | null;
+    createdAt: Date;
   }>) {
     if (!row.offerId) continue;
+    // 以归档结束时间（没有则投放时间、再没有则创建时间）作为数据成熟锚点。
+    const anchor = row.endedAt ?? row.launchedAt ?? row.createdAt;
+    const t = anchor ? new Date(anchor).getTime() : NaN;
+    if (Number.isFinite(t)) {
+      if (nowMs - t < maturityMs) continue; // 太新：在途转化未回传
+      if (nowMs - t > maxAgeMs) continue; // 太旧：不代表当前
+    }
     const cur = acc.get(row.offerId) ?? { clicks: 0, conversions: 0, revenue: 0 };
     cur.clicks += row.clicks ?? 0;
     cur.conversions += row.conversions ?? 0;
@@ -249,6 +277,12 @@ export async function registerOfferPrescreenRoutes(
       minCommissionUsd?: unknown;
       excludedBrands?: unknown;
       excludedCategories?: unknown;
+      /** 实测采信门槛（点击样本）；缺省用引擎默认 50。 */
+      minMeasuredClicks?: unknown;
+      /** 保本 CVR 可接受上限（%）；缺省 5。 */
+      maxRealisticCvrPct?: unknown;
+      /** 保本 CVR 边际上限（%）；缺省 10。 */
+      marginalCvrPct?: unknown;
       evidence?: unknown;
     };
   }>("/api/v1/offers/prescreen", async (request) => {
@@ -367,6 +401,15 @@ export async function registerOfferPrescreenRoutes(
           minCommissionUsd: floor,
           excludedBrands,
           excludedCategories,
+          ...(optionalPositive(body.minMeasuredClicks, "minMeasuredClicks") !== undefined
+            ? { minMeasuredClicks: optionalPositive(body.minMeasuredClicks, "minMeasuredClicks") }
+            : {}),
+          ...(optionalPositive(body.maxRealisticCvrPct, "maxRealisticCvrPct") !== undefined
+            ? { maxRealisticCvrPct: optionalPositive(body.maxRealisticCvrPct, "maxRealisticCvrPct") }
+            : {}),
+          ...(optionalPositive(body.marginalCvrPct, "marginalCvrPct") !== undefined
+            ? { marginalCvrPct: optionalPositive(body.marginalCvrPct, "marginalCvrPct") }
+            : {}),
         }
       );
       await writeCatalogAudit(deps.prisma, {
@@ -389,12 +432,19 @@ export async function registerOfferPrescreenRoutes(
     }
 
     /* ── 默认：一键初筛阶梯（行为不变）+ 附加的可能热销推荐榜 ── */
-    const { outcomes, skippedPaidLayer, counts } = await prescreenOffers(
+    // 库存证据：复筛判定要用（断货 → 需复筛）。宽松分支另有一份同名解析。
+    const prescreenStock = enumMap<LooseStock>(
+      ((body.evidence ?? {}) as Record<string, unknown>).stock,
+      ["in_stock", "out_of_stock"]
+    );
+    const { outcomes, skippedPaidLayer, paidLayerError, counts } =
+      await prescreenOffers(
       { prisma: deps.prisma, fetchImpl: deps.fetchImpl },
       {
         tenantId: info.tenantId,
         actorId: info.id,
         userRole: info.role,
+        stockByOffer: prescreenStock,
         offers: found.map((o) => ({
           id: o.id as string,
           name: o.name as string,
@@ -490,6 +540,7 @@ export async function registerOfferPrescreenRoutes(
       outcomes,
       counts: { ...counts, notFound: ids.length - found.length },
       skippedPaidLayer,
+      ...(paidLayerError ? { paidLayerError } : {}),
       hotPicks,
     };
   });
