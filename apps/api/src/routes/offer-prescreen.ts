@@ -42,6 +42,7 @@ import { prescreenOffers } from "../services/offer-prescreen.js";
 import {
   DEFAULT_LOOSE_MIN_COMMISSION_USD,
   screenLooseOffers,
+  type LooseMeasured,
   type LooseStock,
   type LooseTraffic,
 } from "../services/loose-screen.js";
@@ -190,6 +191,53 @@ async function loadRiskCost(
   return riskCostByOffer;
 }
 
+/* ── 投放实测聚合（回流闭环，2026-10-27）──
+ * 数据源：LaunchArchive（投放档案）里各轮投放累计的 clicks / conversions /
+ * revenue。只做聚合，不做任何推断：
+ * - EPC = 联盟收入 ÷ 点击；转化率 = 转化数 ÷ 点击 × 100；点击为 0 → null；
+ * - 拒单率：LaunchArchive 没有拒单记录 → 恒为 null，绝不拿别的字段顶。
+ * 返回空 Map 表示没有投放数据，调用方退回人工证据。 */
+async function loadMeasured(
+  prisma: PrismaClient,
+  tenantId: string,
+  offerIds: string[]
+): Promise<Map<string, LooseMeasured>> {
+  const out = new Map<string, LooseMeasured>();
+  const rows =
+    (await prisma.launchArchive?.findMany({
+      where: { tenantId, offerId: { in: offerIds } },
+      select: {
+        offerId: true,
+        clicks: true,
+        conversions: true,
+        revenue: true,
+      },
+    })) ?? [];
+  const acc = new Map<string, { clicks: number; conversions: number; revenue: number }>();
+  for (const row of rows as Array<{
+    offerId: string | null;
+    clicks: number | null;
+    conversions: number | null;
+    revenue: number | null;
+  }>) {
+    if (!row.offerId) continue;
+    const cur = acc.get(row.offerId) ?? { clicks: 0, conversions: 0, revenue: 0 };
+    cur.clicks += row.clicks ?? 0;
+    cur.conversions += row.conversions ?? 0;
+    cur.revenue += row.revenue ?? 0;
+    acc.set(row.offerId, cur);
+  }
+  for (const [offerId, a] of acc) {
+    out.set(offerId, {
+      clicks: a.clicks,
+      epcUsd: a.clicks > 0 ? a.revenue / a.clicks : null,
+      conversionRate: a.clicks > 0 ? (a.conversions / a.clicks) * 100 : null,
+      rejectionRate: null,
+    });
+  }
+  return out;
+}
+
 export async function registerOfferPrescreenRoutes(
   app: FastifyInstance,
   deps: OfferPrescreenRouteDeps
@@ -254,6 +302,9 @@ export async function registerOfferPrescreenRoutes(
       const monthlySales = numberMap(ev.monthlySales);
       const epcUsd = numberMap(ev.epcUsd);
       const conversionRate = numberMap(ev.conversionRate);
+      // 目标 CPC：给出后引擎按每点击期望利润排序（EPC − CPC），
+      // 不给则退回原来的 EPC → 佣金 → 转化率 口径。
+      const cpcExpected = numberMap(ev.cpc);
       const lowPriceTraffic = enumMap<LooseTraffic>(ev.lowPriceTraffic, [
         "winnable",
         "not_winnable",
@@ -268,6 +319,13 @@ export async function registerOfferPrescreenRoutes(
 
       // 风险成本：与 offer-prescreen 同源（最新一条政策快照的 FORBIDDEN 三项）。
       const riskCostByOffer = await loadRiskCost(
+        deps.prisma,
+        info.tenantId,
+        ids
+      );
+
+      // 实测优先：投放归档聚合出来的 EPC / 转化率，样本达标时覆盖人工证据。
+      const measuredByOffer = await loadMeasured(
         deps.prisma,
         info.tenantId,
         ids
@@ -299,6 +357,8 @@ export async function registerOfferPrescreenRoutes(
             monthlySales: monthlySales[id] ?? null,
             epcUsd: epcUsd[id] ?? null,
             conversionRate: conversionRate[id] ?? null,
+            measured: measuredByOffer.get(id) ?? null,
+            cpcExpected: cpcExpected[id] ?? null,
             lowPriceTraffic: lowPriceTraffic[id] ?? null,
             riskCost: riskCostByOffer.get(id) ?? [],
           };
@@ -346,6 +406,12 @@ export async function registerOfferPrescreenRoutes(
           commissionValue: o.commissionValue ?? null,
           commissionType: (o.commissionType as string | null) ?? null,
           avgPrice: o.avgPrice ?? null,
+          // 复筛判据：状态、归档、最近变更与上次初筛时间。
+          status: (o.status as string | null) ?? null,
+          archivedAt: (o.archivedAt as Date | null) ?? null,
+          updatedAt: (o.updatedAt as Date | null) ?? null,
+          prescreenedAt: (o.prescreenedAt as Date | null) ?? null,
+          payoutCycleDays: (o.payoutCycleDays as number | null) ?? null,
         })),
       }
     );

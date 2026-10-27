@@ -225,3 +225,86 @@ describe("screenLooseOffers", () => {
     expect(dropped[0].reasons).toContain("当季热销依据缺失");
   });
 });
+
+describe("resolveEvidence · 实测优先与期望利润", () => {
+  it("实测样本达标时优先于人工 EPC / 转化率，并标注来源", () => {
+    const { qualified } = screenLooseOffers([
+      row({
+        id: "o-measured",
+        epcUsd: 9,
+        conversionRate: 9,
+        measured: { epcUsd: 1.5, conversionRate: 2.5, clicks: 800 },
+      }),
+    ]);
+    const q = qualified[0];
+    expect(q.epcUsd).toBe(1.5);
+    expect(q.conversionRate).toBe(2.5);
+    expect(q.epcSource).toBe("measured");
+    expect(q.conversionSource).toBe("measured");
+    expect(q.measuredClicks).toBe(800);
+  });
+
+  it("实测样本不足门槛 → 退回人工证据（不被噪声带偏）", () => {
+    const { qualified } = screenLooseOffers([
+      row({ id: "o-thin", epcUsd: 9, measured: { epcUsd: 0.1, clicks: 10 } }),
+    ]);
+    const q = qualified[0];
+    expect(q.epcUsd).toBe(9);
+    expect(q.epcSource).toBe("assumed");
+    expect(q.measuredClicks).toBe(0);
+  });
+
+  it("实测与人工都没有 → unknown，不拿 0 冒充", () => {
+    const { qualified } = screenLooseOffers([row({ id: "o-none" })]);
+    const q = qualified[0];
+    expect(q.epcUsd).toBeNull();
+    expect(q.epcSource).toBe("unknown");
+    expect(q.netEpcUsd).toBeNull();
+    expect(q.profitPerClick).toBeNull();
+  });
+
+  it("拒单率只认实测：无实测不扣减，有实测按比例扣", () => {
+    const noRej = screenLooseOffers([
+      row({ id: "o-norej", measured: { epcUsd: 2, clicks: 300 } }),
+    ]).qualified[0];
+    expect(noRej.rejectionRate).toBeNull();
+    expect(noRej.netEpcUsd).toBe(2);
+
+    const withRej = screenLooseOffers([
+      row({
+        id: "o-rej",
+        measured: { epcUsd: 2, rejectionRate: 0.25, clicks: 300 },
+      }),
+    ]).qualified[0];
+    expect(withRej.rejectionRate).toBe(0.25);
+    expect(withRej.netEpcUsd).toBe(1.5);
+  });
+
+  it("排序：给了 cpcExpected 时按每点击期望利润，而不是 EPC", () => {
+    const { qualified } = screenLooseOffers([
+      // EPC 高但 CPC 更高 → 每点击亏
+      row({
+        id: "o-big-epc",
+        brandName: "B1",
+        commissionValue: 10,
+        epcUsd: 5,
+        cpcExpected: 6,
+      }),
+      // EPC 低但成本更低 → 每点击赚
+      row({
+        id: "o-small-epc",
+        brandName: "B2",
+        commissionValue: 10,
+        epcUsd: 1.2,
+        cpcExpected: 0.5,
+      }),
+    ]);
+    expect(qualified.map((q) => q.offerId)).toEqual([
+      "o-small-epc",
+      "o-big-epc",
+    ]);
+    expect(qualified[0].profitPerClick).toBeCloseTo(0.7, 6);
+    expect(qualified[1].profitPerClick).toBeCloseTo(-1, 6);
+  });
+});
+

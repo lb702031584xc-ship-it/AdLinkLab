@@ -90,6 +90,10 @@ export interface OfferPrescreenOutcome {
   tcRescued?: boolean;
   /** 透明中心广告主数（tcRescued 时给出，= 已知最大值）。 */
   tcAdvertisersCount?: number;
+  /** 本次判定被复筛规则降级（旧结论已失效，需重跑）。 */
+  rescreen?: boolean;
+  /** 复筛触发原因代码。 */
+  rescreenCodes?: string[];
 }
 
 export interface OfferPrescreenDeps {
@@ -121,6 +125,13 @@ interface OfferRow {
   commissionValue: unknown;
   commissionType: string | null;
   avgPrice: unknown;
+  /** 复筛判据：状态 / 归档 / 最近变更时间 / 上次初筛时间。 */
+  status?: string | null;
+  archivedAt?: Date | string | null;
+  updatedAt?: Date | string | null;
+  prescreenedAt?: Date | string | null;
+  /** 返款周期（天）：质量分维度，缺省按未知中性处理。 */
+  payoutCycleDays?: number | null;
 }
 
 const num = (v: unknown): number | null =>
@@ -132,7 +143,12 @@ const num = (v: unknown): number | null =>
 
 function offerChannel(source: string): string {
   const s = source.trim().toLowerCase();
-  if (s === "amazon" || s === "cashback") return s;
+  // 渠道归一化：amazon-*、amz、amzn 都归 amazon。黑名单按 channel 精确
+  // 匹配，归错（如 amazon-us 落成 affiliate）会让按 amazon 配的黑名单
+  // 对这类 Offer 静默失效。
+  if (s === "amazon" || s.startsWith("amazon") || s === "amz" || s === "amzn")
+    return "amazon";
+  if (s === "cashback" || s.startsWith("cashback")) return "cashback";
   return "affiliate";
 }
 
@@ -161,6 +177,90 @@ async function loadPreset(
   };
 }
 
+/* ── 复筛触发（2026-10-27，清单 #6）─────────────────────────────
+ * 初筛结论有时效：佣金下调、断货、Offer 下架、或数据在上次初筛后变更，
+ * 旧的 go 就不能再用。本函数是纯函数，只回答"该不该重筛"，不决定重筛
+ * 后的结论——重筛永远走同一条阶梯重新判。
+ * 判据全部来自 Offer 自身字段，调用方无需保存历史快照。 */
+export type OfferDriftCode =
+  | "COMMISSION_DOWN"
+  | "STOCK_OUT"
+  | "DELISTED"
+  | "DATA_CHANGED";
+
+export interface OfferDriftInput {
+  status?: string | null;
+  archivedAt?: Date | string | null;
+  updatedAt?: Date | string | null;
+  prescreenedAt?: Date | string | null;
+  /** 当前单笔佣金（美元）。 */
+  commissionUsd?: number | null;
+  /** 上次初筛时的单笔佣金；null/缺省 = 无基线，不做佣金对比。 */
+  baselineCommissionUsd?: number | null;
+  /** 当前库存（来自本轮证据）。 */
+  stock?: "in_stock" | "out_of_stock" | null;
+  /** 上次初筛时的库存。 */
+  baselineStock?: "in_stock" | "out_of_stock" | null;
+}
+
+export interface OfferDriftResult {
+  rescreen: boolean;
+  codes: OfferDriftCode[];
+  reasons: string[];
+}
+
+const timeOf = (v: Date | string | null | undefined): number => {
+  if (v == null) return NaN;
+  const t = v instanceof Date ? v.getTime() : new Date(v).getTime();
+  return Number.isFinite(t) ? t : NaN;
+};
+
+export function evaluateOfferDrift(
+  input: OfferDriftInput
+): OfferDriftResult {
+  const codes: OfferDriftCode[] = [];
+  const reasons: string[] = [];
+
+  const status = (input.status ?? "").trim().toUpperCase();
+  if ((status && status !== "ACTIVE") || input.archivedAt != null) {
+    codes.push("DELISTED");
+    reasons.push(
+      status && status !== "ACTIVE" ? `Offer 状态为 ${status}` : "Offer 已归档"
+    );
+  }
+
+  const cur = input.commissionUsd;
+  const base = input.baselineCommissionUsd;
+  if (
+    cur != null &&
+    base != null &&
+    Number.isFinite(cur) &&
+    Number.isFinite(base) &&
+    cur < base - 1e-9
+  ) {
+    codes.push("COMMISSION_DOWN");
+    reasons.push(`佣金下调（$${base.toFixed(2)} → $${cur.toFixed(2)}）`);
+  }
+
+  if (input.stock === "out_of_stock" && input.baselineStock !== "out_of_stock") {
+    codes.push("STOCK_OUT");
+    reasons.push("断货");
+  }
+
+  const updated = timeOf(input.updatedAt);
+  const prescreened = timeOf(input.prescreenedAt);
+  if (
+    Number.isFinite(updated) &&
+    Number.isFinite(prescreened) &&
+    updated > prescreened
+  ) {
+    codes.push("DATA_CHANGED");
+    reasons.push("Offer 数据在上次初筛后发生变更");
+  }
+
+  return { rescreen: codes.length > 0, codes, reasons };
+}
+
 export async function prescreenOffers(
   deps: OfferPrescreenDeps,
   input: {
@@ -185,6 +285,8 @@ export async function prescreenOffers(
     adLongtailOnlyCount: number;
     /** 本次 SERP 双 0 但透明中心有广告主、经旁证翻案过关的 Offer 件数。 */
     adTcRescuedCount: number;
+    /** 本次因复筛规则降级（旧结论失效）的 Offer 件数。 */
+    rescreenCount: number;
   };
 }> {
   const { prisma } = deps;
@@ -236,6 +338,9 @@ export async function prescreenOffers(
     /** SERP 双 0 但透明中心有广告主、旁证翻案过关：可审计标记 + 广告主数。 */
     tcRescued?: boolean;
     tcAdvertisersCount?: number;
+    /** 复筛触发（旧结论失效）。 */
+    rescreen?: boolean;
+    rescreenCodes?: string[];
   }
   const works: Work[] = offers.map((o) => ({ o, flags: [], needsAdData: false }));
 
@@ -323,7 +428,26 @@ export async function prescreenOffers(
       effectivePreset
     );
     if (!ev.recommended) {
-      w.stopReason = `未达筛选预设（质量分 ${ev.score}）`;
+      // 判停原因必须可归因：写清是哪个维度没过，而不是只丢一个质量分。
+      // 价格带与评论维度已在上方中性化，这里只会出现佣金金额 / 佣金率 / 质量分。
+      const miss: string[] = [];
+      const minAmount = effectivePreset.minCommissionAmount ?? 0;
+      const minRate = effectivePreset.minCommissionRate ?? 0;
+      const minScore = effectivePreset.minScore ?? 0;
+      if (minAmount > 0 && (amount == null || amount < minAmount))
+        miss.push(
+          `单笔佣金 ${amount == null ? "未知" : `${amount.toFixed(2)}`} < ${minAmount}`
+        );
+      if (minRate > 0 && (rateForEval == null || rateForEval < minRate))
+        miss.push(
+          `佣金率 ${rateForEval == null ? "未知" : `${rateForEval.toFixed(1)}%`} < ${minRate}%`
+        );
+      if (minScore > 0 && ev.score < minScore)
+        miss.push(`质量分 ${ev.score} < ${minScore}`);
+      w.stopReason =
+        miss.length > 0
+          ? `未达筛选预设：${miss.join("；")}`
+          : `未达筛选预设（质量分 ${ev.score}）`;
       continue;
     }
     w.needsAdData = true;
@@ -335,6 +459,7 @@ export async function prescreenOffers(
   let adWaivedCount = 0;
   let adLongtailOnlyCount = 0;
   let adTcRescuedCount = 0;
+  let rescreenCount = 0;
   const adCandidates = works.filter((w) => !w.stopReason && w.needsAdData);
   if (adCandidates.length > 0) {
     const access = await gatewayResolve(prisma, {
@@ -603,6 +728,7 @@ export async function prescreenOffers(
     adWaivedCount,
     adLongtailOnlyCount,
     adTcRescuedCount,
+    rescreenCount,
   };
   const now = new Date();
   for (const w of works) {
@@ -620,6 +746,25 @@ export async function prescreenOffers(
         w.stopReason = `流量门未通过：${gate.reason}`;
       } else if (gate.passed === null) {
         w.flags.push("流量门数据不足（unknown），待人工复核");
+      }
+    }
+    // 复筛触发：旧结论失效时强制并到 unknown，并写明为什么。
+    // 只在没有更硬的 stop 原因时生效（stop 已经是最终结论）。
+    if (!w.stopReason) {
+      const drift = evaluateOfferDrift({
+        status: o.status,
+        archivedAt: o.archivedAt,
+        updatedAt: o.updatedAt,
+        prescreenedAt: o.prescreenedAt,
+        commissionUsd: w.commissionUsd ?? null,
+      });
+      if (drift.rescreen) {
+        w.rescreen = true;
+        w.rescreenCodes = drift.codes;
+        w.flags.push(`需复筛：${drift.reasons.join("；")}`);
+        rescreenCount += 1;
+        // counts 对象在循环前已构造，变量自增不会回写，必须同步。
+        counts.rescreenCount = rescreenCount;
       }
     }
     const verdict: OfferPrescreenVerdict = w.stopReason
@@ -641,6 +786,9 @@ export async function prescreenOffers(
       verdict,
       reason,
       commissionUsd: w.commissionUsd ?? null,
+      ...(w.rescreen
+        ? { rescreen: true, rescreenCodes: w.rescreenCodes ?? [] }
+        : {}),
       ...(riskCost.length > 0 ? { riskCost } : {}),
       ...(w.adReferenceOnly ? { adReferenceOnly: true } : {}),
       ...(w.adLongtailOnly ? { adLongtailOnly: true } : {}),
@@ -689,6 +837,7 @@ export async function prescreenOffers(
       adWaivedCount: counts.adWaivedCount,
       adLongtailOnlyCount: counts.adLongtailOnlyCount,
       adTcRescuedCount: counts.adTcRescuedCount,
+      rescreenCount: counts.rescreenCount,
       skippedPaidLayer,
     },
   });

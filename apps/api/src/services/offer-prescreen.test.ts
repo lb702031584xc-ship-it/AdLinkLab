@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import type { PrismaClient } from "@adlinklab/database";
 import type { TrafficGateResult } from "../traffic/types.js";
-import { prescreenOffers } from "./offer-prescreen.js";
+import { evaluateOfferDrift, prescreenOffers } from "./offer-prescreen.js";
 
 function offer(over: Record<string, unknown> = {}) {
   return {
@@ -768,3 +768,170 @@ describe("prescreenOffers · 选品口径（价格带与评论维度中性化）
   });
 });
 
+
+
+describe("evaluateOfferDrift · 复筛触发", () => {
+  it("佣金下调触发复筛，并写明前后金额", () => {
+    const d = evaluateOfferDrift({
+      commissionUsd: 12,
+      baselineCommissionUsd: 20,
+    });
+    expect(d.rescreen).toBe(true);
+    expect(d.codes).toEqual(["COMMISSION_DOWN"]);
+    expect(d.reasons[0]).toContain("$20.00");
+    expect(d.reasons[0]).toContain("$12.00");
+  });
+
+  it("佣金上调或持平不触发", () => {
+    expect(
+      evaluateOfferDrift({ commissionUsd: 25, baselineCommissionUsd: 20 })
+        .rescreen
+    ).toBe(false);
+    expect(
+      evaluateOfferDrift({ commissionUsd: 20, baselineCommissionUsd: 20 })
+        .rescreen
+    ).toBe(false);
+  });
+
+  it("无基线时不做佣金对比", () => {
+    expect(evaluateOfferDrift({ commissionUsd: 3 }).rescreen).toBe(false);
+  });
+
+  it("断货触发（上次不是断货）", () => {
+    const d = evaluateOfferDrift({
+      stock: "out_of_stock",
+      baselineStock: "in_stock",
+    });
+    expect(d.codes).toContain("STOCK_OUT");
+  });
+
+  it("已下架 / 已归档触发", () => {
+    expect(evaluateOfferDrift({ status: "ARCHIVED" }).codes).toContain(
+      "DELISTED"
+    );
+    expect(evaluateOfferDrift({ status: "PAUSED" }).codes).toContain(
+      "DELISTED"
+    );
+    expect(
+      evaluateOfferDrift({ archivedAt: new Date("2026-10-01") }).codes
+    ).toContain("DELISTED");
+    expect(evaluateOfferDrift({ status: "ACTIVE" }).rescreen).toBe(false);
+  });
+
+  it("数据在上次初筛后变更触发；未变更不触发", () => {
+    const changed = evaluateOfferDrift({
+      updatedAt: "2026-10-20T00:00:00Z",
+      prescreenedAt: "2026-10-10T00:00:00Z",
+    });
+    expect(changed.codes).toContain("DATA_CHANGED");
+
+    const same = evaluateOfferDrift({
+      updatedAt: "2026-10-01T00:00:00Z",
+      prescreenedAt: "2026-10-10T00:00:00Z",
+    });
+    expect(same.rescreen).toBe(false);
+  });
+
+  it("多因同时命中时全部列出", () => {
+    const d = evaluateOfferDrift({
+      status: "PAUSED",
+      commissionUsd: 5,
+      baselineCommissionUsd: 9,
+      stock: "out_of_stock",
+      baselineStock: "in_stock",
+    });
+    expect(d.codes).toEqual(["DELISTED", "COMMISSION_DOWN", "STOCK_OUT"]);
+  });
+});
+
+describe("prescreenOffers · 复筛降级到 unknown", () => {
+  const gateOk = async (): Promise<TrafficGateResult> =>
+    ({
+      passed: true,
+      reason: "ok",
+      officialSite: null,
+      signals: [],
+    }) as TrafficGateResult;
+
+  const world = {
+    catalogBlacklist: { findMany: async () => [] },
+    catalogScreeningPreset: { findUnique: async () => null },
+    aiSetting: { findUnique: async () => null },
+    networkProduct: {
+      findMany: async () => [
+        {
+          id: "np1",
+          brand: "WidgetCo",
+          adCount: 6,
+          adCountLongtail: 3,
+          tcAdvertisersCount: 0,
+          adPolicyRisk: false,
+          lastAdCount: 6,
+        },
+      ],
+    },
+    brandProfile: { findMany: async () => [] },
+    offer: { update: async () => ({}) },
+    adminGrantAudit: { create: async () => ({}) },
+  } as unknown as PrismaClient;
+
+  it("已归档的 Offer 不再给 go，降级 unknown 并写明需复筛", async () => {
+    const { outcomes, counts } = await prescreenOffers(
+      { prisma: world, gateEvaluator: gateOk, gatewayResolve: gatewayOk },
+      {
+        tenantId: "t1",
+        actorId: "u1",
+        userRole: "owner",
+        offers: [offer({ id: "o-arch", status: "ARCHIVED" })],
+      }
+    );
+    expect(outcomes[0].verdict).toBe("unknown");
+    expect(outcomes[0].rescreen).toBe(true);
+    expect(outcomes[0].rescreenCodes).toContain("DELISTED");
+    expect(outcomes[0].reason).toContain("需复筛");
+    expect(counts.rescreenCount).toBe(1);
+  });
+
+  it("数据在上次初筛后变更 → 降级 unknown", async () => {
+    const { outcomes } = await prescreenOffers(
+      { prisma: world, gateEvaluator: gateOk, gatewayResolve: gatewayOk },
+      {
+        tenantId: "t1",
+        actorId: "u1",
+        userRole: "owner",
+        offers: [
+          offer({
+            id: "o-changed",
+            status: "ACTIVE",
+            updatedAt: new Date("2026-10-20T00:00:00Z"),
+            prescreenedAt: new Date("2026-10-10T00:00:00Z"),
+          }),
+        ],
+      }
+    );
+    expect(outcomes[0].verdict).toBe("unknown");
+    expect(outcomes[0].rescreenCodes).toContain("DATA_CHANGED");
+  });
+
+  it("无任何漂移时行为不变（仍然 go）", async () => {
+    const { outcomes, counts } = await prescreenOffers(
+      { prisma: world, gateEvaluator: gateOk, gatewayResolve: gatewayOk },
+      {
+        tenantId: "t1",
+        actorId: "u1",
+        userRole: "owner",
+        offers: [
+          offer({
+            id: "o-stable",
+            status: "ACTIVE",
+            updatedAt: new Date("2026-10-01T00:00:00Z"),
+            prescreenedAt: new Date("2026-10-10T00:00:00Z"),
+          }),
+        ],
+      }
+    );
+    expect(outcomes[0].verdict).toBe("go");
+    expect(outcomes[0].rescreen).toBeUndefined();
+    expect(counts.rescreenCount).toBe(0);
+  });
+});

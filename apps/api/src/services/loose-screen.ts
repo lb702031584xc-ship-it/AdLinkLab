@@ -23,8 +23,20 @@
  * 同一品牌只留一条（按单均佣金最高留；品牌名为空的不参与去重），
  * 被拿掉的条进 dropped 并写明保留了哪条。
  *
- * 排序（松绑口径）：EPC 降序 → 单均佣金降序 → 转化率降序，
- * 每键未知排后；全等时保持输入顺序。
+ * 排序（松绑口径）：每点击期望利润降序 → EPC 降序 → 单均佣金降序 →
+ * 转化率降序，每键未知排后；全等时保持输入顺序。
+ * 期望利润只在给出 cpcExpected 时才有值；未给出时该键全为 null，
+ * 排序自动退回到原来的 EPC → 佣金 → 转化率 口径（向后兼容）。
+ *
+ * ── 2026-10-27 回流闭环（清单 #6）─────────────────────────────
+ * 1. 实测优先：row.measured 来自投放归档（LaunchArchive）聚合。样本量
+ *    达到 minMeasuredClicks（默认 50 次点击）才采用实测值，否则退回
+ *    人工证据；两者都没有 → unknown。绝不拿全广告主平均值冒充单品
+ *    实测（红线 6）。每条结果标注 epcSource / conversionSource，让上层
+ *    知道这个数是测出来的还是猜的。
+ * 2. 每点击期望利润：profitPerClick = 净EPC − cpcExpected。拒单率只有
+ *    实测来源，没有就保持 null（不做扣减、不估 0），净EPC 等于 EPC。
+ * 3. 排序键改成期望利润优先；没有 cpcExpected 时行为与旧版完全一致。
  *
  * 零条合格是合法输出，不硬凑。
  */
@@ -32,8 +44,25 @@ import { deriveCommissionPerSaleUsd } from "./offer-priority.js";
 
 export const DEFAULT_LOOSE_MIN_COMMISSION_USD = 3;
 
+/** 实测值可被采信的最小点击样本（低于此视为噪声，退回人工证据）。 */
+export const DEFAULT_MIN_MEASURED_CLICKS = 50;
+
 export type LooseStock = "in_stock" | "out_of_stock";
 export type LooseTraffic = "winnable" | "not_winnable";
+/** 证据来源：measured（投放实测）/ assumed（人工假设）/ unknown（无数据）。 */
+export type LooseEvidenceSource = "measured" | "assumed" | "unknown";
+
+/** 投放归档聚合出的实测指标（LaunchArchive）；字段缺失即为无实测。 */
+export interface LooseMeasured {
+  /** 实测 EPC（美元/点击）= 联盟收入 ÷ 点击数。 */
+  epcUsd?: number | null;
+  /** 实测转化率（百分数，2.5 表示 2.5%）= 转化数 ÷ 点击数 × 100。 */
+  conversionRate?: number | null;
+  /** 实测拒单率（0–1）：没有真实拒单记录时保持 null，绝不估。 */
+  rejectionRate?: number | null;
+  /** 实测样本量（点击数）：低于门槛不采信。 */
+  clicks?: number | null;
+}
 
 export interface LooseScreenRow {
   id: string;
@@ -63,6 +92,13 @@ export interface LooseScreenRow {
   /** 本轮显式证据：EPC（美元）/ 转化率（百分比），仅用于排序，null = 未知。 */
   epcUsd: number | null;
   conversionRate: number | null;
+  /**
+   * 投放实测（LaunchArchive 聚合）。给了且样本达标时优先于上面两项
+   * 人工证据；null/缺省 = 无实测（退回人工证据）。
+   */
+  measured?: LooseMeasured | null;
+  /** 目标 CPC（美元）：给出后才计算每点击期望利润。null/缺省 = 不参与。 */
+  cpcExpected?: number | null;
   /** 本轮显式证据：低价流量判断（null = 未知）。 */
   lowPriceTraffic: LooseTraffic | null;
   /** 风险成本栏位：OfferPolicy 最新快照里 FORBIDDEN 的条款项，只展示。 */
@@ -76,6 +112,23 @@ export interface LooseScreenOptions {
   excludedBrands?: string[];
   /** 用户排除清单：品类（归一化后比对）。 */
   excludedCategories?: string[];
+  /** 实测值可被采信的最小点击样本，默认 DEFAULT_MIN_MEASURED_CLICKS。 */
+  minMeasuredClicks?: number;
+}
+
+/** 单条证据解析结果（实测优先，其次人工假设，都没有则 unknown）。 */
+export interface ResolvedEvidence {
+  epcUsd: number | null;
+  conversionRate: number | null;
+  rejectionRate: number | null;
+  epcSource: LooseEvidenceSource;
+  conversionSource: LooseEvidenceSource;
+  /** 该条实际可用的实测样本量（无实测为 0）。 */
+  measuredClicks: number;
+  /** 净 EPC：扣掉实测拒单率；无拒单率数据时不扣减（保持 null 语义）。 */
+  netEpcUsd: number | null;
+  /** 每点击期望利润 = 净EPC − cpcExpected；缺任一项则为 null。 */
+  profitPerClick: number | null;
 }
 
 export interface LooseScreenItem {
@@ -98,6 +151,17 @@ export interface LooseScreenItem {
   lowPriceTraffic: "winnable" | "unknown";
   epcUsd: number | null;
   conversionRate: number | null;
+  /** 排序生效的 EPC 来自实测还是人工假设。 */
+  epcSource: LooseEvidenceSource;
+  conversionSource: LooseEvidenceSource;
+  /** 实测样本量（点击数）；0 = 无实测。 */
+  measuredClicks: number;
+  /** 实测拒单率（0–1）；null = 无数据，未做扣减。 */
+  rejectionRate: number | null;
+  /** 净 EPC（扣拒单率后）。 */
+  netEpcUsd: number | null;
+  /** 每点击期望利润；null = 缺 CPC 或 EPC。 */
+  profitPerClick: number | null;
   promoUrl: string;
   riskCost: string[];
 }
@@ -151,6 +215,65 @@ export function commissionRatePct(row: LooseScreenRow): number | null {
   return null;
 }
 
+/**
+ * 解析一条 Offer 的有效证据：实测（样本达标）优先 → 人工假设 → unknown。
+ *
+ * 实测样本量低于门槛时**不采信**，退回人工证据；这样冷启动阶段不会
+ * 因为 3 次点击的偶然 EPC 把排序打乱。拒单率没有实测就保持 null，
+ * 不做扣减、不补 0——宁可少算利润，不编造数字。
+ */
+export function resolveEvidence(
+  row: LooseScreenRow,
+  options: LooseScreenOptions = {}
+): ResolvedEvidence {
+  const floor =
+    options.minMeasuredClicks != null &&
+    Number.isFinite(options.minMeasuredClicks)
+      ? options.minMeasuredClicks
+      : DEFAULT_MIN_MEASURED_CLICKS;
+
+  const measured = row.measured ?? null;
+  const measuredClicks = num(measured?.clicks) ?? 0;
+  const measuredTrusted = measured != null && measuredClicks >= floor;
+
+  const epcMeasured = measuredTrusted ? num(measured?.epcUsd) : null;
+  const cvrMeasured = measuredTrusted ? num(measured?.conversionRate) : null;
+  // 拒单率只认实测；样本不足也算没有。
+  const rejectionRate = measuredTrusted ? num(measured?.rejectionRate) : null;
+
+  const epcAssumed = num(row.epcUsd);
+  const cvrAssumed = num(row.conversionRate);
+
+  const epcUsd = epcMeasured ?? epcAssumed;
+  const conversionRate = cvrMeasured ?? cvrAssumed;
+
+  const epcSource: LooseEvidenceSource =
+    epcMeasured != null ? "measured" : epcAssumed != null ? "assumed" : "unknown";
+  const conversionSource: LooseEvidenceSource =
+    cvrMeasured != null
+      ? "measured"
+      : cvrAssumed != null
+        ? "assumed"
+        : "unknown";
+
+  const netEpcUsd =
+    epcUsd == null ? null : epcUsd * (1 - (rejectionRate ?? 0));
+  const cpc = num(row.cpcExpected);
+  const profitPerClick =
+    netEpcUsd != null && cpc != null ? netEpcUsd - cpc : null;
+
+  return {
+    epcUsd,
+    conversionRate,
+    rejectionRate,
+    epcSource,
+    conversionSource,
+    measuredClicks: measuredTrusted ? measuredClicks : 0,
+    netEpcUsd,
+    profitPerClick,
+  };
+}
+
 export function screenLooseOffers(
   rows: LooseScreenRow[],
   options: LooseScreenOptions = {}
@@ -172,6 +295,7 @@ export function screenLooseOffers(
 
   for (const row of rows) {
     const reasons: string[] = [];
+    const evidence = resolveEvidence(row, options);
     const brand = norm(row.brandName);
     const category = norm(row.category);
     if (brand && excludedBrands.has(brand))
@@ -240,8 +364,14 @@ export function screenLooseOffers(
       monthlySales: row.monthlySales,
       seasonalEvidence: seasonal,
       lowPriceTraffic: row.lowPriceTraffic === "winnable" ? "winnable" : "unknown",
-      epcUsd: row.epcUsd,
-      conversionRate: row.conversionRate,
+      epcUsd: evidence.epcUsd,
+      conversionRate: evidence.conversionRate,
+      epcSource: evidence.epcSource,
+      conversionSource: evidence.conversionSource,
+      measuredClicks: evidence.measuredClicks,
+      rejectionRate: evidence.rejectionRate,
+      netEpcUsd: evidence.netEpcUsd,
+      profitPerClick: evidence.profitPerClick,
       promoUrl: row.affiliateUrl ?? row.destinationUrl,
       riskCost: [...row.riskCost],
     });
@@ -290,7 +420,9 @@ export function screenLooseOffers(
     }
   }
 
-  /* ── 排序：EPC 降序 → 单均佣金降序 → 转化率降序，未知排后 ── */
+  /* ── 排序：期望利润 → EPC → 单均佣金 → 转化率，未知排后 ──
+   * 未给 cpcExpected 时期望利润全为 null，此键不产生区分，
+   * 排序与原口径（EPC → 佣金 → 转化率）完全一致。 */
   const descNullsLast = (a: number | null, b: number | null): number => {
     if (a !== null && b !== null && a !== b) return b - a;
     if (a !== null && b === null) return -1;
@@ -299,6 +431,7 @@ export function screenLooseOffers(
   };
   kept.sort(
     (a, b) =>
+      descNullsLast(a.profitPerClick, b.profitPerClick) ||
       descNullsLast(a.epcUsd, b.epcUsd) ||
       descNullsLast(a.commissionUsd, b.commissionUsd) ||
       descNullsLast(a.conversionRate, b.conversionRate)
