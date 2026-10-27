@@ -186,7 +186,8 @@ export type OfferDriftCode =
   | "COMMISSION_DOWN"
   | "STOCK_OUT"
   | "DELISTED"
-  | "DATA_CHANGED";
+  | "DATA_CHANGED"
+  | "KILLED_BEFORE";
 
 export interface OfferDriftInput {
   status?: string | null;
@@ -201,6 +202,8 @@ export interface OfferDriftInput {
   stock?: "in_stock" | "out_of_stock" | null;
   /** 上次初筛时的库存。 */
   baselineStock?: "in_stock" | "out_of_stock" | null;
+  /** 该 Offer 历史上触发过的止损事件（kill-rules 服务写入）；null = 无记录。 */
+  killedBefore?: { actionTaken: string; at?: Date | string | null } | null;
 }
 
 export interface OfferDriftResult {
@@ -256,6 +259,19 @@ export function evaluateOfferDrift(
   ) {
     codes.push("DATA_CHANGED");
     reasons.push("Offer 数据在上次初筛后发生变更");
+  }
+
+  // 曾被止损规则处理过的 Offer：止损是当时的结论，要复投必须人工确认，
+  // 不能因为这次数据看起来还行就自动回到 go。
+  if (input.killedBefore) {
+    codes.push("KILLED_BEFORE");
+    const at = timeOf(input.killedBefore.at);
+    const when = Number.isFinite(at)
+      ? new Date(at).toISOString().slice(0, 10)
+      : null;
+    reasons.push(
+      `曾触发止损（${input.killedBefore.actionTaken}${when ? `，${when}` : ""}），复投需人工确认`
+    );
   }
 
   return { rescreen: codes.length > 0, codes, reasons };
@@ -732,6 +748,35 @@ export async function prescreenOffers(
     adTcRescuedCount,
     rescreenCount,
   };
+  // 止损历史（kill-rules 服务写入 kill_rule_event）：初筛过去是孤岛，
+  // 看不到别的模块的结论。这里把"曾被止损"接进来，只取每个 Offer
+  // 最近一条非跳过记录。fake prisma 无此委托时 ?. 退回空数组。
+  const killEvents =
+    (await prisma.killRuleEvent?.findMany({
+      where: {
+        tenantId,
+        offerId: { in: offers.map((o) => o.id) },
+        actionTaken: { not: "SKIPPED_DISABLED" },
+      },
+      select: { offerId: true, actionTaken: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+    })) ?? [];
+  const killedByOffer = new Map<
+    string,
+    { actionTaken: string; at: Date | null }
+  >();
+  for (const ev of killEvents as Array<{
+    offerId: string | null;
+    actionTaken: string;
+    createdAt: Date;
+  }>) {
+    if (!ev.offerId || killedByOffer.has(ev.offerId)) continue;
+    killedByOffer.set(ev.offerId, {
+      actionTaken: ev.actionTaken,
+      at: ev.createdAt,
+    });
+  }
+
   const now = new Date();
   for (const w of works) {
     const o = w.o;
@@ -759,6 +804,7 @@ export async function prescreenOffers(
         updatedAt: o.updatedAt,
         prescreenedAt: o.prescreenedAt,
         commissionUsd: w.commissionUsd ?? null,
+        killedBefore: killedByOffer.get(o.id) ?? null,
       });
       if (drift.rescreen) {
         w.rescreen = true;

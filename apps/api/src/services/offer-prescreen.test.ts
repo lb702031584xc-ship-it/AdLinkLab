@@ -935,3 +935,92 @@ describe("prescreenOffers · 复筛降级到 unknown", () => {
     expect(counts.rescreenCount).toBe(0);
   });
 });
+
+
+describe("止损历史接入初筛（kill-rules → prescreen）", () => {
+  const gateOk = async (): Promise<TrafficGateResult> =>
+    ({
+      passed: true,
+      reason: "ok",
+      officialSite: null,
+      signals: [],
+    }) as TrafficGateResult;
+
+  function worldWith(killEvents: Array<Record<string, unknown>>) {
+    return {
+      catalogBlacklist: { findMany: async () => [] },
+      catalogScreeningPreset: { findUnique: async () => null },
+      aiSetting: { findUnique: async () => null },
+      networkProduct: {
+        findMany: async () => [
+          {
+            id: "np1",
+            brand: "WidgetCo",
+            adCount: 6,
+            adCountLongtail: 3,
+            tcAdvertisersCount: 0,
+            adPolicyRisk: false,
+            lastAdCount: 6,
+          },
+        ],
+      },
+      brandProfile: { findMany: async () => [] },
+      offer: { update: async () => ({}) },
+      adminGrantAudit: { create: async () => ({}) },
+      killRuleEvent: { findMany: async () => killEvents },
+    } as unknown as PrismaClient;
+  }
+
+  it("纯函数：killedBefore 触发 KILLED_BEFORE，并写明动作与日期", () => {
+    const d = evaluateOfferDrift({
+      killedBefore: { actionTaken: "PAUSE", at: "2026-10-01T00:00:00Z" },
+    });
+    expect(d.codes).toEqual(["KILLED_BEFORE"]);
+    expect(d.reasons[0]).toContain("PAUSE");
+    expect(d.reasons[0]).toContain("2026-10-01");
+    expect(d.reasons[0]).toContain("人工确认");
+  });
+
+  it("空历史不影响判定", () => {
+    expect(evaluateOfferDrift({ killedBefore: null }).rescreen).toBe(false);
+  });
+
+  it("曾止损的 Offer 在初筛里降级 unknown 并计入 rescreenCount", async () => {
+    const prisma = worldWith([
+      {
+        offerId: "o-killed",
+        actionTaken: "PAUSE",
+        createdAt: new Date("2026-10-01T00:00:00Z"),
+      },
+    ]);
+    const { outcomes, counts } = await prescreenOffers(
+      { prisma, gateEvaluator: gateOk, gatewayResolve: gatewayOk },
+      {
+        tenantId: "t1",
+        actorId: "u1",
+        userRole: "owner",
+        offers: [offer({ id: "o-killed" })],
+      }
+    );
+    expect(outcomes[0].verdict).toBe("unknown");
+    expect(outcomes[0].rescreen).toBe(true);
+    expect(outcomes[0].rescreenCodes).toContain("KILLED_BEFORE");
+    expect(outcomes[0].reason).toContain("曾触发止损");
+    expect(counts.rescreenCount).toBe(1);
+  });
+
+  it("没有止损记录的 Offer 照常 go", async () => {
+    const prisma = worldWith([]);
+    const { outcomes, counts } = await prescreenOffers(
+      { prisma, gateEvaluator: gateOk, gatewayResolve: gatewayOk },
+      {
+        tenantId: "t1",
+        actorId: "u1",
+        userRole: "owner",
+        offers: [offer({ id: "o-clean" })],
+      }
+    );
+    expect(outcomes[0].verdict).toBe("go");
+    expect(counts.rescreenCount).toBe(0);
+  });
+});
