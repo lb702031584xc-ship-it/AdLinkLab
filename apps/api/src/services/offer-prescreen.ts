@@ -424,6 +424,8 @@ export async function prescreenOffers(
         commissionAmount: amount,
         commissionRate: rateForEval,
         reviewCount: null,
+        // 返款周期是质量分维度；缺省 null 按未知中性计，不臆造。
+        payoutCycleDays: o.payoutCycleDays ?? null,
       },
       effectivePreset
     );

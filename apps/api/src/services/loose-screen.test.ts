@@ -308,3 +308,65 @@ describe("resolveEvidence · 实测优先与期望利润", () => {
   });
 });
 
+
+
+describe("保本 CVR 与经济学判定", () => {
+  it("保本 CVR = CPC ÷ 净EPC；低于 5% 判 viable", () => {
+    const q = screenLooseOffers([
+      // 净EPC 2.0、CPC 0.08 → 保本 4%
+      row({
+        id: "o-viable",
+        measured: { epcUsd: 2, clicks: 500 },
+        cpcExpected: 0.08,
+      }),
+    ]).qualified[0];
+    expect(q.breakevenCvr).toBeCloseTo(4, 6);
+    expect(q.economics).toBe("viable");
+  });
+
+  it("保本 CVR 在 5%–10% 之间判 marginal", () => {
+    const q = screenLooseOffers([
+      row({
+        id: "o-marginal",
+        measured: { epcUsd: 1, clicks: 500 },
+        cpcExpected: 0.07,
+      }),
+    ]).qualified[0];
+    expect(q.breakevenCvr).toBeCloseTo(7, 6);
+    expect(q.economics).toBe("marginal");
+  });
+
+  it("保本 CVR 超过 10% 判 unviable（「筛出来不赚钱」的量化口径）", () => {
+    const q = screenLooseOffers([
+      // EPC 0.3、CPC 1.2 → 要 400% CVR
+      row({
+        id: "o-hopeless",
+        measured: { epcUsd: 0.3, clicks: 500 },
+        cpcExpected: 1.2,
+      }),
+    ]).qualified[0];
+    expect(q.breakevenCvr).toBeCloseTo(400, 6);
+    expect(q.economics).toBe("unviable");
+  });
+
+  it("缺 CPC 时不判经济性（unknown），不瞎猜", () => {
+    const q = screenLooseOffers([
+      row({ id: "o-nocpc", measured: { epcUsd: 2, clicks: 500 } }),
+    ]).qualified[0];
+    expect(q.breakevenCvr).toBeNull();
+    expect(q.economics).toBe("unknown");
+  });
+
+  it("拒单率会抬高保本 CVR（净EPC 变小）", () => {
+    const q = screenLooseOffers([
+      row({
+        id: "o-rej",
+        measured: { epcUsd: 2, rejectionRate: 0.5, clicks: 500 },
+        cpcExpected: 0.05,
+      }),
+    ]).qualified[0];
+    // 净EPC 1.0 → 保本 5%
+    expect(q.breakevenCvr).toBeCloseTo(5, 6);
+    expect(q.economics).toBe("viable");
+  });
+});

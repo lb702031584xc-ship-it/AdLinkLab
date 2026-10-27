@@ -188,6 +188,8 @@ export interface LooseScreenEvidence {
   monthlySales?: Record<string, number>;
   epcUsd?: Record<string, number>;
   conversionRate?: Record<string, number>;
+  /** 目标 CPC（美元/点击）：给出后引擎按每点击期望利润排序，并算保本 CVR。 */
+  cpc?: Record<string, number>;
   lowPriceTraffic?: Record<string, "winnable" | "not_winnable">;
 }
 
@@ -211,6 +213,21 @@ export interface LooseScreenResult {
     lowPriceTraffic: "winnable" | "unknown";
     epcUsd: number | null;
     conversionRate: number | null;
+    /** 该条 EPC / 转化率是投放实测、人工假设，还是无数据。 */
+    epcSource?: "measured" | "assumed" | "unknown";
+    conversionSource?: "measured" | "assumed" | "unknown";
+    /** 可采信的实测点击样本量；0 = 无实测。 */
+    measuredClicks?: number;
+    /** 实测拒单率（0–1）；null = 无数据，未做扣减。 */
+    rejectionRate?: number | null;
+    /** 扣拒单率后的净 EPC。 */
+    netEpcUsd?: number | null;
+    /** 每点击期望利润 = 净EPC − CPC。 */
+    profitPerClick?: number | null;
+    /** 保本转化率（%）：这个 Offer 需要多高的 CVR 才不亏。 */
+    breakevenCvr?: number | null;
+    /** 经济性判定：viable ≤5% / marginal ≤10% / unviable >10%。 */
+    economics?: "unknown" | "viable" | "marginal" | "unviable";
     promoUrl: string;
     riskCost: string[];
   }>;

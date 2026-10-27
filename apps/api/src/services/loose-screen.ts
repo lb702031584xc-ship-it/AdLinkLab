@@ -47,6 +47,24 @@ export const DEFAULT_LOOSE_MIN_COMMISSION_USD = 3;
 /** 实测值可被采信的最小点击样本（低于此视为噪声，退回人工证据）。 */
 export const DEFAULT_MIN_MEASURED_CLICKS = 50;
 
+/**
+ * 保本转化率判定的默认阈值（百分数）。
+ * 冷搜索流量到桥页的真实 CVR 经验区间是 1–3%；5% 已经是很强的落地页，
+ * 超过 10% 基本不可能。这两个数是**判断门槛**，不是平台规则，
+ * 调用方可以用 options 覆盖。
+ */
+export const DEFAULT_MAX_REALISTIC_CVR_PCT = 5;
+export const DEFAULT_MARGINAL_CVR_PCT = 10;
+
+/**
+ * 经济性判定：
+ * - viable   ：保本 CVR ≤ 5%，有落地页能做到
+ * - marginal ：5% < 保本 CVR ≤ 10%，需要很强的落地页
+ * - unviable ：保本 CVR > 10%，冷搜索流量基本不可能
+ * - unknown  ：缺 CPC 或缺 EPC，不判
+ */
+export type LooseEconomics = "unknown" | "viable" | "marginal" | "unviable";
+
 export type LooseStock = "in_stock" | "out_of_stock";
 export type LooseTraffic = "winnable" | "not_winnable";
 /** 证据来源：measured（投放实测）/ assumed（人工假设）/ unknown（无数据）。 */
@@ -114,6 +132,10 @@ export interface LooseScreenOptions {
   excludedCategories?: string[];
   /** 实测值可被采信的最小点击样本，默认 DEFAULT_MIN_MEASURED_CLICKS。 */
   minMeasuredClicks?: number;
+  /** 保本 CVR 可接受上限（%），默认 5。 */
+  maxRealisticCvrPct?: number;
+  /** 保本 CVR 边际上限（%），默认 10。 */
+  marginalCvrPct?: number;
 }
 
 /** 单条证据解析结果（实测优先，其次人工假设，都没有则 unknown）。 */
@@ -129,6 +151,10 @@ export interface ResolvedEvidence {
   netEpcUsd: number | null;
   /** 每点击期望利润 = 净EPC − cpcExpected；缺任一项则为 null。 */
   profitPerClick: number | null;
+  /** 保本转化率（%）= CPC ÷ 净EPC × 100；缺 CPC 或 EPC 为 null。 */
+  breakevenCvr: number | null;
+  /** 经济性判定（见 LooseEconomics）。 */
+  economics: LooseEconomics;
 }
 
 export interface LooseScreenItem {
@@ -162,6 +188,10 @@ export interface LooseScreenItem {
   netEpcUsd: number | null;
   /** 每点击期望利润；null = 缺 CPC 或 EPC。 */
   profitPerClick: number | null;
+  /** 保本转化率（%）：这个 Offer 需要多高的 CVR 才不亏。 */
+  breakevenCvr: number | null;
+  /** 经济性判定：能不能靠落地页把 CVR 做到这个水平。 */
+  economics: LooseEconomics;
   promoUrl: string;
   riskCost: string[];
 }
@@ -262,6 +292,33 @@ export function resolveEvidence(
   const profitPerClick =
     netEpcUsd != null && cpc != null ? netEpcUsd - cpc : null;
 
+  // 保本 CVR：这个 Offer 需要多高的转化率才不亏钱。
+  // 它比 EPC 更能说明问题——EPC 是假设值，保本 CVR 是可以和
+  // "落地页能做到多少" 直接对照的量。
+  const breakevenCvr =
+    netEpcUsd != null && netEpcUsd > 0 && cpc != null
+      ? (cpc / netEpcUsd) * 100
+      : null;
+
+  const viablePct =
+    options.maxRealisticCvrPct != null &&
+    Number.isFinite(options.maxRealisticCvrPct)
+      ? options.maxRealisticCvrPct
+      : DEFAULT_MAX_REALISTIC_CVR_PCT;
+  const marginalPct =
+    options.marginalCvrPct != null && Number.isFinite(options.marginalCvrPct)
+      ? options.marginalCvrPct
+      : DEFAULT_MARGINAL_CVR_PCT;
+
+  const economics: LooseEconomics =
+    breakevenCvr == null
+      ? "unknown"
+      : breakevenCvr <= viablePct
+        ? "viable"
+        : breakevenCvr <= marginalPct
+          ? "marginal"
+          : "unviable";
+
   return {
     epcUsd,
     conversionRate,
@@ -271,6 +328,8 @@ export function resolveEvidence(
     measuredClicks: measuredTrusted ? measuredClicks : 0,
     netEpcUsd,
     profitPerClick,
+    breakevenCvr,
+    economics,
   };
 }
 
@@ -372,6 +431,8 @@ export function screenLooseOffers(
       rejectionRate: evidence.rejectionRate,
       netEpcUsd: evidence.netEpcUsd,
       profitPerClick: evidence.profitPerClick,
+      breakevenCvr: evidence.breakevenCvr,
+      economics: evidence.economics,
       promoUrl: row.affiliateUrl ?? row.destinationUrl,
       riskCost: [...row.riskCost],
     });
