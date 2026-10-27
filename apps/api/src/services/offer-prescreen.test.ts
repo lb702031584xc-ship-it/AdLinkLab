@@ -659,3 +659,112 @@ describe("prescreenOffers 广告层透明中心旁证口径", () => {
     expect(counts.adTcRescuedCount).toBe(1);
   });
 });
+
+describe("prescreenOffers · 选品口径（价格带与评论维度中性化）", () => {
+  const gateOk = async (): Promise<TrafficGateResult> =>
+    ({
+      passed: true,
+      reason: "ok",
+      officialSite: null,
+      signals: [],
+    }) as TrafficGateResult;
+
+  function world(presetRow: Record<string, unknown> | null) {
+    return {
+      catalogBlacklist: { findMany: async () => [] },
+      catalogScreeningPreset: { findUnique: async () => presetRow },
+      aiSetting: { findUnique: async () => null },
+      networkProduct: {
+        findMany: async () => [
+          {
+            id: "np1",
+            brand: "WidgetCo",
+            adCount: 6,
+            adCountLongtail: 3,
+            tcAdvertisersCount: 0,
+            adPolicyRisk: false,
+            lastAdCount: 6,
+            networkId: "n1",
+            countryCode: "US",
+          },
+        ],
+      },
+      brandProfile: { findMany: async () => [] },
+      offer: { update: async () => ({}) },
+      adminGrantAudit: { create: async () => ({}) },
+    } as unknown as PrismaClient;
+  }
+
+  it("高客单 Offer（均价 $899）不再被 $150 价格上限判停", async () => {
+    // 旧口径：899 > DEFAULT_PRESET.maxPrice(150) → stop「未达筛选预设」。
+    // 新口径：价格带是商品库选品维度，Offer 初筛按佣金口径判断。
+    const { outcomes } = await prescreenOffers(
+      { prisma: world(null), gateEvaluator: gateOk, gatewayResolve: gatewayOk },
+      {
+        tenantId: "t1",
+        actorId: "u1",
+        userRole: "owner",
+        offers: [
+          offer({
+            id: "o-high-ticket",
+            avgPrice: 899,
+            commissionType: "PERCENT",
+            commissionValue: 116.87,
+          }),
+        ],
+      }
+    );
+    expect(outcomes[0].verdict).toBe("go");
+    expect(outcomes[0].reason).not.toContain("未达筛选预设");
+  });
+
+  it("低价 Offer（均价 $29）不再被 $80 价格下限判停", async () => {
+    const { outcomes } = await prescreenOffers(
+      { prisma: world(null), gateEvaluator: gateOk, gatewayResolve: gatewayOk },
+      {
+        tenantId: "t1",
+        actorId: "u1",
+        userRole: "owner",
+        offers: [offer({ id: "o-low-ticket", avgPrice: 29, commissionValue: 20 })],
+      }
+    );
+    expect(outcomes[0].verdict).toBe("go");
+  });
+
+  it("预设 minReviews > 0 不会让全部 Offer 判停（Offer 无评论维度）", async () => {
+    // reviewCount 在 Offer 阶梯恒为 null；若照搬预设会把所有 Offer 判死。
+    const preset = {
+      minReviews: 50,
+      minCommissionAmount: 8,
+      minCommissionRate: 10,
+      minPrice: 80,
+      maxPrice: 150,
+      minScore: 0,
+    };
+    const { outcomes, counts } = await prescreenOffers(
+      { prisma: world(preset), gateEvaluator: gateOk, gatewayResolve: gatewayOk },
+      {
+        tenantId: "t1",
+        actorId: "u1",
+        userRole: "owner",
+        offers: [offer({ id: "o-reviews", commissionValue: 20 })],
+      }
+    );
+    expect(outcomes[0].verdict).toBe("go");
+    expect(counts.go).toBe(1);
+  });
+
+  it("佣金门槛仍然生效：低于 $8 照常判停（中性化只针对价格与评论）", async () => {
+    const { outcomes } = await prescreenOffers(
+      { prisma: world(null), gateEvaluator: gateOk, gatewayResolve: gatewayOk },
+      {
+        tenantId: "t1",
+        actorId: "u1",
+        userRole: "owner",
+        offers: [offer({ id: "o-cheap", avgPrice: 500, commissionValue: 3 })],
+      }
+    );
+    expect(outcomes[0].verdict).toBe("stop");
+  });
+});
+

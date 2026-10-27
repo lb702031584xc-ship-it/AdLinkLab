@@ -297,10 +297,21 @@ export async function prescreenOffers(
     // 未知维度不判死：佣金算不出 → 金额维度置 0；无佣金率（FIXED 等）
     // → 比例维度置 0。其余维度照常判（与商品库一键筛选同口径）。
     const rateForEval = ratePct;
+    // Offer 侧不套商品价格带（2026-10-27，清单 #6 选品口径修正）：
+    // 商品价格 ≠ 每单佣金——$80–150 的商品按 3–8% 佣金率只有 $2.4–12/单，
+    // 保本 CVR 要 10–30%，冷搜索流量永远做不到；而 $150 上限又把唯一可能
+    // 跑正的高客单段砍掉。且价格带取值走 `preset.maxPrice ?? DEFAULT_PRESET`，
+    // 租户把上限清空（null）会回落到默认 150，等于关不掉。
+    // 价格带是商品库选品口径，Offer 初筛按佣金口径判断，故在此中性化。
+    // 评论维度同理：Offer 无评论数数据源（reviewCount 恒 null），
+    // 租户把 minReviews 调到 >0 会让全部 Offer 判停，也一并中性化。
     const effectivePreset = {
       ...preset,
       ...(fig.figure === null ? { minCommissionAmount: 0 } : {}),
       ...(rateForEval === null ? { minCommissionRate: 0 } : {}),
+      minPrice: 0,
+      maxPrice: 0,
+      minReviews: 0,
     };
     const ev = evaluateProduct(
       {
