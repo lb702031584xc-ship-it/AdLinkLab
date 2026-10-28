@@ -740,6 +740,18 @@ export default async function OffersPage({
                   t.entities.forms.offer.hotPicksDroppedByBrand,
                 hotPicksExcludedHint:
                   t.entities.forms.offer.hotPicksExcludedHint,
+                looseEpc: t.entities.forms.offer.looseEpc,
+                looseCvr: t.entities.forms.offer.looseCvr,
+                looseCpc: t.entities.forms.offer.looseCpc,
+                looseRating: t.entities.forms.offer.looseRating,
+                looseReviews: t.entities.forms.offer.looseReviews,
+                looseMonthlySales: t.entities.forms.offer.looseMonthlySales,
+                economicsLabel: t.entities.forms.offer.economicsLabel,
+                breakevenCvrLabel: t.entities.forms.offer.breakevenCvrLabel,
+                epcSourceLabel: t.entities.forms.offer.epcSourceLabel,
+                paidLayerSkipped: t.entities.forms.offer.paidLayerSkipped,
+                paidLayerSkippedHint:
+                  t.entities.forms.offer.paidLayerSkippedHint,
               }}
               offers={data.items.map((o) => ({ id: o.id, name: o.name }))}
             />

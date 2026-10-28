@@ -190,6 +190,18 @@ export function OfferPrescreenBar({
     hotPicksEmpty: string;
     hotPicksDroppedByBrand: string;
     hotPicksExcludedHint: string;
+    /** 经济性与需求证据标签（2026-10-27 补） */
+    looseEpc: string;
+    looseCvr: string;
+    looseCpc: string;
+    looseRating: string;
+    looseReviews: string;
+    looseMonthlySales: string;
+    economicsLabel: string;
+    breakevenCvrLabel: string;
+    epcSourceLabel: string;
+    paidLayerSkipped: string;
+    paidLayerSkippedHint: string;
   };
   offers: Array<{ id: string; name: string }>;
 }) {
@@ -313,7 +325,9 @@ export function OfferPrescreenBar({
       setHotPicks(result.data.hotPicks ?? null);
       setPaidNotice(
         result.data.skippedPaidLayer
-          ? `广告数据层已跳过${result.data.paidLayerError ? `（${result.data.paidLayerError}）` : ""}：本次结论不含广告数证据，请人工核实该品牌是否有人投放`
+          ? `${dict.paidLayerSkipped}${
+              result.data.paidLayerError ? `（${result.data.paidLayerError}）` : ""
+            }${dict.paidLayerSkippedHint}`
           : null
       );
       router.refresh();
@@ -468,7 +482,7 @@ export function OfferPrescreenBar({
                 </label>
                 {/* 以下为经济性与需求证据：空着就是 unknown，不会被当成 0 */}
                 <label className="text-ink/60">
-                  EPC($){" "}
+                  {dict.looseEpc}{" "}
                   <input
                     value={e.epc}
                     onChange={(ev) => setEvidenceField(o.id, "epc", ev.target.value)}
@@ -477,7 +491,7 @@ export function OfferPrescreenBar({
                   />
                 </label>
                 <label className="text-ink/60">
-                  CVR(%){" "}
+                  {dict.looseCvr}{" "}
                   <input
                     value={e.cvr}
                     onChange={(ev) => setEvidenceField(o.id, "cvr", ev.target.value)}
@@ -486,7 +500,7 @@ export function OfferPrescreenBar({
                   />
                 </label>
                 <label className="text-ink/60">
-                  CPC($){" "}
+                  {dict.looseCpc}{" "}
                   <input
                     value={e.cpc}
                     onChange={(ev) => setEvidenceField(o.id, "cpc", ev.target.value)}
@@ -495,7 +509,7 @@ export function OfferPrescreenBar({
                   />
                 </label>
                 <label className="text-ink/60">
-                  评分{" "}
+                  {dict.looseRating}{" "}
                   <input
                     value={e.rating}
                     onChange={(ev) => setEvidenceField(o.id, "rating", ev.target.value)}
@@ -504,7 +518,7 @@ export function OfferPrescreenBar({
                   />
                 </label>
                 <label className="text-ink/60">
-                  评论{" "}
+                  {dict.looseReviews}{" "}
                   <input
                     value={e.reviews}
                     onChange={(ev) => setEvidenceField(o.id, "reviews", ev.target.value)}
@@ -513,7 +527,7 @@ export function OfferPrescreenBar({
                   />
                 </label>
                 <label className="text-ink/60">
-                  月销{" "}
+                  {dict.looseMonthlySales}{" "}
                   <input
                     value={e.sales}
                     onChange={(ev) => setEvidenceField(o.id, "sales", ev.target.value)}
@@ -584,10 +598,13 @@ export function OfferPrescreenBar({
                 .map((q) => {
                   const parts = [`${q.commissionUsd}`];
                   if (q.economics && q.economics !== "unknown")
-                    parts.push(`经济性 ${q.economics}`);
+                    parts.push(`${dict.economicsLabel} ${q.economics}`);
                   if (typeof q.breakevenCvr === "number")
-                    parts.push(`保本CVR ${q.breakevenCvr.toFixed(1)}%`);
-                  if (q.epcSource) parts.push(`EPC:${q.epcSource}`);
+                    parts.push(
+                      `${dict.breakevenCvrLabel} ${q.breakevenCvr.toFixed(1)}%`
+                    );
+                  if (q.epcSource)
+                    parts.push(`${dict.epcSourceLabel}:${q.epcSource}`);
                   return `${q.name}（${parts.join("，")}）`;
                 })
                 .join("、")}
