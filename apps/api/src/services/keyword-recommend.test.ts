@@ -2,7 +2,12 @@
  * 关键词推荐纯函数测试：保本 CPC、意图分类、品牌词禁令、核心词提取。
  */
 import { describe, expect, it } from "vitest";
-import { extractCore, recommendKeywords } from "./keyword-recommend.js";
+import {
+  buildLongTailCandidates,
+  extractCore,
+  recommendKeywords,
+  splitCoreAndSpecs,
+} from "./keyword-recommend.js";
 
 describe("extractCore", () => {
   it("剥掉品牌词，保留核心词", () => {
@@ -96,5 +101,48 @@ describe("recommendKeywords", () => {
   it("目标 CVR 可覆盖，保本 CPC 随之变化", () => {
     const r = recommendKeywords({ ...base, targetCvrPct: 5 });
     expect(r.maxCpcUsd).toBe(0.8075);
+  });
+});
+
+
+describe("长尾候选（规格词重组）", () => {
+  it("从产品名里拆出规格词", () => {
+    const r = splitCoreAndSpecs("chamber vacuum sealer 260w 10.2 inch");
+    expect(r.base).toBe("chamber vacuum sealer");
+    expect(r.specs).toEqual(["260w", "10.2 inch"]);
+  });
+
+  it("生成 基础词+规格 与 品牌+基础词+规格", () => {
+    const r = buildLongTailCandidates({
+      core: "chamber vacuum sealer 260w",
+      brandName: "VEVOR",
+    });
+    expect(r.some((x) => x.keyword === "chamber vacuum sealer 260w")).toBe(true);
+    expect(
+      r.some((x) => x.keyword === "vevor chamber vacuum sealer 260w")
+    ).toBe(true);
+  });
+
+  it("没有规格词时返回空（不硬造）", () => {
+    expect(buildLongTailCandidates({ core: "air purifier" })).toEqual([]);
+  });
+
+  it("结果去重", () => {
+    const r = buildLongTailCandidates({
+      core: "heater 8kw 8kw",
+      brandName: null,
+    });
+    const kws = r.map((x) => x.keyword);
+    expect(new Set(kws).size).toBe(kws.length);
+  });
+
+  it("推荐结果里带上 longTail", () => {
+    const r = recommendKeywords({
+      offerName: "VEVOR Chamber Vacuum Sealer 260W 10.2-Inch",
+      brandName: "VEVOR",
+      payoutUsd: 26,
+    });
+    expect(r.longTail.length).toBeGreaterThan(0);
+    expect(r.longTail[0].keyword).toContain("chamber vacuum sealer");
   });
 });

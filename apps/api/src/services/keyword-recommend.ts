@@ -56,6 +56,14 @@ export interface KeywordSuggestion {
   note: string;
 }
 
+/** 长尾候选：从产品名的规格词重组出来的更具体组合。 */
+export interface LongTailSuggestion {
+  keyword: string;
+  /** 来自哪一类：规格 / 品牌+规格。 */
+  basis: "spec" | "brand_spec";
+  note: string;
+}
+
 export interface KeywordRecommendSkipped {
   keyword: string;
   reason: string;
@@ -73,6 +81,11 @@ export interface KeywordRecommendResult {
     refundRate: number;
   } | null;
   suggestions: KeywordSuggestion[];
+  /**
+   * 长尾候选（规格词重组）。**不含搜索量**——要用 /api/v1/keywords/expand
+   * 跑一遍才知道有没有人搜、CPC 多少。这里只负责给出可测的字符串。
+   */
+  longTail: LongTailSuggestion[];
   skipped: KeywordRecommendSkipped[];
   notes: string[];
 }
@@ -98,6 +111,67 @@ export function extractCore(name: string, brand: string | null | undefined): str
   if (!b) return full;
   const stripped = clean(full.split(b).join(" "));
   return stripped || full;
+}
+
+/** 规格片段：数字 + 单位（8kw / 260w / 10.2 inch / 12v …）。 */
+const SPEC_RE =
+  /(\d+(?:\.\d+)?)\s?(kw|w|kg|l|liter|litre|inch|in|v|volt|psi|gal|gallon|qt|oz|lb|mm|cm)\b/gi;
+
+/**
+ * 把核心词拆成「基础词 + 规格词」。
+ * 例："chamber vacuum sealer 260w 10.2 inch" → base "chamber vacuum sealer",
+ *     specs ["260w", "10.2 inch"]
+ * 规格词是从产品名里**原样摘出来的**，不是编的。
+ */
+export function splitCoreAndSpecs(core: string): { base: string; specs: string[] } {
+  const specs: string[] = [];
+  const base = (core ?? "")
+    .replace(SPEC_RE, (m) => {
+      specs.push(m.trim().toLowerCase().replace(/\s+/g, " "));
+      return " ";
+    })
+    .replace(/\s+/g, " ")
+    .trim();
+  return { base, specs: [...new Set(specs)] };
+}
+
+/**
+ * 长尾候选：base + 单个规格，或 品牌 + base + 规格。
+ * 参数越具体，竞争越小、CPC 通常越低——但搜索量也越小，
+ * 所以必须用关键词扩展验证，不能直接投。
+ */
+export function buildLongTailCandidates(input: {
+  core: string;
+  brandName?: string | null;
+  limit?: number;
+}): LongTailSuggestion[] {
+  const { base, specs } = splitCoreAndSpecs(input.core);
+  if (!base || specs.length === 0) return [];
+  const brand = (input.brandName ?? "").trim().toLowerCase();
+  const limit = Math.max(1, Math.min(30, input.limit ?? 12));
+
+  const out: LongTailSuggestion[] = [];
+  const seen = new Set<string>();
+  const push = (keyword: string, basis: LongTailSuggestion["basis"]) => {
+    const kw = keyword.trim().replace(/\s+/g, " ");
+    if (!kw || seen.has(kw)) return;
+    seen.add(kw);
+    out.push({
+      keyword: kw,
+      basis,
+      note:
+        basis === "brand_spec"
+          ? "品牌+基础词+规格：更精准，但注意品牌词条款"
+          : "基础词+规格：比大词具体，竞争通常更小",
+    });
+  };
+
+  for (const spec of specs) {
+    push(`${base} ${spec}`, "spec");
+    if (brand && brand !== base) push(`${brand} ${base} ${spec}`, "brand_spec");
+  }
+
+  return out.slice(0, limit);
 }
 
 const TRANSACTIONAL: Array<(c: string) => string> = [
@@ -157,6 +231,7 @@ export function recommendKeywords(
       maxCpcUsd: null,
       breakeven: null,
       suggestions: [],
+      longTail: [],
       skipped,
       notes: ["Offer 名称无法提取核心词（为空或只有符号），无法生成候选"],
     };
@@ -241,5 +316,23 @@ export function recommendKeywords(
     "候选词按意图模板规则生成，不含搜索量与竞争度（需付费数据）；保本 CPC 由 Offer 佣金与目标 CVR 算出，是唯一可确定的经济性门槛"
   );
 
-  return { core, maxCpcUsd, breakeven, suggestions: trimmed, skipped, notes };
+  const longTail = buildLongTailCandidates({
+    core,
+    brandName: input.brandName,
+  });
+  if (longTail.length > 0) {
+    notes.push(
+      `长尾候选 ${longTail.length} 条（规格词重组）：不含搜索量，先用 /api/v1/keywords/expand 验证再投`
+    );
+  }
+
+  return {
+    core,
+    maxCpcUsd,
+    breakeven,
+    suggestions: trimmed,
+    longTail,
+    skipped,
+    notes,
+  };
 }

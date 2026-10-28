@@ -856,6 +856,12 @@ export function OfferPrescreenBar({
                   </tbody>
                 </table>
               )}
+              {r.longTail && r.longTail.length > 0 && (
+                <p className="mt-2 text-xs text-ink/60">
+                  长尾候选（需用关键词扩展验证搜索量）：
+                  {r.longTail.map((x) => x.keyword).join("、")}
+                </p>
+              )}
               {r.notes.length > 0 && (
                 <p className="mt-1 text-xs text-ink/50">{r.notes.join("；")}</p>
               )}
