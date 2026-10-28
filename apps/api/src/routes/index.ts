@@ -271,6 +271,9 @@ export async function registerRoutes(
     // 关键词闸门：把 AI 生成的候选按落地页/价格/品牌约束过滤
     const { registerKeywordGateRoutes } = await import("./keyword-gate.js");
     await registerKeywordGateRoutes(app, { prisma: services.prisma });
+    // 类目 CPC 基线：精确类目 → 大类 → 全站 → 假定，并给探针计划
+    const { registerCpcBaselineRoutes } = await import("./cpc-baseline.js");
+    await registerCpcBaselineRoutes(app, { prisma: services.prisma });
     // 复盘校准：计划 EPC vs 实测 EPC，算高估倍数 k
     const { registerOfferCalibrationRoutes } = await import(
       "./offer-calibration.js"
