@@ -29,6 +29,8 @@ export interface AdPlanAdGroupBlock {
   group: {
     name: string;
     finalUrl: string;
+    /** 原 URL 问号后的全部查询串（不含问号），无则 null；旧计划可能缺失。 */
+    finalUrlSuffix?: string | null;
     keywords: AdPlanKeyword[];
     negativeKeywords: AdPlanKeyword[];
     maxCpc: AdPlanMoney | null;
@@ -40,6 +42,8 @@ export interface AdPlanAdGroupBlock {
     headlines: string[];
     descriptions: string[];
     finalUrl: string;
+    /** 见 group.finalUrlSuffix。 */
+    finalUrlSuffix?: string | null;
     path1: string | null;
     path2: string | null;
     dataQuality: AdPlanDataQuality;

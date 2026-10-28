@@ -60,6 +60,12 @@ dataQuality: AdPlanDataQuality;
 export interface AdPlanAdGroup {
 name: string;
 finalUrl: string;
+/**
+ * 最终到达网址后缀：原 URL 问号后的全部查询串（不含问号本身）。
+ * 改后缀不触发 Google 重新审核，只有改最终网址才触发；问号前必须是
+ * 真实目的地（不能是跳转链接）。无问号或问号后为空时为 null。
+ */
+finalUrlSuffix: string | null;
 keywords: AdPlanKeyword[];
 /** Exact/phrase negatives; EXACT renders as [kw], PHRASE as "kw". */
 negativeKeywords: AdPlanKeyword[];
@@ -75,6 +81,8 @@ headlines: string[];
 /** Exactly 4 descriptions, each ≤ 90 chars. */
 descriptions: string[];
 finalUrl: string;
+/** 见 AdPlanAdGroup.finalUrlSuffix：原 URL 问号后的全部查询串，无则 null。 */
+finalUrlSuffix: string | null;
 path1: string | null;
 path2: string | null;
 dataQuality: AdPlanDataQuality;
@@ -756,6 +764,21 @@ return parsed.toString();
 }
 
 /**
+ * Google Ads 网址拆分：最终网址只放问号前，问号后全部进最终到达网址后缀。
+ * 只在第一个问号处切分，查询串里即便还有问号也原样保留；无问号或问号后
+ * 为空时后缀为 null（不在广告里写空后缀）。
+ */
+export function splitFinalUrl(url: string): {
+finalUrl: string;
+finalUrlSuffix: string | null;
+} {
+const idx = url.indexOf("?");
+if (idx === -1) return { finalUrl: url, finalUrlSuffix: null };
+const suffix = url.slice(idx + 1);
+return { finalUrl: url.slice(0, idx), finalUrlSuffix: suffix ? suffix : null };
+}
+
+/**
 * Assemble the final AdPlan from per-URL drafts. Campaign-level fields come
 * from the first draft; each URL becomes one ad group with its own RSA.
 * Negative keywords are built deterministically with the brand-check
@@ -797,7 +820,8 @@ dataQuality: AI_GENERATED_QUALITY,
 };
 
 const adGroups: AdPlanAdGroupBlock[] = drafts.map((draft, i) => {
-const finalUrl = assertHttpUrl(ctx.finalUrls[i]!, `finalUrls[${i}]`);
+const validatedUrl = assertHttpUrl(ctx.finalUrls[i]!, `finalUrls[${i}]`);
+const { finalUrl, finalUrlSuffix } = splitFinalUrl(validatedUrl);
 const keywordTexts = draft.keywords.map((k) => k.text);
 // 复用 brand-check 否词逻辑：品牌词 → exact/phrase 否词。
 // 联盟安全口吻 / 专家营销口吻：与品牌词冲突的关键词不能出价，从正向移除，转否词。
@@ -839,6 +863,7 @@ return {
 group: {
 name: draft.adGroupName.slice(0, 255),
 finalUrl,
+finalUrlSuffix,
 keywords: positiveKeywords.map((k) => ({
 text: k.text,
 matchType: k.matchType,
@@ -860,6 +885,7 @@ rsa: {
 headlines: [...draft.headlines],
 descriptions: [...draft.descriptions],
 finalUrl,
+finalUrlSuffix,
 path1: draft.path1?? null,
 path2: draft.path2?? null,
 dataQuality: AI_GENERATED_QUALITY,
@@ -924,7 +950,8 @@ plan.adGroups.forEach((block, gi) => {
 const g = block.group;
 const rsa = block.rsa;
 lines.push(`--- 广告组 ${gi + 1}: ${g.name} ---`);
-lines.push(`终链 URL: ${g.finalUrl}`);
+lines.push(`最终网址: ${g.finalUrl}`);
+if (g.finalUrlSuffix) lines.push(`最终到达网址后缀: ${g.finalUrlSuffix}`);
 lines.push("");
 lines.push("[关键词]");
 for (const k of g.keywords) {

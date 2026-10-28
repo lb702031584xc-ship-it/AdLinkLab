@@ -13,6 +13,7 @@ import {
   createPlanStore,
   finalizeAdPlan,
   normalizeCopyStyle,
+  splitFinalUrl,
   validateAdPlanUrlDraft,
   type AdPlan,
   type AdPlanUrlDraft,
@@ -349,6 +350,64 @@ describe("finalizeAdPlan", () => {
     );
     expect(plan.campaign.bidding.strategy).toBe("MAXIMIZE_CLICKS");
     expect(plan.campaign.bidding.maxCpc).toBeNull();
+  });
+});
+
+describe("splitFinalUrl", () => {
+  it("splits at the first question mark only", () => {
+    expect(
+      splitFinalUrl("https://www.amazon.com/dp/B0D25WCVYD?lv=shuf&tag=maas")
+    ).toEqual({
+      finalUrl: "https://www.amazon.com/dp/B0D25WCVYD",
+      finalUrlSuffix: "lv=shuf&tag=maas",
+    });
+    // 查询串里即便还有问号也原样保留。
+    expect(splitFinalUrl("https://x.example/a?b=c?d=e")).toEqual({
+      finalUrl: "https://x.example/a",
+      finalUrlSuffix: "b=c?d=e",
+    });
+  });
+
+  it("returns null suffix without a query string or with an empty query", () => {
+    expect(splitFinalUrl("https://merchant.example/offer")).toEqual({
+      finalUrl: "https://merchant.example/offer",
+      finalUrlSuffix: null,
+    });
+    expect(splitFinalUrl("https://merchant.example/offer?")).toEqual({
+      finalUrl: "https://merchant.example/offer",
+      finalUrlSuffix: null,
+    });
+  });
+});
+
+describe("finalizeAdPlan URL split", () => {
+  it("puts the pre-question part in finalUrl and the rest in finalUrlSuffix", () => {
+    // 默认 finalizeCtx 带 ?a=1。
+    const plan = finalizeAdPlan([validDraft()], finalizeCtx());
+    const group = plan.adGroups[0]!.group;
+    const rsa = plan.adGroups[0]!.rsa;
+    expect(group.finalUrl).toBe("https://merchant.example/offer");
+    expect(group.finalUrlSuffix).toBe("a=1");
+    expect(rsa.finalUrl).toBe("https://merchant.example/offer");
+    expect(rsa.finalUrlSuffix).toBe("a=1");
+    // sourceUrls 仍保留完整 URL，归档与回查不受影响。
+    expect(plan.sourceUrls).toEqual(["https://merchant.example/offer?a=1"]);
+  });
+
+  it("leaves finalUrlSuffix null for URLs without a query", () => {
+    const plan = finalizeAdPlan(
+      [validDraft()],
+      finalizeCtx({ finalUrls: ["https://m.example/a"] })
+    );
+    expect(plan.adGroups[0]!.group.finalUrl).toBe("https://m.example/a");
+    expect(plan.adGroups[0]!.group.finalUrlSuffix).toBeNull();
+    expect(plan.adGroups[0]!.rsa.finalUrlSuffix).toBeNull();
+  });
+
+  it("copy-pack renders both lines", () => {
+    const text = buildCopyPack(finalizeAdPlan([validDraft()], finalizeCtx()));
+    expect(text).toContain("最终网址: https://merchant.example/offer");
+    expect(text).toContain("最终到达网址后缀: a=1");
   });
 });
 
