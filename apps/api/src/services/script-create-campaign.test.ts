@@ -22,7 +22,9 @@ function draftDescriptions(): string[] {
   return Array.from({ length: 4 }, (_, i) => `Description ${i + 1} copy text here.`);
 }
 
-function samplePlan(): AdPlan {
+function samplePlan(
+  finalUrls: string[] = ["https://merchant.example/offer"]
+): AdPlan {
   const draft: AdPlanUrlDraft = {
     campaignName: "Auto Test Campaign",
     dailyBudget: { amount: 42.5, currency: "USD" },
@@ -43,8 +45,15 @@ function samplePlan(): AdPlan {
     language: "en",
     offerId: null,
     googleAccountId: null,
-    finalUrls: ["https://merchant.example/offer"],
+    finalUrls,
   });
+}
+
+/** 从生成的脚本源码里把嵌入的计划 JSON 解析出来（双重转义，需 parse 两次）。 */
+function embeddedPlan(src: string): AdPlan {
+  const m = src.match(/plan: JSON\.parse\(("(?:[^"\\]|\\.)*")\)/);
+  if (!m) throw new Error("embedded plan not found in script source");
+  return JSON.parse(JSON.parse(m[1]!)) as AdPlan;
 }
 
 describe("validateCreateCampaignPlan", () => {
@@ -189,5 +198,32 @@ describe("buildCreateCampaignScript", () => {
       { dayOfWeek: "MONDAY", startHour: 21, startMinute: 0, endHour: 9, endMinute: 0 },
     ];
     expect(() => buildCreateCampaignScript(plan)).toThrow(/adSchedules/);
+  });
+
+  it("embeds split finalUrl + finalUrlSuffix for URLs with a query", () => {
+    const plan = samplePlan([
+      "https://www.amazon.com/dp/B0D25WCVYD?lv=shuf&tag=maas",
+    ]);
+    const embedded = embeddedPlan(buildCreateCampaignScript(plan));
+    expect(embedded.adGroups[0]!.rsa.finalUrl).toBe(
+      "https://www.amazon.com/dp/B0D25WCVYD"
+    );
+    expect(embedded.adGroups[0]!.rsa.finalUrlSuffix).toBe("lv=shuf&tag=maas");
+  });
+
+  it("embeds null finalUrlSuffix for URLs without a query", () => {
+    const embedded = embeddedPlan(buildCreateCampaignScript(samplePlan()));
+    expect(embedded.adGroups[0]!.rsa.finalUrl).toBe(
+      "https://merchant.example/offer"
+    );
+    expect(embedded.adGroups[0]!.rsa.finalUrlSuffix).toBeNull();
+  });
+
+  it("template splits at runtime for old plans without finalUrlSuffix", () => {
+    // 旧计划只有完整 finalUrl 时，模板在运行时现切，参数不会丢。
+    const src = buildCreateCampaignScript(samplePlan());
+    expect(src).toContain('indexOf("?")');
+    expect(src).toContain("adObj.finalUrlSuffix = finalUrlSuffix");
+    expect(src).toContain("finalUrls: [finalUrlRaw]");
   });
 });

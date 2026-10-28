@@ -261,7 +261,9 @@ function PlanPreview({
             </span>
           </div>
           <p className="mt-1 break-all text-xs text-ink/55">
-            {d.preview.finalUrl}: {block.group.finalUrl}
+            {d.preview.finalUrl}:{" "}
+            {block.group.finalUrl +
+              (block.group.finalUrlSuffix ? `?${block.group.finalUrlSuffix}` : "")}
           </p>
 
           <div className="mt-3 grid gap-3 md:grid-cols-2">

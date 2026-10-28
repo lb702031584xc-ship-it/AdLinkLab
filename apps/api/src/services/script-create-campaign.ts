@@ -26,7 +26,7 @@
 import { jsStringLiteral } from "./script-generator-source.js";
 import type { AdPlan } from "../ai/ad-generator.js";
 
-export const CREATE_CAMPAIGN_SCRIPT_VERSION = "1.2.1";
+export const CREATE_CAMPAIGN_SCRIPT_VERSION = "1.3.0";
 
 /** ISO country code → Google Ads geo target location ID (criteria ID). */
 export const COUNTRY_LOCATION_IDS: Record<string, number> = {
@@ -482,13 +482,29 @@ function createAdGroup_(campaignRn, block) {
   if (rsa.path2) {
     rsaBody.path2 = String(rsa.path2);
   }
+  // 网址拆分：最终网址只放问号前，问号后全部进 finalUrlSuffix。
+  // 改后缀不触发 Google 重新审核，只有改最终网址才触发。旧计划只有完整
+  // finalUrl、没有 finalUrlSuffix 字段时，在这里现切，参数不会丢。
+  var finalUrlRaw = String(rsa.finalUrl);
+  var finalUrlSuffix = rsa.finalUrlSuffix ? String(rsa.finalUrlSuffix) : null;
+  if (!finalUrlSuffix) {
+    var qPos = finalUrlRaw.indexOf("?");
+    if (qPos >= 0) {
+      finalUrlSuffix = finalUrlRaw.slice(qPos + 1) || null;
+      finalUrlRaw = finalUrlRaw.slice(0, qPos);
+    }
+  }
+  var adObj = {
+    responsiveSearchAd: rsaBody,
+    finalUrls: [finalUrlRaw]
+  };
+  if (finalUrlSuffix) {
+    adObj.finalUrlSuffix = finalUrlSuffix;
+  }
   var aop = { adGroupAdOperation: { create: {
     adGroup: adGroupRn,
     status: "PAUSED",
-    ad: {
-      responsiveSearchAd: rsaBody,
-      finalUrls: [String(rsa.finalUrl)]
-    }
+    ad: adObj
   } } };
   if (!mutate_(aop)) {
     Logger.log('RSA creation failed in "' + g.name + '"');
