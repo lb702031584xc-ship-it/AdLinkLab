@@ -782,6 +782,9 @@ export default async function OffersPage({
                 kwVerdictTest: t.entities.forms.offer.kwVerdictTest,
                 kwVerdictSkip: t.entities.forms.offer.kwVerdictSkip,
                 kwVerdictBlocked: t.entities.forms.offer.kwVerdictBlocked,
+                beginnerOffersTestable:
+                  t.entities.forms.offer.beginnerOffersTestable,
+                prescreenGoTitle: t.entities.forms.offer.prescreenGoTitle,
               }}
               offers={data.items.map((o) => ({ id: o.id, name: o.name }))}
             />

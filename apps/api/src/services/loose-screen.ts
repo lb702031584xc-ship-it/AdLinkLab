@@ -510,8 +510,13 @@ export function screenLooseOffers(
     if (a === null && b !== null) return 1;
     return 0;
   };
+  // 证据档位：有实测（样本达标）的排在纯假设之前。
+  // 同档内再比利润——避免 3 次点击的偶然值把排序带偏。
+  const evidenceTier = (x: LooseScreenItem): number =>
+    x.epcSource === "measured" ? 0 : 1;
   kept.sort(
     (a, b) =>
+      evidenceTier(a) - evidenceTier(b) ||
       descNullsLast(a.profitPerClick, b.profitPerClick) ||
       descNullsLast(a.epcUsd, b.epcUsd) ||
       descNullsLast(a.commissionUsd, b.commissionUsd) ||

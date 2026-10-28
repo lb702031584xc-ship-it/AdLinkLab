@@ -234,6 +234,8 @@ export function OfferPrescreenBar({
     kwVerdictTest: string;
     kwVerdictSkip: string;
     kwVerdictBlocked: string;
+    beginnerOffersTestable: string;
+    prescreenGoTitle: string;
   };
   offers: Array<{ id: string; name: string }>;
 }) {
@@ -275,6 +277,11 @@ export function OfferPrescreenBar({
   const [advanced, setAdvanced] = useState(false);
   const [kwBusy, setKwBusy] = useState(false);
   const [kwResults, setKwResults] = useState<KeywordRecommendResult[]>([]);
+  // 初筛结论留存（含 go 的 offerId），用于「筛完直接生成关键词」，
+  // 避免用户重新勾选一遍。
+  const [prescreenOutcomes, setPrescreenOutcomes] = useState<
+    Array<{ offerId: string; verdict: "go" | "unknown" | "stop"; reason: string }>
+  >([]);
   const beginnerReady = Object.values(beginner).every((v) => v.trim() !== "");
   // 拒单率 / 退款率按保守值扣减；只在体检里用，不写回任何数据。
   const beginnerAssess = (() => {
@@ -296,6 +303,8 @@ export function OfferPrescreenBar({
       neededBudget,
       level,
       budgetEnough: budget >= neededBudget,
+      // 这批预算最多够测几个 offer（每个都要跑到 100 转化才算有结论）
+      offersTestable: Math.floor(budget / neededBudget),
     };
   })();
   const [looseDetails, setLooseDetails] = useState<LooseScreenResult | null>(
@@ -385,6 +394,25 @@ export function OfferPrescreenBar({
     }
   };
 
+  /** 单条：初筛结果里点「生成关键词」直接用这个 offerId 调。 */
+  const onKeywordsFor = async (offerId: string) => {
+    setKwBusy(true);
+    setError(null);
+    try {
+      const r = await recommendKeywordsAction(offerId);
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      setKwResults((prev) => [
+        r.data,
+        ...prev.filter((x) => x.offerId !== offerId),
+      ]);
+    } finally {
+      setKwBusy(false);
+    }
+  };
+
   const kwIntentLabel = (v: string): string =>
     v === "transactional"
       ? dict.kwIntentTransactional
@@ -426,6 +454,7 @@ export function OfferPrescreenBar({
       );
       setLooseDetails(null);
       setHotPicks(result.data.hotPicks ?? null);
+      setPrescreenOutcomes(result.data.outcomes ?? []);
       setPaidNotice(
         result.data.skippedPaidLayer
           ? `${dict.paidLayerSkipped}${
@@ -609,6 +638,9 @@ export function OfferPrescreenBar({
                 <span className="text-ink/60">
                   {dict.beginnerNeededBudget} ${beginnerAssess.neededBudget.toFixed(0)}
                 </span>
+                <span className="text-ink/60">
+                  {dict.beginnerOffersTestable} {beginnerAssess.offersTestable}
+                </span>
                 {!beginnerAssess.budgetEnough && (
                   <span className="text-xs text-red-600">
                     预算不足：至少需要 ${beginnerAssess.neededBudget.toFixed(0)} 才能判断这个 offer
@@ -745,6 +777,27 @@ export function OfferPrescreenBar({
             />
           </label>
           <span className="text-xs text-ink/60">{dict.hotPicksExcludedHint}</span>
+        </div>
+      )}
+      {prescreenOutcomes.some((o) => o.verdict === "go") && (
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-ink/60">{dict.prescreenGoTitle}</span>
+          {prescreenOutcomes
+            .filter((o) => o.verdict === "go")
+            .slice(0, 10)
+            .map((o) => (
+              <button
+                key={o.offerId}
+                type="button"
+                onClick={() => onKeywordsFor(o.offerId)}
+                disabled={kwBusy}
+                className="rounded-lg border border-ink/20 px-2 py-1 text-xs text-ink transition hover:bg-ink/5 disabled:opacity-50"
+              >
+                {offers.find((x) => x.id === o.offerId)?.name ?? o.offerId}
+                {" · "}
+                {dict.kwGenerate}
+              </button>
+            ))}
         </div>
       )}
       {kwResults.length > 0 && (

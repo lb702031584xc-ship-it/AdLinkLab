@@ -268,6 +268,11 @@ export async function registerRoutes(
       "./keyword-recommend.js"
     );
     await registerKeywordRecommendRoutes(app, { prisma: services.prisma });
+    // 复盘校准：计划 EPC vs 实测 EPC，算高估倍数 k
+    const { registerOfferCalibrationRoutes } = await import(
+      "./offer-calibration.js"
+    );
+    await registerOfferCalibrationRoutes(app, { prisma: services.prisma });
     await registerKeywordIdeasRoutes(app, { prisma: services.prisma });
     // DataForSEO 关键词流水线（实测扩词 → 意图过滤 → 广告测算，/keywords/starter）
     const { registerKeywordDataForSeoRoutes } = await import(
