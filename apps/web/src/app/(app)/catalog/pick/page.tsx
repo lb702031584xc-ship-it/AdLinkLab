@@ -14,6 +14,7 @@ import {
   catalogPickAction,
   type CatalogPickPayload,
 } from "@/lib/api/catalog-pick-actions";
+import { batchCreateOffersAction } from "@/lib/api/catalog-actions";
 
 const CODE_LABEL: Record<string, string> = {
   PAYOUT_UNKNOWN: "佣金未知",
@@ -63,6 +64,23 @@ export default function CatalogPickPage() {
   const [busy, setBusy] = useState(false);
   const [data, setData] = useState<CatalogPickPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [creating, setCreating] = useState<string | null>(null);
+  const [created, setCreated] = useState<Set<string>>(new Set());
+
+  const createOffer = async (productId: string) => {
+    setCreating(productId);
+    setError(null);
+    try {
+      const r = await batchCreateOffersAction([productId]);
+      if (r.ok) {
+        setCreated((prev) => new Set(prev).add(productId));
+      } else {
+        setError(r.error);
+      }
+    } finally {
+      setCreating(null);
+    }
+  };
 
   const run = async () => {
     setBusy(true);
@@ -182,7 +200,21 @@ export default function CatalogPickPage() {
                 key={`plan-${p.productId}`}
                 className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4"
               >
-                <h2 className="text-sm font-semibold">判定与参数：{p.name}</h2>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h2 className="text-sm font-semibold">判定与参数：{p.name}</h2>
+                  <button
+                    type="button"
+                    onClick={() => void createOffer(p.productId)}
+                    disabled={creating === p.productId || created.has(p.productId)}
+                    className="rounded-lg bg-emerald-600 px-3 py-1 text-xs font-medium text-white disabled:opacity-50"
+                  >
+                    {created.has(p.productId)
+                      ? "已建 Offer ✓"
+                      : creating === p.productId
+                        ? "创建中…"
+                        : "建 Offer"}
+                  </button>
+                </div>
 
                 {/* 判据：为什么能做 */}
                 <ul className="mt-2 flex flex-col gap-0.5 text-sm text-ink/80">
