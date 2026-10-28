@@ -8,6 +8,17 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { getTodayAction, type TodayData } from "@/lib/api/today-actions";
 
+/** 测试阶段 → 中文标签与颜色（与 test-verdict.ts 的 stage 一一对应）。 */
+const STAGE_LABEL: Record<string, { text: string; cls: string }> = {
+  not_started: { text: "未开始", cls: "text-ink/50" },
+  no_delivery: { text: "没拿到量", cls: "text-amber-700" },
+  too_early: { text: "样本不足", cls: "text-ink/50" },
+  failing: { text: "该停", cls: "text-red-600" },
+  promising: { text: "有苗头", cls: "text-emerald-700" },
+  winner: { text: "可扩量", cls: "text-emerald-700 font-medium" },
+  inconclusive: { text: "待定", cls: "text-ink/50" },
+};
+
 export default function TodayPage() {
   const [data, setData] = useState<TodayData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -71,17 +82,32 @@ export default function TodayPage() {
             待测 · {counts.go} 个
           </h2>
           <ul className="mt-2 flex flex-col gap-1 text-sm">
-            {toTest.map((o) => (
-              <li key={o.id} className="flex items-center justify-between gap-3">
-                <span className="truncate">{o.name}</span>
-                <Link
-                  href="/offers"
-                  className="shrink-0 rounded-lg border border-ink/15 px-2 py-0.5 text-xs text-ink/70 hover:bg-ink/5"
-                >
-                  去生成关键词
-                </Link>
-              </li>
-            ))}
+            {toTest.map((o) => {
+              const st = o.test ? STAGE_LABEL[o.test.stage] : undefined;
+              return (
+                <li key={o.id} className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate">{o.name}</div>
+                    {o.test && (
+                      <div className="mt-0.5 text-xs text-ink/60">
+                        <span className={st?.cls ?? "text-ink/60"}>
+                          {st?.text ?? o.test.stage}
+                        </span>
+                        {o.test.reason && (
+                          <span className="ml-1 text-ink/50">{o.test.reason}</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <Link
+                    href="/offers"
+                    className="shrink-0 rounded-lg border border-ink/15 px-2 py-0.5 text-xs text-ink/70 hover:bg-ink/5"
+                  >
+                    去生成关键词
+                  </Link>
+                </li>
+              );
+            })}
           </ul>
           {counts.go > toTest.length && (
             <p className="mt-2 text-xs text-ink/50">

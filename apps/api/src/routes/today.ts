@@ -16,6 +16,8 @@ import {
   type SessionAuthInfo,
 } from "../auth/sessions.js";
 import { calibrateFromArchives } from "../services/calibration.js";
+import { deriveCommissionPerSaleUsd } from "../services/offer-priority.js";
+import { judgeTestStage } from "../services/test-verdict.js";
 
 export interface TodayRouteDeps {
   prisma: PrismaClient;
@@ -44,10 +46,24 @@ export async function registerTodayRoutes(
     // 足够，且避免 groupBy 在不同 fake 上的兼容问题。
     const offers = (await deps.prisma.offer.findMany({
       where: { tenantId, deletedAt: null, archivedAt: null },
-      select: { id: true, name: true, prescreenVerdict: true },
+      select: {
+        id: true,
+        name: true,
+        prescreenVerdict: true,
+        commissionValue: true,
+        commissionType: true,
+        avgPrice: true,
+      },
       orderBy: { updatedAt: "desc" },
       take: 2000,
-    })) as Array<{ id: string; name: string; prescreenVerdict: string | null }>;
+    })) as Array<{
+      id: string;
+      name: string;
+      prescreenVerdict: string | null;
+      commissionValue: unknown;
+      commissionType: string | null;
+      avgPrice: unknown;
+    }>;
 
     let go = 0;
     let unknown = 0;
@@ -92,6 +108,7 @@ export async function registerTodayRoutes(
         offerName: true,
         epc: true,
         clicks: true,
+        conversions: true,
         revenue: true,
         spend: true,
       },
@@ -102,6 +119,7 @@ export async function registerTodayRoutes(
       offerName: string;
       epc: number | null;
       clicks: number | null;
+      conversions: number | null;
       revenue: number | null;
       spend: number | null;
     }>;
@@ -116,6 +134,69 @@ export async function registerTodayRoutes(
       }))
     );
 
+    // 每个待测 offer 的测试阶段：小额测试 → 看到结果 → 扩量。
+    // 用该 offer 的归档聚合算实测 CPC，再推保本 CVR，最后交给判定器。
+    const aggByOffer = new Map<
+      string,
+      { clicks: number; spend: number; conversions: number; revenue: number }
+    >();
+    for (const a of archives) {
+      if (!a.offerId) continue;
+      const cur = aggByOffer.get(a.offerId) ?? {
+        clicks: 0,
+        spend: 0,
+        conversions: 0,
+        revenue: 0,
+      };
+      cur.clicks += Number(a.clicks ?? 0) || 0;
+      cur.spend += Number(a.spend ?? 0) || 0;
+      cur.conversions += Number(a.conversions ?? 0) || 0;
+      cur.revenue += Number(a.revenue ?? 0) || 0;
+      aggByOffer.set(a.offerId, cur);
+    }
+    const offerById = new Map(offers.map((o) => [o.id, o]));
+    const toTestWithStage = toTest.map((o) => {
+      const agg = aggByOffer.get(o.id) ?? {
+        clicks: 0,
+        spend: 0,
+        conversions: 0,
+        revenue: 0,
+      };
+      const row = offerById.get(o.id);
+      const payoutUsd = row
+        ? deriveCommissionPerSaleUsd({
+            commissionValue: row.commissionValue,
+            commissionType: row.commissionType,
+            avgPrice: row.avgPrice,
+          })
+        : null;
+      const cpc = agg.clicks > 0 ? agg.spend / agg.clicks : null;
+      const netPayout =
+        payoutUsd != null && payoutUsd > 0
+          ? payoutUsd * (1 - 0.15) * (1 - 0.05)
+          : null;
+      const breakevenCvrPct =
+        netPayout != null && netPayout > 0 && cpc != null
+          ? (cpc / netPayout) * 100
+          : null;
+      const verdict = judgeTestStage({
+        clicks: agg.clicks,
+        spendUsd: agg.spend,
+        conversions: agg.conversions,
+        revenueUsd: agg.revenue,
+        payoutUsd,
+        breakevenCvrPct,
+      });
+      return {
+        ...o,
+        test: {
+          stage: verdict.stage,
+          action: verdict.action,
+          reason: verdict.reasons[0] ?? "",
+        },
+      };
+    });
+
     return {
       counts: {
         total: offers.length,
@@ -124,7 +205,7 @@ export async function registerTodayRoutes(
         stop,
         notScreened,
       },
-      toTest,
+      toTest: toTestWithStage,
       recentKills,
       calibration: {
         samples: calibration.samples,

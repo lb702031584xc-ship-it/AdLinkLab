@@ -20,7 +20,16 @@ export interface TodayData {
     stop: number;
     notScreened: number;
   };
-  toTest: Array<{ id: string; name: string }>;
+  toTest: Array<{
+    id: string;
+    name: string;
+    /** 测试阶段：not_started / no_delivery / too_early / failing / promising / winner / inconclusive */
+    test?: {
+      stage: string;
+      action: string;
+      reason: string;
+    };
+  }>;
   recentKills: Array<{
     offerId: string | null;
     name: string | null;
