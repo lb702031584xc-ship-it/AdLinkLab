@@ -20,6 +20,13 @@ export interface ProfitInputs {
   refundF?: number;
   /** Shave/deduction rate as a fraction (0-1). */
   shaveF?: number;
+  /**
+   * 页面佣金 → 预期佣金的折损系数，默认 1（不折损，保持旧行为）。
+   * 传 0.6 表示「按页面佣金的六成预估」——因为顾客常买便宜变体或走
+   * Brand Halo，用页面最高佣金算保本会系统性偏乐观。
+   * 只影响显式传入的调用方，不改变其它页面的数字。
+   */
+  expectedPayoutFactor?: number;
   /** Target return ratio r = 产出 / 投入（投 1 产出 r，利润 r − 1）。如 1.5 = 投 1 产出 1.5、利润 0.5；1 = 保平。默认 2。 */
   targetReturnRatio?: number;
   /**
@@ -126,9 +133,13 @@ export function effectivePayout(
   payout: number,
   refundF = 0,
   shaveF = 0,
+  expectedPayoutFactor = 1,
 ): number {
   if (!Number.isFinite(payout) || payout <= 0) return 0;
-  return payout * (1 - clamp01(refundF)) * (1 - clamp01(shaveF));
+  const factor = Number.isFinite(expectedPayoutFactor) && expectedPayoutFactor > 0
+    ? expectedPayoutFactor
+    : 1;
+  return payout * factor * (1 - clamp01(refundF)) * (1 - clamp01(shaveF));
 }
 
 /** Earnings per click = payout × CVR. */
@@ -248,7 +259,12 @@ export function testBudgetClicks(cvrF: number): number | null {
 
 export function calcProfit(inputs: ProfitInputs): ProfitResult {
   const { payout, cpc, cvrF } = inputs;
-  const eff = effectivePayout(payout, inputs.refundF, inputs.shaveF);
+  const eff = effectivePayout(
+    payout,
+    inputs.refundF,
+    inputs.shaveF,
+    inputs.expectedPayoutFactor ?? 1
+  );
   const epc = epcFor(eff, cvrF);
   const beCpc = breakEvenCpc(cvrF, eff);
   const clicks = testBudgetClicks(cvrF);
