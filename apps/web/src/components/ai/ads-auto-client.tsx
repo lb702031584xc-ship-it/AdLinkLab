@@ -1312,7 +1312,15 @@ export function AdsAutoClient({
     if (!Number.isFinite(payout) || payout <= 0) return null;
     if (!Number.isFinite(cvrPct) || cvrPct <= 0) return null;
     if (!Number.isFinite(ratio) || ratio <= 0) return null;
-    return calcProfit({ payout, cpc: 0, cvrF: cvrPct / 100, targetReturnRatio: ratio });
+    return calcProfit({
+      payout,
+      cpc: 0,
+      cvrF: cvrPct / 100,
+      targetReturnRatio: ratio,
+      // 与投流页同一口径：页面佣金常不等于实际成交佣金（顾客会买便宜变体、
+      // 或走 Brand Halo），按六成预估，避免保本 CPC 系统性偏乐观。
+      expectedPayoutFactor: 0.6,
+    });
   })();
   const recommendedBid = plannerProfit?.maxCpcAtTargetRatio ?? null;
   const plannerBreakEven = plannerProfit?.breakEvenCpc ?? null;
