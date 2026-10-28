@@ -19,6 +19,45 @@ import { CoachToggle } from "@/components/coach/coach-toggle";
  * Authenticated app shell: sidebar nav + user footer.
  * Requires a valid session; otherwise redirects to /login.
  */
+/**
+ * 导航按「新手操作流程」排序：从左到右就是操作顺序。
+ *
+ * 只调顺序，不增删条目；不在清单里的路径排到后面并保持原相对顺序
+ * （Array.sort 是稳定排序）。这样新增页面不会因为忘记登记而被吞掉。
+ */
+const NAV_FLOW_ORDER = [
+  "/today",
+  "/start",
+  "/quickstart",
+  "/dashboard",
+  "/click-audit",
+  "/affiliate/beginner-sop",
+  "/networks",
+  "/catalog",
+  "/offers/new",
+  "/offers",
+  "/keywords/starter?tab=research",
+  "/ads/auto-create",
+  "/campaigns",
+  "/monitoring",
+  "/reports/weekly",
+  "/experiments",
+];
+
+function navRank(href: string): number {
+  const i = NAV_FLOW_ORDER.indexOf(href);
+  return i === -1 ? NAV_FLOW_ORDER.length : i;
+}
+
+function orderNavByFlow<T extends { title: string; items: { href: string }[] }>(
+  sections: T[]
+): T[] {
+  return sections.map((sec) => ({
+    ...sec,
+    items: [...sec.items].sort((a, b) => navRank(a.href) - navRank(b.href)),
+  }));
+}
+
 export default async function AppLayout({ children }: { children: ReactNode }) {
   const lang = await getLang();
   const t = getDictionary(lang);
@@ -312,7 +351,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
           </p>
         </div>
         <nav className="flex flex-1 flex-col gap-4 px-3 pb-8" aria-label="Tracks">
-          <TrackNav sections={navSections} />
+          <TrackNav sections={orderNavByFlow(navSections)} />
         </nav>
         <div className="border-t border-white/10 px-5 py-4">
           <p className="truncate text-sm font-medium text-white">{user.email}</p>
