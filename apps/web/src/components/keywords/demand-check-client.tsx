@@ -32,7 +32,7 @@ type Intent = "buy" | "review" | "compare" | "info";
  */
 type QuickVerdict = { v: "reject" | "verify"; why: string };
 
-function quickVerdict(keyword: string): QuickVerdict {
+function quickVerdict(keyword: string, seed?: string): QuickVerdict {
   const kw = (keyword || "").toLowerCase().trim();
   if (/\b(vs|versus|compare|comparison)\b/.test(kw))
     return { v: "reject", why: "对比词，落地页没有对比内容" };
@@ -42,6 +42,12 @@ function quickVerdict(keyword: string): QuickVerdict {
     return { v: "reject", why: "品类大词，竞价贵、转化低" };
   if (/^\d/.test(kw) && /\b(pa|kw|mah|psi)\b/.test(kw))
     return { v: "reject", why: "纯参数词，没人按参数搜索" };
+  // 无品牌的通用品类词：'self emptying robot vacuum mop combo' 这类，
+  // 搜的人在看 $200–500 的机器，打 $1500 的旗舰只会烧钱。
+  // 用 seed 的首个词（品牌/型号名）判断：不含它就是通用词。
+  const brandToken = (seed || "").toLowerCase().match(/[a-z0-9]{3,}/)?.[0] ?? "";
+  if (brandToken && !kw.includes(brandToken))
+    return { v: "reject", why: "无品牌通用品类词，竞价贵且产品不对口" };
   return { v: "verify", why: "需查搜索量后再决定" };
 }
 
@@ -660,19 +666,19 @@ export function DemandCheckClient({
                   </span>
                   <span
                     className={`ml-1 rounded px-1.5 py-0.5 text-[11px] ${
-                      quickVerdict(k.keyword).v === "reject"
+                      quickVerdict(k.keyword, aiProductInput).v === "reject"
                         ? "bg-red-100 text-red-700"
                         : "bg-amber-100 text-amber-800"
                     }`}
                   >
-                    {quickVerdict(k.keyword).v === "reject" ? "❌ 不投" : "⚠️ 待验证"}
+                    {quickVerdict(k.keyword, aiProductInput).v === "reject" ? "❌ 不投" : "⚠️ 待验证"}
                   </span>
                   {k.reason && (
                     <p className="truncate text-xs text-ink/50">{k.reason}</p>
                   )}
-                  {quickVerdict(k.keyword).v === "reject" && (
+                  {quickVerdict(k.keyword, aiProductInput).v === "reject" && (
                     <p className="truncate text-xs text-red-600">
-                      {quickVerdict(k.keyword).why}
+                      {quickVerdict(k.keyword, aiProductInput).why}
                     </p>
                   )}
                 </div>
