@@ -34,10 +34,20 @@ describe("pickFromCatalog", () => {
     expect(r.dropped[0].reason).toContain("无法覆盖");
   });
 
-  it("保本 CPC 高于类目 CPC → 保留", () => {
-    const r = pickFromCatalog([c()], { categoryCpcUsd: 0.3 });
+  it("保本 CPC 高于类目 CPC → 保留（按预期佣金算）", () => {
+    // 20 × 0.6(折损) × 0.8075 × 2.5% = 0.2423
+    const r = pickFromCatalog([c()], { categoryCpcUsd: 0.2 });
     expect(r.picked).toHaveLength(1);
-    expect(r.picked[0].breakevenCpcUsd).toBeCloseTo(0.4038, 4);
+    expect(r.picked[0].breakevenCpcUsd).toBeCloseTo(0.2423, 4);
+    expect(r.picked[0].expectedPayoutUsd).toBeCloseTo(12, 2);
+  });
+
+  it("预期佣金 = 页面佣金 × 0.6，保本线随之下降", () => {
+    const r = pickFromCatalog([c({ payoutUsd: 100 })], { categoryCpcUsd: 0.2 });
+    expect(r.picked[0].payoutUsd).toBe(100);
+    expect(r.picked[0].expectedPayoutUsd).toBe(60);
+    // 100 × 0.6 × 0.8075 × 2.5% = 1.2113
+    expect(r.picked[0].breakevenCpcUsd).toBeCloseTo(1.2113, 3);
   });
 
   it("不给类目 CPC 时跳过可行性判断", () => {

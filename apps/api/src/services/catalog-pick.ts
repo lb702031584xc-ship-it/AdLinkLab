@@ -58,8 +58,11 @@ export interface PickedItem {
   productId: string;
   name: string;
   brand: string | null;
+  /** 页面上的佣金（最高款）。 */
   payoutUsd: number;
-  /** 按目标 CVR 算出的保本 CPC（美元/点击）。 */
+  /** 预期每单佣金 = 页面佣金 × 折损系数；保本 CPC 用它算。 */
+  expectedPayoutUsd: number;
+  /** 按目标 CVR 与「预期佣金」算出的保本 CPC（美元/点击）。 */
   breakevenCpcUsd: number;
   countryCode: string | null;
   note: string;
@@ -94,6 +97,13 @@ const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v
 const round4 = (n: number) => Math.round(n * 10000) / 10000;
 
 export const DEFAULT_MIN_PAYOUT_USD = 12;
+/**
+ * 预期佣金折损系数。
+ * 推的是佣金最高的款，但顾客常买便宜变体，或走 Brand Halo 买别的款。
+ * 实测：推 $26 的封口机，两单平均 $17.77（68%），用推广款佣金算保本线
+ * 会系统性偏乐观。0.6 是保守值。
+ */
+export const EXPECTED_PAYOUT_FACTOR = 0.6;
 export const DEFAULT_TARGET_CVR_PCT = 2.5;
 export const DEFAULT_REJECTION = 0.15;
 export const DEFAULT_REFUND = 0.05;
@@ -146,8 +156,9 @@ export function pickFromCatalog(
       continue;
     }
 
+    const expectedPayout = payout * EXPECTED_PAYOUT_FACTOR;
     const breakeven = round4(
-      payout * (1 - rejection) * (1 - refund) * (cvr / 100)
+      expectedPayout * (1 - rejection) * (1 - refund) * (cvr / 100)
     );
     if (categoryCpc != null && categoryCpc > 0 && breakeven < categoryCpc) {
       drop(
@@ -163,6 +174,7 @@ export function pickFromCatalog(
       name: c.name,
       brand: c.brand,
       payoutUsd: payout,
+      expectedPayoutUsd: Math.round(expectedPayout * 100) / 100,
       breakevenCpcUsd: breakeven,
       countryCode: c.countryCode ?? null,
       note: `保本 CPC ${breakeven.toFixed(2)}`,
