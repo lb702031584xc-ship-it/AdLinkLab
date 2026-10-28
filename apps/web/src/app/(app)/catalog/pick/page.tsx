@@ -10,6 +10,7 @@
  *   淘汰明细（哪些被砍、砍在哪个数上）。
  */
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   catalogPickAction,
   type CatalogPickPayload,
@@ -61,6 +62,7 @@ function buildPlan(breakevenCpcUsd: number, categoryCpcUsd: number, payoutUsd: n
 }
 
 export default function CatalogPickPage() {
+  const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [data, setData] = useState<CatalogPickPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -105,7 +107,17 @@ export default function CatalogPickPage() {
   return (
     <div className="flex max-w-4xl flex-col gap-5">
       <div>
-        <h1 className="font-display text-2xl">商品库挑选</h1>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => router.back()}
+            className="rounded-lg border border-ink/15 px-2.5 py-1 text-xs text-ink/60 hover:bg-ink/5"
+            title="回到上一页（例如广告创建页）"
+          >
+            ← 返回
+          </button>
+          <h1 className="font-display text-2xl">商品库挑选</h1>
+        </div>
         <p className="mt-1 text-sm text-ink/60">
           点一下就行。系统用「单笔佣金 → 保本 CPC」和这个类目的点击成本比，
           直接给出判定、参数和下一步。
