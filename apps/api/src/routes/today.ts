@@ -109,6 +109,7 @@ export async function registerTodayRoutes(
         epc: true,
         clicks: true,
         conversions: true,
+        impressions: true,
         revenue: true,
         spend: true,
       },
@@ -120,6 +121,7 @@ export async function registerTodayRoutes(
       epc: number | null;
       clicks: number | null;
       conversions: number | null;
+      impressions: number | null;
       revenue: number | null;
       spend: number | null;
     }>;
@@ -138,7 +140,13 @@ export async function registerTodayRoutes(
     // 用该 offer 的归档聚合算实测 CPC，再推保本 CVR，最后交给判定器。
     const aggByOffer = new Map<
       string,
-      { clicks: number; spend: number; conversions: number; revenue: number }
+      {
+        clicks: number;
+        spend: number;
+        conversions: number;
+        impressions: number;
+        revenue: number;
+      }
     >();
     for (const a of archives) {
       if (!a.offerId) continue;
@@ -146,11 +154,13 @@ export async function registerTodayRoutes(
         clicks: 0,
         spend: 0,
         conversions: 0,
+        impressions: 0,
         revenue: 0,
       };
       cur.clicks += Number(a.clicks ?? 0) || 0;
       cur.spend += Number(a.spend ?? 0) || 0;
       cur.conversions += Number(a.conversions ?? 0) || 0;
+      cur.impressions += Number(a.impressions ?? 0) || 0;
       cur.revenue += Number(a.revenue ?? 0) || 0;
       aggByOffer.set(a.offerId, cur);
     }
@@ -160,6 +170,7 @@ export async function registerTodayRoutes(
         clicks: 0,
         spend: 0,
         conversions: 0,
+        impressions: 0,
         revenue: 0,
       };
       const row = offerById.get(o.id);
@@ -183,6 +194,7 @@ export async function registerTodayRoutes(
         clicks: agg.clicks,
         spendUsd: agg.spend,
         conversions: agg.conversions,
+        impressions: agg.impressions,
         revenueUsd: agg.revenue,
         payoutUsd,
         breakevenCvrPct,

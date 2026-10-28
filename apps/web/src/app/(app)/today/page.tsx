@@ -17,6 +17,7 @@ const STAGE_LABEL: Record<string, { text: string; cls: string }> = {
   promising: { text: "有苗头", cls: "text-emerald-700" },
   winner: { text: "可扩量", cls: "text-emerald-700 font-medium" },
   inconclusive: { text: "待定", cls: "text-ink/50" },
+  low_ctr: { text: "文案不行", cls: "text-amber-700" },
 };
 
 export default function TodayPage() {

@@ -93,3 +93,49 @@ describe("judgeTestStage", () => {
     expect(r.reasons[0]).toContain("保本 CVR");
   });
 });
+
+
+describe("CTR 早期信号", () => {
+  it("曝光够但 CTR < 1% → low_ctr，建议修文案而不是停投", () => {
+    const r = judgeTestStage({
+      impressions: 2000,
+      clicks: 10, // CTR 0.5%
+      spendUsd: 12,
+      conversions: 0,
+      revenueUsd: 0,
+    });
+    expect(r.stage).toBe("low_ctr");
+    expect(r.action).toBe("fix_creatives");
+    expect(r.ctrPct).toBeCloseTo(0.5, 6);
+    expect(r.reasons[0]).toContain("不是 offer 本身");
+  });
+
+  it("曝光不足时不下 CTR 结论（样本太小）", () => {
+    const r = judgeTestStage({
+      impressions: 100,
+      clicks: 0,
+      spendUsd: 5,
+      conversions: 0,
+      revenueUsd: 0,
+    });
+    // 点击 <50 先走 no_delivery
+    expect(r.stage).toBe("no_delivery");
+  });
+
+  it("CTR 正常时照常走点击门槛判定", () => {
+    const r = judgeTestStage({
+      impressions: 2000,
+      clicks: 100, // CTR 5%
+      spendUsd: 120,
+      conversions: 1,
+      revenueUsd: 20,
+    });
+    expect(r.stage).toBe("too_early");
+    expect(r.ctrPct).toBeCloseTo(5, 6);
+  });
+
+  it("没有曝光数据时 ctrPct 为 null，不假装知道", () => {
+    const r = judgeTestStage({ clicks: 300, spendUsd: 100, conversions: 0, revenueUsd: 0 });
+    expect(r.ctrPct).toBeNull();
+  });
+});
