@@ -61,6 +61,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         {
           title: s.start,
                     items: [
+            { href: "/today", label: lang === "en" ? "Today" : "今天" },
             { href: "/dashboard", label: t.common.nav.dashboard },
             { href: "/quickstart", label: t.quickstart.pageTitle },
           ],

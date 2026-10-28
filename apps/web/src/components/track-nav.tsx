@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -37,6 +37,50 @@ interface TrackNavProps {
   activePath?: string;
 }
 
+/**
+ * 导航分层（2026-10-28）。
+ *
+ * 系统有 44 个一级入口，新手跑 3 个 offer 只用到其中 4 个。这里按「什么时候
+ * 用得上」分三层，默认只显示第 0 层：
+ *   0 = 决策（每天用）：选品、关键词、体检入口
+ *   1 = 运营（跑过几个 offer 才用）：复盘、止损、死链、佣金监控、搜索词…
+ *   2 = 其余全部（工程/运维/规模化）
+ * 未列出的 href 一律归第 2 层——宁可默认收起，也不要让新手面对 40 个入口。
+ * 分层是 UX 分级，不是权限：随时可以一键「显示全部」。
+ */
+const NAV_LEVEL_BY_HREF: Record<string, 0 | 1 | 2> = {
+  "/today": 0,
+  "/dashboard": 0,
+  "/quickstart": 0,
+  "/offers": 0,
+  "/offers/new": 0,
+  "/networks": 0,
+  "/catalog": 0,
+  "/keywords/starter": 0,
+
+  "/reports/weekly": 1,
+  "/kill-rules": 1,
+  "/link-health": 1,
+  "/payout-watch": 1,
+  "/search-terms": 1,
+  "/conversions": 1,
+  "/landing-pages": 1,
+  "/cost-ledger": 1,
+  "/clicks": 1,
+  "/campaigns": 1,
+  "/ads/auto-create": 1,
+  "/ai/blueprint": 1,
+  "/tracking-links": 1,
+};
+
+export const NAV_LEVEL_STORAGE_KEY = "adll_nav_level";
+
+/** href → 层级；只比路径部分，忽略 ?tab= 之类的查询串。 */
+export function navLevelOfHref(href: string): 0 | 1 | 2 {
+  const base = href.split("?")[0];
+  return NAV_LEVEL_BY_HREF[base] ?? 2;
+}
+
 /** Index of the first section containing the path (exact or nested route). */
 function sectionIndexForPath(sections: TrackNavSection[], path: string): number {
   return sections.findIndex((section) =>
@@ -67,6 +111,26 @@ export function TrackNav({ sections, activePath }: TrackNavProps) {
   const browserPath = usePathname();
   const path = activePath ?? browserPath;
 
+  // 默认第 0 层（新手）。localStorage 只是本机偏好，不涉及权限。
+  const [level, setLevel] = useState<0 | 1 | 2>(0);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(NAV_LEVEL_STORAGE_KEY);
+      const n = Number(raw);
+      if (n === 1 || n === 2) setLevel(n);
+    } catch {
+      // 隐私模式下读不到就保持默认，不影响使用。
+    }
+  }, []);
+  const changeLevel = (next: 0 | 1 | 2) => {
+    setLevel(next);
+    try {
+      localStorage.setItem(NAV_LEVEL_STORAGE_KEY, String(next));
+    } catch {
+      // 忽略写入失败
+    }
+  };
+
   const [expanded, setExpanded] = useState<number[]>(() => {
     const initial = sectionIndexForPath(sections, path);
     const pinned = sections
@@ -81,6 +145,48 @@ export function TrackNav({ sections, activePath }: TrackNavProps) {
     setExpanded((prev) =>
       prev.includes(index) ? prev.filter((i) => i !== index) : [...prev, index],
     );
+
+  // 第 0/1 层：扁平短列表（这才是「收窄」的体感）。
+  // 第 2 层：回到原来的分区折叠导航。
+  if (level < 2) {
+    const seen = new Set<string>();
+    const flat = sections
+      .flatMap((s) => s.items)
+      .filter((item) => navLevelOfHref(item.href) <= level)
+      .filter((item) => {
+        if (seen.has(item.href)) return false;
+        seen.add(item.href);
+        return true;
+      });
+    return (
+      <div className="flex flex-col gap-0.5">
+        {flat.map((item) => {
+          const active = isActiveItem(item, path);
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              aria-current={active ? "page" : undefined}
+              className={`rounded-md px-3 py-2 text-sm transition ${
+                active
+                  ? "bg-white/15 font-medium text-white"
+                  : "text-mist/85 hover:bg-white/10 hover:text-white"
+              }`}
+            >
+              {item.label}
+            </Link>
+          );
+        })}
+        <button
+          type="button"
+          onClick={() => changeLevel(level === 0 ? 1 : 2)}
+          className="mt-3 rounded-md px-3 py-2 text-left text-xs text-mist/50 transition hover:bg-white/5 hover:text-mist/80"
+        >
+          {level === 0 ? "显示更多（运营模块）" : "显示全部功能"}
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-1">
@@ -152,6 +258,13 @@ export function TrackNav({ sections, activePath }: TrackNavProps) {
           </div>
         );
       })}
+      <button
+        type="button"
+        onClick={() => changeLevel(0)}
+        className="mt-3 rounded-md px-3 py-2 text-left text-xs text-mist/50 transition hover:bg-white/5 hover:text-mist/80"
+      >
+        只看核心（新手视图）
+      </button>
     </div>
   );
 }
