@@ -73,6 +73,7 @@ const NAV_LEVEL_BY_HREF: Record<string, 0 | 1 | 2> = {
   "/ads/auto-create": 1,
   "/ai/blueprint": 1,
   "/tracking-links": 1,
+  "/click-audit": 1,
 };
 
 export const NAV_LEVEL_STORAGE_KEY = "adll_nav_level";

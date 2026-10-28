@@ -273,6 +273,11 @@ export async function registerRoutes(
       "./offer-calibration.js"
     );
     await registerOfferCalibrationRoutes(app, { prisma: services.prisma });
+    // 点击对账：Google 点击数 vs 联盟点击数
+    const { registerClickReconcileRoutes } = await import(
+      "./click-reconcile.js"
+    );
+    await registerClickReconcileRoutes(app, { prisma: services.prisma });
     // 「今天」：新手一屏（待测 / 该停 / 缺证据 / 校准）
     const { registerTodayRoutes } = await import("./today.js");
     await registerTodayRoutes(app, { prisma: services.prisma });

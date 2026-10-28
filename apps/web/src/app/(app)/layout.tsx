@@ -66,6 +66,10 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
               href: "/start",
               label: lang === "en" ? "Before you start" : "开始前",
             },
+            {
+              href: "/click-audit",
+              label: lang === "en" ? "Click audit" : "点击对账",
+            },
             { href: "/dashboard", label: t.common.nav.dashboard },
             { href: "/quickstart", label: t.quickstart.pageTitle },
           ],
