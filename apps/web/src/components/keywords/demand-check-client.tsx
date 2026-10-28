@@ -237,7 +237,9 @@ export function DemandCheckClient({
   const [bulkText, setBulkText] = useState("");
 
   // AI 推荐关键词
-  const [aiProductInput, setAiProductInput] = useState(aiProduct ?? "");
+  const [aiProductInput, setAiProductInput] = useState(
+    aiProduct ?? offerName ?? ""
+  );
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiKeywords, setAiKeywords] = useState<RecommendedKeyword[]>([]);
@@ -356,6 +358,7 @@ export function DemandCheckClient({
   // offer 选择变化时同步到 AI 输入框
   useEffect(() => {
     if (aiProduct) setAiProductInput(aiProduct);
+    else if (offerName && !aiProductInput.trim()) setAiProductInput(offerName);
   }, [aiProduct]);
 
   const onAiRecommend = async () => {
