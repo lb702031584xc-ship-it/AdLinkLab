@@ -183,6 +183,7 @@ async function loadPreset(
     minPrice: unknown;
     maxPrice: unknown;
     minScore: number | null;
+    mode: string | null;
   } | null;
   if (!row) return { ...DEFAULT_PRESET };
   return {
@@ -192,6 +193,9 @@ async function loadPreset(
     minPrice: num(row.minPrice),
     maxPrice: num(row.maxPrice),
     minScore: row.minScore,
+    // 宽松型（mode="loose"）不走预设阈值：价格 ≥ $80 或佣金 > $5 即推荐。
+    // 漏读 mode 会让这条链路永远按常规口径算，和 /catalog/screen 得出两种结果。
+    mode: row.mode === "loose" ? "loose" : "regular",
   };
 }
 
