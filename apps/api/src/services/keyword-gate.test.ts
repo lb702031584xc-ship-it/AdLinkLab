@@ -39,9 +39,26 @@ describe("assessKeyword", () => {
   });
 
   it("低价词 + 低客单产品 → 放行", () => {
-    const r = assessKeyword("best affordable chamber vacuum sealer", {
+    const r = assessKeyword("affordable chamber vacuum sealer", {
       priceUsd: 60,
     });
+    expect(r.verdict).toBe("verify");
+  });
+
+  it("品类大词且无品牌 → 拒绝", () => {
+    const r = assessKeyword("best robot vacuum 2026");
+    expect(r.verdict).toBe("reject");
+    expect(r.codes).toContain("BIG_HEAD_TERM");
+  });
+
+  it("纯参数词且无品牌 → 拒绝", () => {
+    const r = assessKeyword("36000 pa robot vacuum");
+    expect(r.verdict).toBe("reject");
+    expect(r.codes).toContain("SPEC_PARAM_TERM");
+  });
+
+  it("含品牌的规格长尾不被误伤", () => {
+    const r = assessKeyword("vevor 260w vacuum sealer", { brandName: "VEVOR" });
     expect(r.verdict).toBe("verify");
   });
 
