@@ -202,6 +202,22 @@ export function OfferPrescreenBar({
     epcSourceLabel: string;
     paidLayerSkipped: string;
     paidLayerSkippedHint: string;
+    beginnerTitle: string;
+    beginnerHint: string;
+    beginnerBudget: string;
+    beginnerCpc: string;
+    beginnerPayout: string;
+    beginnerPayback: string;
+    beginnerStop: string;
+    beginnerBreakeven: string;
+    beginnerNeededClicks: string;
+    beginnerNeededBudget: string;
+    beginnerGo: string;
+    beginnerMarginal: string;
+    beginnerNo: string;
+    beginnerNeedAnswers: string;
+    advancedOn: string;
+    advancedOff: string;
   };
   offers: Array<{ id: string; name: string }>;
 }) {
@@ -231,6 +247,39 @@ export function OfferPrescreenBar({
     >
   >({});
   const [paidNotice, setPaidNotice] = useState<string | null>(null);
+  // 新手体检：6 个问题。答不全就不放行到选品区——这就是
+  // 「答不上来的人不该看到 90% 界面」的落地。
+  const [beginner, setBeginner] = useState({
+    budget: "",
+    cpc: "",
+    payout: "",
+    payback: "",
+    stop: "",
+  });
+  const [advanced, setAdvanced] = useState(false);
+  const beginnerReady = Object.values(beginner).every((v) => v.trim() !== "");
+  // 拒单率 / 退款率按保守值扣减；只在体检里用，不写回任何数据。
+  const beginnerAssess = (() => {
+    if (!beginnerReady) return null;
+    const budget = Number(beginner.budget);
+    const cpc = Number(beginner.cpc);
+    const payout = Number(beginner.payout);
+    if (!(budget > 0) || !(cpc > 0) || !(payout > 0)) return null;
+    const netPayout = payout * (1 - 0.15) * (1 - 0.05);
+    const breakevenCvr = (cpc / netPayout) * 100;
+    // 判断 CVR 至少要看 100 次转化；按 2.5% 算 = 4000 点击。
+    const neededClicks = Math.ceil(100 / 0.025);
+    const neededBudget = neededClicks * cpc;
+    const level: "go" | "marginal" | "no" =
+      breakevenCvr <= 5 ? "go" : breakevenCvr <= 10 ? "marginal" : "no";
+    return {
+      breakevenCvr,
+      neededClicks,
+      neededBudget,
+      level,
+      budgetEnough: budget >= neededBudget,
+    };
+  })();
   const [looseDetails, setLooseDetails] = useState<LooseScreenResult | null>(
     null
   );
@@ -445,7 +494,69 @@ export function OfferPrescreenBar({
             </label>
           </div>
           <p className="text-xs text-ink/60">{dict.looseSeasonalHint}</p>
-          {selectedOffers.map((o) => {
+          {/* ── 新手体检：6 问 ── */}
+          <div className="rounded-lg border border-ink/10 bg-white/60 p-3">
+            <p className="text-sm font-medium">{dict.beginnerTitle}</p>
+            <p className="mt-0.5 text-xs text-ink/60">{dict.beginnerHint}</p>
+            <div className="mt-2 flex flex-wrap items-center gap-3 text-sm">
+              {([
+                ["budget", dict.beginnerBudget],
+                ["cpc", dict.beginnerCpc],
+                ["payout", dict.beginnerPayout],
+                ["payback", dict.beginnerPayback],
+                ["stop", dict.beginnerStop],
+              ] as Array<[keyof typeof beginner, string]>).map(([key, label]) => (
+                <label key={key} className="text-ink/60">
+                  {label}{" "}
+                  <input
+                    value={beginner[key]}
+                    onChange={(ev) =>
+                      setBeginner((b) => ({ ...b, [key]: ev.target.value }))
+                    }
+                    inputMode={key === "stop" ? "text" : "decimal"}
+                    className="w-24 rounded-lg border border-ink/10 bg-white px-2 py-1 text-sm text-ink"
+                  />
+                </label>
+              ))}
+            </div>
+            {beginnerAssess && (
+              <div className="mt-2 flex flex-wrap items-center gap-3 text-sm">
+                <span
+                  className={
+                    beginnerAssess.level === "go"
+                      ? "font-medium text-emerald-700"
+                      : beginnerAssess.level === "marginal"
+                        ? "font-medium text-amber-700"
+                        : "font-medium text-red-600"
+                  }
+                >
+                  {beginnerAssess.level === "go"
+                    ? dict.beginnerGo
+                    : beginnerAssess.level === "marginal"
+                      ? dict.beginnerMarginal
+                      : dict.beginnerNo}
+                </span>
+                <span className="text-ink/70">
+                  {dict.beginnerBreakeven} {beginnerAssess.breakevenCvr.toFixed(1)}%
+                </span>
+                <span className="text-ink/60">
+                  {dict.beginnerNeededClicks} {beginnerAssess.neededClicks}
+                </span>
+                <span className="text-ink/60">
+                  {dict.beginnerNeededBudget} ${beginnerAssess.neededBudget.toFixed(0)}
+                </span>
+                {!beginnerAssess.budgetEnough && (
+                  <span className="text-xs text-red-600">
+                    预算不足：至少需要 ${beginnerAssess.neededBudget.toFixed(0)} 才能判断这个 offer
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+          {!beginnerReady && (
+            <p className="text-sm text-amber-700">{dict.beginnerNeedAnswers}</p>
+          )}
+          {beginnerReady && selectedOffers.map((o) => {
             const e = evidence[o.id] ?? { seasonal: "", stock: "", traffic: "" };
             return (
               <div key={o.id} className="flex flex-wrap items-center gap-2 text-sm">
@@ -480,6 +591,15 @@ export function OfferPrescreenBar({
                     <option value="not_winnable">{dict.looseTrafficNotWinnable}</option>
                   </select>
                 </label>
+                <button
+                  type="button"
+                  onClick={() => setAdvanced((v) => !v)}
+                  className="rounded-lg border border-ink/10 px-2 py-1 text-xs text-ink/60"
+                >
+                  {advanced ? dict.advancedOff : dict.advancedOn}
+                </button>
+                {advanced && (
+                  <>
                 {/* 以下为经济性与需求证据：空着就是 unknown，不会被当成 0 */}
                 <label className="text-ink/60">
                   {dict.looseEpc}{" "}
@@ -535,6 +655,8 @@ export function OfferPrescreenBar({
                     className="w-16 rounded-lg border border-ink/10 bg-white px-2 py-1 text-sm text-ink"
                   />
                 </label>
+                  </>
+                )}
               </div>
             );
           })}
