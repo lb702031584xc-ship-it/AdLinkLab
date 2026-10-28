@@ -3370,8 +3370,29 @@ const [sort, setSort] = useState("commission_desc");
           onPointerLeave={endTableDrag}
           className="mt-2 cursor-grab overflow-x-auto rounded-xl border border-ink/10 active:cursor-grabbing"
         >
+          <style>{`
+            .cat-compact col:nth-child(3),
+            .cat-compact col:nth-child(4),
+            .cat-compact col:nth-child(8),
+            .cat-compact col:nth-child(9),
+            .cat-compact col:nth-child(10) {
+              width: 0 !important;
+            }
+            .cat-compact th:nth-child(3),
+            .cat-compact th:nth-child(4),
+            .cat-compact th:nth-child(8),
+            .cat-compact th:nth-child(9),
+            .cat-compact th:nth-child(10),
+            .cat-compact td:nth-child(3),
+            .cat-compact td:nth-child(4),
+            .cat-compact td:nth-child(8),
+            .cat-compact td:nth-child(9),
+            .cat-compact td:nth-child(10) {
+              display: none !important;
+            }
+          `}</style>
           <table
-            className="table-fixed border-collapse text-sm"
+            className="cat-compact table-fixed border-collapse text-sm"
             style={{
               width: "3024px",
               fontFamily:
