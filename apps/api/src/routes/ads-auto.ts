@@ -502,6 +502,10 @@ export async function registerAdsAutoRoutes(
       geoTargets?: unknown;
       negativeKeywords?: unknown;
       adSchedules?: unknown;
+      /** 计算保本 CPC 用的目标转化率（%），缺省 2.5。 */
+      targetCvrPct?: unknown;
+      /** 显式接受超保本出价（true 才放行）。 */
+      allowOverBreakeven?: unknown;
     };
     const planId = asTrimmedString(body.planId);
     if (!planId || !UUID_RE.test(planId)) {
@@ -610,6 +614,52 @@ export async function registerAdsAutoRoutes(
             plan.campaign.dailyBudget.currency,
           dataQuality: "PREDICTED",
         };
+      }
+    }
+
+    // 出价保本硬约束（2026-10-28）：关键词推荐算出的保本 CPC 必须在这里
+    // 真正生效——否则「算完不读」等于没算。
+    // 佣金未知时不拦截（算不出来就不装能算）；只有显式传
+    // allowOverBreakeven: true 才放行，放行意味着调用方确认接受亏损。
+    {
+      const effectiveMaxCpc = plan.adGroups.reduce((mx, g) => {
+        const amt = Number(g.group.maxCpc?.amount);
+        return Number.isFinite(amt) && amt > mx ? amt : mx;
+      }, 0);
+      const { checkBidAgainstBreakeven } = await import(
+        "../services/bid-guard.js"
+      );
+      const { deriveCommissionPerSaleUsd } = await import(
+        "../services/offer-priority.js"
+      );
+      let payoutUsd: number | null = null;
+      if (plan.offerId) {
+        const offerRow = await prisma.offer.findFirst({
+          where: { id: plan.offerId, tenantId: info.tenantId },
+          select: {
+            commissionValue: true,
+            commissionType: true,
+            avgPrice: true,
+          },
+        });
+        if (offerRow) {
+          payoutUsd = deriveCommissionPerSaleUsd({
+            commissionValue: offerRow.commissionValue,
+            commissionType: offerRow.commissionType,
+            avgPrice: offerRow.avgPrice,
+          });
+        }
+      }
+      const guard = checkBidAgainstBreakeven({
+        maxCpcUsd: effectiveMaxCpc > 0 ? effectiveMaxCpc : null,
+        payoutUsd,
+        targetCvrPct:
+          typeof body.targetCvrPct === "number" ? body.targetCvrPct : undefined,
+      });
+      if (!guard.allowed && body.allowOverBreakeven !== true) {
+        throw new ValidationError(
+          `${guard.reason}。确认接受该风险再提交：传 allowOverBreakeven: true`
+        );
       }
     }
 
