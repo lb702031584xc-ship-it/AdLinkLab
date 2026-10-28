@@ -116,7 +116,9 @@ function errText(err: unknown): string {
 }
 
 /** 商品列表排序选择的 localStorage 键（变更即写回，下次进页恢复）。 */
-const SORT_STORAGE_KEY = "catalog:products-sort";
+// v2：默认排序从「推荐分降序」改为「单笔佣金降序」，换键让旧选择失效一次。
+// 之后用户手动改排序仍会被记住。
+const SORT_STORAGE_KEY = "catalog:products-sort:v2";
 
 function readStoredSort(): string | null {
   try {
@@ -1781,7 +1783,9 @@ export function CatalogClient({
   const [onlyRecommended, setOnlyRecommended] = useState(false);
   const [applyPreset, setApplyPreset] = useState(true);
   const [presetExcluded, setPresetExcluded] = useState(0);
-  const [sort, setSort] = useState("id_desc");
+  // 默认按单笔佣金降序：佣金决定保本 CPC，是选品第一眼要看的数。
+// 未知佣金排后（后端全量内存排序）。
+const [sort, setSort] = useState("commission_desc");
   // 排序选择持久化：挂载后从 localStorage 恢复（不在 useState 初始化里读——
   // 服务端渲染没有 window，读了会 hydration 不一致）；每次变更写回。
   useEffect(() => {
