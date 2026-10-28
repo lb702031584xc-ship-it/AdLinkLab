@@ -52,7 +52,7 @@ describe("pickFromCatalog", () => {
 
   it("同品牌只留 payout 最高的一个", () => {
     const r = pickFromCatalog([
-      c({ productId: "a", brand: "VEVOR", payoutUsd: 9.53, name: "Heater" }),
+      c({ productId: "a", brand: "VEVOR", payoutUsd: 20, name: "Heater" }),
       c({ productId: "b", brand: "VEVOR", payoutUsd: 26, name: "Sealer" }),
     ]);
     expect(r.picked.map((x) => x.productId)).toEqual(["b"]);
