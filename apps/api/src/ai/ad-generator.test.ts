@@ -204,6 +204,16 @@ describe("validateAdPlanUrlDraft", () => {
     ).toThrow(AiError);
   });
 
+  it("truncates over-long RSA display paths to 15 chars instead of rejecting", () => {
+    // 2026-10-28 Qrevo Edge 3 Pro：path2 超长直到 Google 拒登才暴露。
+    const draft = validateAdPlanUrlDraft(
+      validDraft({ path1: "a-very-long-path-segment", path2: "qrevo-edge-3-pro" })
+    );
+    expect(draft.path1!.length).toBeLessThanOrEqual(15);
+    expect(draft.path2!.length).toBeLessThanOrEqual(15);
+    expect(draft.path2).toBe("qrevo-edge-3-pr");
+  });
+
   it("truncates over-long headlines at a word boundary instead of rejecting", () => {
     const bad = headlines(15);
     bad[0] = "Max and Lily Twin Over Twin Bunk Bed"; // 35 chars
