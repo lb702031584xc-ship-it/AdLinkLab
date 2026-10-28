@@ -20,6 +20,31 @@ import { CapturePicker } from "@/components/ai/capture-picker";
 type Trend = "up" | "flat" | "down";
 type Competition = "low" | "medium" | "high";
 type Intent = "buy" | "review" | "compare" | "info";
+/**
+ * 前端轻量判定：与后端 keyword-gate 的核心规则同口径，让卡片当场就能标出
+ * 「能不能投」，不用回头问人。后端仍以 keyword-gate 为准，这里只是即时提示。
+ *
+ * 判据只用不依赖上下文的几条：
+ *   - vs / compare        → 落地页没有对比内容
+ *   - discount / coupon   → 页面没有优惠
+ *   - 以 best/top 开头     → 品类大词（品牌词几乎都以品牌开头）
+ *   - 以数字开头且带单位   → 纯参数词（没人按参数搜索）
+ */
+type QuickVerdict = { v: "reject" | "verify"; why: string };
+
+function quickVerdict(keyword: string): QuickVerdict {
+  const kw = (keyword || "").toLowerCase().trim();
+  if (/\b(vs|versus|compare|comparison)\b/.test(kw))
+    return { v: "reject", why: "对比词，落地页没有对比内容" };
+  if (/\b(discount|coupon|promo|voucher|deal|deals)\b/.test(kw))
+    return { v: "reject", why: "折扣词，页面没有优惠" };
+  if (/^(best|top|cheapest|affordable)\b/.test(kw))
+    return { v: "reject", why: "品类大词，竞价贵、转化低" };
+  if (/^\d/.test(kw) && /\b(pa|kw|mah|psi)\b/.test(kw))
+    return { v: "reject", why: "纯参数词，没人按参数搜索" };
+  return { v: "verify", why: "需查搜索量后再决定" };
+}
+
 export type DemandVerdict = "good" | "caution" | "bad";
 
 export interface DemandRow {
@@ -633,8 +658,22 @@ export function DemandCheckClient({
                   >
                     {k.source === "capture" ? `📥 ${d.sourceCapture}` : `🤖 ${d.sourceAi}`}
                   </span>
+                  <span
+                    className={`ml-1 rounded px-1.5 py-0.5 text-[11px] ${
+                      quickVerdict(k.keyword).v === "reject"
+                        ? "bg-red-100 text-red-700"
+                        : "bg-amber-100 text-amber-800"
+                    }`}
+                  >
+                    {quickVerdict(k.keyword).v === "reject" ? "❌ 不投" : "⚠️ 待验证"}
+                  </span>
                   {k.reason && (
                     <p className="truncate text-xs text-ink/50">{k.reason}</p>
+                  )}
+                  {quickVerdict(k.keyword).v === "reject" && (
+                    <p className="truncate text-xs text-red-600">
+                      {quickVerdict(k.keyword).why}
+                    </p>
                   )}
                 </div>
                 <button
