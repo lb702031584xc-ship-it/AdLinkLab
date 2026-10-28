@@ -32,6 +32,41 @@ type Intent = "buy" | "review" | "compare" | "info";
  */
 type QuickVerdict = { v: "reject" | "verify"; why: string };
 
+/** 型号裸词里该跳过的修饰。 */
+const CORE_SKIP = new Set(["new", "latest", "updated", "the", "for", "with", "and", "of", "in", "on", "by"]);
+/** 遇到品类词就停：型号名通常到此为止。 */
+const CORE_STOP = new Set([
+  "robot", "vacuum", "vacuums", "mop", "mopping", "cleaner", "machine",
+  "heater", "sealer", "station", "kitchen", "appliance", "cleaners",
+  "washer", "dryer", "purifier", "humidifier",
+]);
+
+/**
+ * 从 seed 推出「型号裸词」：AI 只会在裸词上加修饰，默认你已经有裸词了。
+ * 例：roborock 2026 new qrevo edge 3 pro robot vacuum and mop
+ *     → [roborock qrevo edge 3 pro] / [qrevo edge 3 pro] / [roborock edge 3 pro]
+ */
+function coreVariants(seed: string): string[] {
+  const raw = (seed || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  if (raw.length < 2) return [];
+  const core: string[] = [];
+  for (const t of raw) {
+    if (/^\d{4}$/.test(t)) continue; // 年份
+    if (CORE_SKIP.has(t)) continue;
+    if (CORE_STOP.has(t)) break; // 品类词处截断
+    core.push(t);
+  }
+  if (core.length < 2) return [];
+  const full = core.join(" ");
+  const noBrand = core.slice(1).join(" ");
+  const tail = core.length >= 4 ? [core[0], ...core.slice(-3)].join(" ") : "";
+  return [...new Set([full, noBrand, tail].filter((x) => x && x.split(" ").length >= 2))].slice(0, 3);
+}
+
 function quickVerdict(keyword: string, seed?: string): QuickVerdict {
   const kw = (keyword || "").toLowerCase().trim();
   if (/\b(vs|versus|compare|comparison)\b/.test(kw))
@@ -644,6 +679,36 @@ export function DemandCheckClient({
         </div>
         {aiError && (
           <p className="mt-2 text-xs text-red-600">{aiError}</p>
+        )}
+        {coreVariants(aiProductInput).length > 0 && (
+          <div className="mt-3 space-y-1.5">
+            <p className="text-xs font-medium text-emerald-800">
+              🎯 必投：型号裸词（AI 只会加修饰，默认你已有裸词）。这些最接近下单，用完全匹配
+            </p>
+            {coreVariants(aiProductInput).map((kw) => (
+              <div
+                key={kw}
+                className="flex items-center justify-between gap-2 rounded-lg bg-emerald-50 px-3 py-2"
+              >
+                <span className="min-w-0 text-sm font-medium text-ink">
+                  [{kw}]
+                </span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    importAiKeyword({
+                      keyword: kw,
+                      reason: "型号裸词（最高优先级）",
+                      source: "ai",
+                    })
+                  }
+                  className="shrink-0 text-xs text-signal hover:underline"
+                >
+                  {d.aiImportOne}
+                </button>
+              </div>
+            ))}
+          </div>
         )}
         {aiKeywords.length > 0 && (
           <div className="mt-3 space-y-1.5">
