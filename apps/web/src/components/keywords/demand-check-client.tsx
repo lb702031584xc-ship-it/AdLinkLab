@@ -149,6 +149,10 @@ function beatable(
 }
 
 export function verdictOf(row: DemandRow): DemandVerdict {
+  // 空值不是 0：Number("") === 0，会被 demandLevel 判成「无需求」，
+  // 于是没填数据也被打上「建议放弃」——方向正好反了，会把该投的词砍掉。
+  // 未填 >= 不给否定结论，退回「谨慎测试」。
+  if (!row.volume || row.volume.trim() === "") return "caution";
   const dl = demandLevel(row.volume);
   if (dl === "none") return "bad";
   const b = beatable(row.competition, row.intent, row.trend);
