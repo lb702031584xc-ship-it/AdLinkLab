@@ -893,12 +893,21 @@ export async function registerCatalogRoutes(
     }
     Object.assign(where, buildPoolStageWhere(query));
     const q = asTrimmed(query.q);
-    if (q)
-      where.OR = [
-        { name: { contains: q, mode: "insensitive" } },
-        { brand: { contains: q, mode: "insensitive" } },
-        { asin: { contains: q, mode: "insensitive" } },
-      ];
+    if (q) {
+      // 分词匹配：查询按空格拆开，每个词都要命中（AND），
+      // 但每个词可命中 name / brand / asin 任一字段。
+      // 原来整串连续匹配，"roborock Qrevo" 搜不到
+      // "roborock 2026 New Qrevo ..."（中间隔着别的词）。
+      const tokens = q.split(/\s+/).filter(Boolean).slice(0, 6);
+      const groups = tokens.map((t) => ({
+        OR: [
+          { name: { contains: t, mode: "insensitive" } },
+          { brand: { contains: t, mode: "insensitive" } },
+          { asin: { contains: t, mode: "insensitive" } },
+        ],
+      }));
+      where.AND = [...((where.AND as unknown[]) ?? []), ...groups];
+    }
     // 筛选预设自动过滤：用户填过条件并保存后，列表自动隐藏不符合的商品。
     // preset=0 可临时关闭。未保存过预设 → 不过滤。
     const applyPreset = query.preset !== "0" && query.preset !== "false";
@@ -2285,11 +2294,16 @@ export async function registerCatalogRoutes(
         Object.assign(where, buildPoolStageWhere(filter));
         const q = asTrimmed(filter.q);
         if (q) {
-          where.OR = [
-            { name: { contains: q, mode: "insensitive" } },
-            { brand: { contains: q, mode: "insensitive" } },
-            { asin: { contains: q, mode: "insensitive" } },
-          ];
+          // 与列表查询同一口径：分词 AND，每词可命中任一字段
+          const tokens = q.split(/\s+/).filter(Boolean).slice(0, 6);
+          const groups = tokens.map((t) => ({
+            OR: [
+              { name: { contains: t, mode: "insensitive" } },
+              { brand: { contains: t, mode: "insensitive" } },
+              { asin: { contains: t, mode: "insensitive" } },
+            ],
+          }));
+          where.AND = [...((where.AND as unknown[]) ?? []), ...groups];
         }
         Object.assign(where, buildAdCountWhere(filter));
         Object.assign(where, buildCountryWhere(filter));
