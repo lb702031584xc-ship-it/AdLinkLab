@@ -14,6 +14,8 @@ import {
   looseScreenOffersAction,
   prescreenOffersAction,
   type HotPicksResult,
+  recommendKeywordsAction,
+  type KeywordRecommendResult,
   type LooseScreenEvidence,
   type LooseScreenResult,
 } from "@/lib/api/paid-data-actions";
@@ -218,6 +220,20 @@ export function OfferPrescreenBar({
     beginnerNeedAnswers: string;
     advancedOn: string;
     advancedOff: string;
+    kwGenerate: string;
+    kwGenerating: string;
+    kwKeyword: string;
+    kwIntent: string;
+    kwMaxCpc: string;
+    kwVerdict: string;
+    kwNote: string;
+    kwNoResult: string;
+    kwIntentTransactional: string;
+    kwIntentCommercial: string;
+    kwIntentInformational: string;
+    kwVerdictTest: string;
+    kwVerdictSkip: string;
+    kwVerdictBlocked: string;
   };
   offers: Array<{ id: string; name: string }>;
 }) {
@@ -257,6 +273,8 @@ export function OfferPrescreenBar({
     stop: "",
   });
   const [advanced, setAdvanced] = useState(false);
+  const [kwBusy, setKwBusy] = useState(false);
+  const [kwResults, setKwResults] = useState<KeywordRecommendResult[]>([]);
   const beginnerReady = Object.values(beginner).every((v) => v.trim() !== "");
   // 拒单率 / 退款率按保守值扣减；只在体检里用，不写回任何数据。
   const beginnerAssess = (() => {
@@ -344,6 +362,42 @@ export function OfferPrescreenBar({
     }
     return ev;
   };
+
+  /**
+   * 关键词推荐：按当前勾选的 Offer 逐个取候选词（最多 5 个，避免一次
+   * 打太多请求）。结果只展示，不写回任何东西。
+   */
+  const onKeywords = async () => {
+    setKwBusy(true);
+    setError(null);
+    try {
+      const ids = [...selected].slice(0, 5);
+      const out: KeywordRecommendResult[] = [];
+      for (const id of ids) {
+        const r = await recommendKeywordsAction(id);
+        if (r.ok) out.push(r.data);
+      }
+      setKwResults(out);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setKwBusy(false);
+    }
+  };
+
+  const kwIntentLabel = (v: string): string =>
+    v === "transactional"
+      ? dict.kwIntentTransactional
+      : v === "commercial"
+        ? dict.kwIntentCommercial
+        : dict.kwIntentInformational;
+
+  const kwVerdictLabel = (v: string): string =>
+    v === "test"
+      ? dict.kwVerdictTest
+      : v === "skip"
+        ? dict.kwVerdictSkip
+        : dict.kwVerdictBlocked;
 
   const onPrescreen = async () => {
     setBusy(true);
@@ -454,6 +508,16 @@ export function OfferPrescreenBar({
               : mode === "loose"
                 ? `${dict.prescreenModeLoose} (${n})`
                 : `${dict.prescreenBatch} (${n})`}
+          </button>
+        )}
+        {n > 0 && (
+          <button
+            type="button"
+            onClick={onKeywords}
+            disabled={kwBusy}
+            className="rounded-lg border border-ink/20 px-3 py-1.5 text-sm font-medium text-ink transition hover:bg-ink/5 disabled:opacity-50"
+          >
+            {kwBusy ? dict.kwGenerating : `${dict.kwGenerate} (${Math.min(n, 5)})`}
           </button>
         )}
         {note && <span className="text-sm text-emerald-700">{note}</span>}
@@ -681,6 +745,63 @@ export function OfferPrescreenBar({
             />
           </label>
           <span className="text-xs text-ink/60">{dict.hotPicksExcludedHint}</span>
+        </div>
+      )}
+      {kwResults.length > 0 && (
+        <div className="flex flex-col gap-3 text-sm">
+          {kwResults.map((r) => (
+            <div key={r.offerId} className="rounded-lg border border-ink/10 p-3">
+              <p className="font-medium">
+                {r.core}
+                {r.maxCpcUsd != null && (
+                  <span className="ml-2 text-ink/60">
+                    {dict.kwMaxCpc} {"<="} ${r.maxCpcUsd.toFixed(2)}
+                  </span>
+                )}
+              </p>
+              {r.suggestions.length === 0 ? (
+                <p className="mt-1 text-ink/60">{dict.kwNoResult}</p>
+              ) : (
+                <table className="mt-2 w-full text-xs">
+                  <thead>
+                    <tr className="text-left text-ink/60">
+                      <th className="py-1 pr-3">{dict.kwKeyword}</th>
+                      <th className="py-1 pr-3">{dict.kwIntent}</th>
+                      <th className="py-1 pr-3">{dict.kwMaxCpc}</th>
+                      <th className="py-1 pr-3">{dict.kwVerdict}</th>
+                      <th className="py-1">{dict.kwNote}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {r.suggestions.map((k) => (
+                      <tr key={k.keyword} className="border-t border-ink/5">
+                        <td className="py-1 pr-3">{k.keyword}</td>
+                        <td className="py-1 pr-3">{kwIntentLabel(k.intent)}</td>
+                        <td className="py-1 pr-3">
+                          {k.maxCpcUsd != null ? `${k.maxCpcUsd.toFixed(2)}` : "—"}
+                        </td>
+                        <td
+                          className={
+                            k.verdict === "test"
+                              ? "py-1 pr-3 text-emerald-700"
+                              : k.verdict === "skip"
+                                ? "py-1 pr-3 text-ink/50"
+                                : "py-1 pr-3 text-red-600"
+                          }
+                        >
+                          {kwVerdictLabel(k.verdict)}
+                        </td>
+                        <td className="py-1 text-ink/60">{k.note}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              {r.notes.length > 0 && (
+                <p className="mt-1 text-xs text-ink/50">{r.notes.join("；")}</p>
+              )}
+            </div>
+          ))}
         </div>
       )}
       {hotPicks && (

@@ -276,3 +276,53 @@ export async function looseScreenOffersAction(
     })
   );
 }
+
+/* ── 关键词推荐（按保本 CPC 给候选词，不编造搜索量） ── */
+
+export interface KeywordSuggestionDto {
+  keyword: string;
+  intent: "transactional" | "commercial" | "informational";
+  matchType: "exact" | "phrase";
+  maxCpcUsd: number | null;
+  verdict: "test" | "skip" | "blocked";
+  note: string;
+}
+
+export interface KeywordRecommendResult {
+  offerId: string;
+  payoutUsd: number | null;
+  riskCost: string[];
+  brandBiddingForbidden: boolean;
+  core: string;
+  maxCpcUsd: number | null;
+  breakeven: {
+    netPayoutUsd: number;
+    targetCvrPct: number;
+    rejectionRate: number;
+    refundRate: number;
+  } | null;
+  suggestions: KeywordSuggestionDto[];
+  skipped: Array<{ keyword: string; reason: string }>;
+  notes: string[];
+}
+
+export async function recommendKeywordsAction(
+  offerId: string,
+  opts: { targetCvrPct?: number; maxKeywords?: number } = {}
+) {
+  return attempt(() =>
+    apiFetch<KeywordRecommendResult>("/api/v1/keywords/recommend", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        offerId,
+        ...(opts.targetCvrPct !== undefined
+          ? { targetCvrPct: opts.targetCvrPct }
+          : {}),
+        ...(opts.maxKeywords !== undefined
+          ? { maxKeywords: opts.maxKeywords }
+          : {}),
+      }),
+    })
+  );
+}

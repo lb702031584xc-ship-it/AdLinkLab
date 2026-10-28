@@ -768,6 +768,20 @@ export default async function OffersPage({
                 beginnerNeedAnswers: t.entities.forms.offer.beginnerNeedAnswers,
                 advancedOn: t.entities.forms.offer.advancedOn,
                 advancedOff: t.entities.forms.offer.advancedOff,
+                kwGenerate: t.entities.forms.offer.kwGenerate,
+                kwGenerating: t.entities.forms.offer.kwGenerating,
+                kwKeyword: t.entities.forms.offer.kwKeyword,
+                kwIntent: t.entities.forms.offer.kwIntent,
+                kwMaxCpc: t.entities.forms.offer.kwMaxCpc,
+                kwVerdict: t.entities.forms.offer.kwVerdict,
+                kwNote: t.entities.forms.offer.kwNote,
+                kwNoResult: t.entities.forms.offer.kwNoResult,
+                kwIntentTransactional: t.entities.forms.offer.kwIntentTransactional,
+                kwIntentCommercial: t.entities.forms.offer.kwIntentCommercial,
+                kwIntentInformational: t.entities.forms.offer.kwIntentInformational,
+                kwVerdictTest: t.entities.forms.offer.kwVerdictTest,
+                kwVerdictSkip: t.entities.forms.offer.kwVerdictSkip,
+                kwVerdictBlocked: t.entities.forms.offer.kwVerdictBlocked,
               }}
               offers={data.items.map((o) => ({ id: o.id, name: o.name }))}
             />
