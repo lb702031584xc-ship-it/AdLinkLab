@@ -224,6 +224,10 @@ export interface LooseScreenResult {
     rejectionRate?: number | null;
     /** 扣拒单率后的净 EPC。 */
     netEpcUsd?: number | null;
+    /** 生效的 CPC（人工填优先，其次 Google Ads 实测）。 */
+    cpcExpected?: number | null;
+    /** CPC 来源：manual / measured / unknown。 */
+    cpcSource?: "manual" | "measured" | "unknown";
     /** 每点击期望利润 = 净EPC − CPC。 */
     profitPerClick?: number | null;
     /** 保本转化率（%）：这个 Offer 需要多高的 CVR 才不亏。 */

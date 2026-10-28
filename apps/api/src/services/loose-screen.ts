@@ -80,6 +80,8 @@ export interface LooseMeasured {
   rejectionRate?: number | null;
   /** 实测样本量（点击数）：低于门槛不采信。 */
   clicks?: number | null;
+  /** 实测平均 CPC（美元/点击）：来自 Google Ads 同步的日均出价，无数据为 null。 */
+  cpc?: number | null;
 }
 
 export interface LooseScreenRow {
@@ -149,6 +151,10 @@ export interface ResolvedEvidence {
   measuredClicks: number;
   /** 净 EPC：扣掉实测拒单率；无拒单率数据时不扣减（保持 null 语义）。 */
   netEpcUsd: number | null;
+  /** 生效的 CPC（人工输入优先，其次实测）。 */
+  cpcExpected: number | null;
+  /** CPC 来源：manual（人工填）/ measured（Google Ads 同步）/ unknown。 */
+  cpcSource: "manual" | "measured" | "unknown";
   /** 每点击期望利润 = 净EPC − cpcExpected；缺任一项则为 null。 */
   profitPerClick: number | null;
   /** 保本转化率（%）= CPC ÷ 净EPC × 100；缺 CPC 或 EPC 为 null。 */
@@ -186,6 +192,10 @@ export interface LooseScreenItem {
   rejectionRate: number | null;
   /** 净 EPC（扣拒单率后）。 */
   netEpcUsd: number | null;
+  /** 生效的 CPC（人工填优先，其次 Google Ads 实测）。 */
+  cpcExpected: number | null;
+  /** CPC 来源：manual / measured / unknown。 */
+  cpcSource: "manual" | "measured" | "unknown";
   /** 每点击期望利润；null = 缺 CPC 或 EPC。 */
   profitPerClick: number | null;
   /** 保本转化率（%）：这个 Offer 需要多高的 CVR 才不亏。 */
@@ -288,7 +298,13 @@ export function resolveEvidence(
 
   const netEpcUsd =
     epcUsd == null ? null : epcUsd * (1 - (rejectionRate ?? 0));
-  const cpc = num(row.cpcExpected);
+  // CPC 优先级：人工输入（他账户的真实出价）> Google Ads 同步的实测均价。
+  // 两者都没有就不算，绝不拿行业平均值顶替。
+  const measuredCpc = measuredTrusted ? num(measured?.cpc) : null;
+  const manualCpc = num(row.cpcExpected);
+  const cpc = manualCpc ?? measuredCpc;
+  const cpcSource: "manual" | "measured" | "unknown" =
+    manualCpc != null ? "manual" : measuredCpc != null ? "measured" : "unknown";
   const profitPerClick =
     netEpcUsd != null && cpc != null ? netEpcUsd - cpc : null;
 
@@ -327,6 +343,8 @@ export function resolveEvidence(
     conversionSource,
     measuredClicks: measuredTrusted ? measuredClicks : 0,
     netEpcUsd,
+    cpcExpected: cpc,
+    cpcSource,
     profitPerClick,
     breakevenCvr,
     economics,
@@ -430,6 +448,8 @@ export function screenLooseOffers(
       measuredClicks: evidence.measuredClicks,
       rejectionRate: evidence.rejectionRate,
       netEpcUsd: evidence.netEpcUsd,
+      cpcExpected: evidence.cpcExpected,
+      cpcSource: evidence.cpcSource,
       profitPerClick: evidence.profitPerClick,
       breakevenCvr: evidence.breakevenCvr,
       economics: evidence.economics,

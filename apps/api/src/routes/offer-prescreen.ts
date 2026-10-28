@@ -222,26 +222,35 @@ async function loadMeasured(
     (await prisma.launchArchive?.findMany({
       where: { tenantId, offerId: { in: offerIds } },
       select: {
+        id: true,
         offerId: true,
         clicks: true,
         conversions: true,
         revenue: true,
+        spend: true,
         launchedAt: true,
         endedAt: true,
         createdAt: true,
       },
     })) ?? [];
-  const acc = new Map<string, { clicks: number; conversions: number; revenue: number }>();
+  const acc = new Map<
+    string,
+    { clicks: number; conversions: number; revenue: number; spend: number }
+  >();
+  const archiveToOffer = new Map<string, string>();
   for (const row of rows as Array<{
+    id: string;
     offerId: string | null;
     clicks: number | null;
     conversions: number | null;
     revenue: number | null;
+    spend: number | null;
     launchedAt: Date | null;
     endedAt: Date | null;
     createdAt: Date;
   }>) {
     if (!row.offerId) continue;
+    archiveToOffer.set(row.id, row.offerId);
     // 以归档结束时间（没有则投放时间、再没有则创建时间）作为数据成熟锚点。
     const anchor = row.endedAt ?? row.launchedAt ?? row.createdAt;
     const t = anchor ? new Date(anchor).getTime() : NaN;
@@ -249,18 +258,59 @@ async function loadMeasured(
       if (nowMs - t < maturityMs) continue; // 太新：在途转化未回传
       if (nowMs - t > maxAgeMs) continue; // 太旧：不代表当前
     }
-    const cur = acc.get(row.offerId) ?? { clicks: 0, conversions: 0, revenue: 0 };
+    const cur = acc.get(row.offerId) ?? {
+      clicks: 0,
+      conversions: 0,
+      revenue: 0,
+      spend: 0,
+    };
     cur.clicks += row.clicks ?? 0;
     cur.conversions += row.conversions ?? 0;
     cur.revenue += row.revenue ?? 0;
+    cur.spend += row.spend ?? 0;
     acc.set(row.offerId, cur);
   }
+
+  // 实测 CPC：AdPerfSnapshot.avg_cpc 由 Google Ads 同步写入（日均实际出价）。
+  // 按点击量加权汇总，避免日均值简单平均失真。没有快照就退回
+  // LaunchArchive 的 spend/clicks；两者都没有则为 null，绝不估。
+  const cpcAcc = new Map<string, { weighted: number; clicks: number }>();
+  if (archiveToOffer.size > 0) {
+    const snaps =
+      (await prisma.adPerfSnapshot?.findMany({
+        where: { tenantId, archiveId: { in: [...archiveToOffer.keys()] } },
+        select: { archiveId: true, clicks: true, avgCpc: true },
+      })) ?? [];
+    for (const snap of snaps as Array<{
+      archiveId: string;
+      clicks: number | null;
+      avgCpc: unknown;
+    }>) {
+      const offerId = archiveToOffer.get(snap.archiveId);
+      if (!offerId) continue;
+      const cpc = Number(snap.avgCpc);
+      const clicks = snap.clicks ?? 0;
+      if (!Number.isFinite(cpc) || cpc <= 0 || clicks <= 0) continue;
+      const cur = cpcAcc.get(offerId) ?? { weighted: 0, clicks: 0 };
+      cur.weighted += cpc * clicks;
+      cur.clicks += clicks;
+      cpcAcc.set(offerId, cur);
+    }
+  }
   for (const [offerId, a] of acc) {
+    const weighted = cpcAcc.get(offerId);
+    const measuredCpc =
+      weighted && weighted.clicks > 0
+        ? weighted.weighted / weighted.clicks
+        : a.clicks > 0 && a.spend > 0
+          ? a.spend / a.clicks
+          : null;
     out.set(offerId, {
       clicks: a.clicks,
       epcUsd: a.clicks > 0 ? a.revenue / a.clicks : null,
       conversionRate: a.clicks > 0 ? (a.conversions / a.clicks) * 100 : null,
       rejectionRate: null,
+      cpc: measuredCpc,
     });
   }
   return out;

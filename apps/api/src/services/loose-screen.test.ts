@@ -370,3 +370,37 @@ describe("保本 CVR 与经济学判定", () => {
     expect(q.economics).toBe("viable");
   });
 });
+
+
+describe("CPC 来源：Google Ads 实测 vs 人工", () => {
+  it("没填 CPC 时采用实测均价，并标 cpcSource=measured", () => {
+    const q = screenLooseOffers([
+      row({ id: "o-auto-cpc", measured: { epcUsd: 2, clicks: 500, cpc: 0.1 } }),
+    ]).qualified[0];
+    expect(q.cpcExpected).toBeCloseTo(0.1, 6);
+    expect(q.cpcSource).toBe("measured");
+    // 净EPC 2.0、CPC 0.1 → 保本 5%
+    expect(q.breakevenCvr).toBeCloseTo(5, 6);
+    expect(q.economics).toBe("viable");
+  });
+
+  it("人工填写的 CPC 优先于实测（他账户的真实出价）", () => {
+    const q = screenLooseOffers([
+      row({
+        id: "o-manual-cpc",
+        measured: { epcUsd: 2, clicks: 500, cpc: 0.1 },
+        cpcExpected: 0.2,
+      }),
+    ]).qualified[0];
+    expect(q.cpcExpected).toBeCloseTo(0.2, 6);
+    expect(q.cpcSource).toBe("manual");
+  });
+
+  it("实测样本不足时不采信其 CPC", () => {
+    const q = screenLooseOffers([
+      row({ id: "o-thin-cpc", epcUsd: 2, measured: { cpc: 0.1, clicks: 5 } }),
+    ]).qualified[0];
+    expect(q.cpcExpected).toBeNull();
+    expect(q.cpcSource).toBe("unknown");
+  });
+});
