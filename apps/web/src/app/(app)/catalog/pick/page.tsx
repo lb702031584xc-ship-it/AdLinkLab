@@ -1,14 +1,14 @@
 "use client";
 
 /**
- * 商品库挑选 —— 零输入：点一下，直接看「能做 / 不能做」。
+ * 商品库挑选 —— 零输入：点一下，直接看「能做 / 不能做」+ 怎么跑。
  *
- * 设计原则（2026-10-28 精简）：
- *   新手不该填任何数字。佣金门槛、价格、评论、佣金率这些要么系统已知，
- *   要么和「能不能赚钱」无关。系统只回答一个问题：
- *     单笔佣金算出的保本 CPC，够不够付这个类目的点击成本？
+ * 页面回答两个问题：
+ *   1) 这个商品能不能做（保本 CPC vs 类目 CPC）
+ *   2) 如果能做，具体怎么开（出价上限 / 验证预算 / 判定线 / 操作步骤）
  *
- * 列只保留 5 个：商品 / 国家 / 单笔佣金 / 保本 CPC / 结论。
+ * 第 2 点是把「顾问口头算给你听」变成页面上的数字——
+ * 新手不该自己乘 0.6、不该自己估 300 点击要多少钱。
  */
 import { useState } from "react";
 import {
@@ -31,6 +31,22 @@ const SOURCE_LABEL: Record<string, string> = {
   global: "全站推算",
   assumed: "假定值",
 };
+
+/** 每个商品的开跑方案：出价上限、验证预算、判定线。 */
+function buildPlan(breakevenCpcUsd: number, categoryCpcUsd: number) {
+  const bidCap = breakevenCpcUsd * 0.6;
+  // 需要的 CVR：保本 CPC = 佣金×0.8075×2.5% ⇒ CVR = 2.5% × 类目CPC / 保本CPC
+  const neededCvrPct =
+    breakevenCpcUsd > 0 ? (0.025 * categoryCpcUsd) / breakevenCpcUsd * 100 : null;
+  // 判定需要约 3 单：点击数 = 3 / 需要CVR
+  const clicksNeeded =
+    neededCvrPct && neededCvrPct > 0
+      ? Math.min(2000, Math.ceil(3 / (neededCvrPct / 100)))
+      : null;
+  const budgetUsd =
+    clicksNeeded != null ? clicksNeeded * categoryCpcUsd : null;
+  return { bidCap, neededCvrPct, clicksNeeded, budgetUsd };
+}
 
 export default function CatalogPickPage() {
   const [busy, setBusy] = useState(false);
@@ -63,11 +79,11 @@ export default function CatalogPickPage() {
         <h1 className="font-display text-2xl">商品库挑选</h1>
         <p className="mt-1 text-sm text-ink/60">
           点一下就行。系统用「单笔佣金 → 保本 CPC」和这个类目的点击成本比，
-          直接告诉你哪些能做。
+          直接告诉你哪些能做、怎么开。
         </p>
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <button
           type="button"
           onClick={run}
@@ -81,6 +97,12 @@ export default function CatalogPickPage() {
             类目 CPC ${cpc.toFixed(2)}/点击（
             {SOURCE_LABEL[data.baseline.source] ?? data.baseline.source}，样本{" "}
             {data.baseline.samples} 条）
+          </span>
+        )}
+        {data && (data.suggestedMinCommissionUsd ?? 0) > 0 && (
+          <span className="text-xs text-ink/70">
+            建议佣金门槛 ${(data.suggestedMinCommissionUsd ?? 0).toFixed(2)}
+            （按类目 CPC 反推，填这个数即可）
           </span>
         )}
       </div>
@@ -140,6 +162,65 @@ export default function CatalogPickPage() {
               </table>
             )}
           </section>
+
+          {/* 开跑方案：把「口头算给你听」变成页面上的数字 */}
+          {data.result.picked.slice(0, 3).map((p) => {
+            const plan = buildPlan(p.breakevenCpcUsd, cpc);
+            return (
+              <section
+                key={`plan-${p.productId}`}
+                className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4"
+              >
+                <h2 className="text-sm font-semibold">怎么开：{p.name}</h2>
+                <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-sm md:grid-cols-4">
+                  <p>
+                    保本 CPC{" "}
+                    <span className="font-medium">
+                      ${p.breakevenCpcUsd.toFixed(2)}
+                    </span>
+                  </p>
+                  <p>
+                    建议出价上限{" "}
+                    <span className="font-medium">
+                      ${plan.bidCap.toFixed(2)}
+                    </span>
+                    <span className="ml-1 text-xs text-ink/50">（保本×0.6）</span>
+                  </p>
+                  <p>
+                    需要 CVR{" "}
+                    <span className="font-medium">
+                      {plan.neededCvrPct?.toFixed(2) ?? "—"}%
+                    </span>
+                  </p>
+                  <p>
+                    验证成本{" "}
+                    <span className="font-medium">
+                      {plan.budgetUsd != null
+                        ? `$${plan.budgetUsd.toFixed(0)}`
+                        : "—"}
+                    </span>
+                    {plan.clicksNeeded != null && (
+                      <span className="ml-1 text-xs text-ink/50">
+                        （约 {plan.clicksNeeded} 点击）
+                      </span>
+                    )}
+                  </p>
+                </div>
+                <ol className="mt-3 flex flex-col gap-0.5 text-sm text-ink/80">
+                  <li>1. 建 Offer（只建这一个，别批量）</li>
+                  <li>2. 跑初筛 —— 看有没有广告信号</li>
+                  <li>3. 生成关键词，只留「可测」的</li>
+                  <li>
+                    4. 建计划：CPC 上限 ${plan.bidCap.toFixed(2)}，先建成暂停
+                  </li>
+                  <li>
+                    5. 跑满 {plan.clicksNeeded ?? "—"} 点击再判断：
+                    CVR ≥ {plan.neededCvrPct?.toFixed(2) ?? "—"}% 算成立
+                  </li>
+                </ol>
+              </section>
+            );
+          })}
 
           {data.result.dropped.length > 0 && (
             <section className="rounded-xl border border-ink/10 p-4">
