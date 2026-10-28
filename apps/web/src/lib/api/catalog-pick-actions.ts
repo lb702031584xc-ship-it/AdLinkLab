@@ -13,6 +13,7 @@ export interface CatalogPickItem {
   brand: string | null;
   payoutUsd: number;
   breakevenCpcUsd: number;
+  countryCode: string | null;
   note: string;
 }
 

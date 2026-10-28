@@ -28,6 +28,8 @@ export interface CatalogCandidate {
   payoutUsd: number | null;
   /** 库存：false = 缺货，null = 未知（不据此砍）。 */
   inStock?: boolean | null;
+  /** 投放国家（US / DE …）；选品时和佣金一起看。 */
+  countryCode?: string | null;
 }
 
 export interface PickOptions {
@@ -59,6 +61,7 @@ export interface PickedItem {
   payoutUsd: number;
   /** 按目标 CVR 算出的保本 CPC（美元/点击）。 */
   breakevenCpcUsd: number;
+  countryCode: string | null;
   note: string;
 }
 
@@ -161,7 +164,8 @@ export function pickFromCatalog(
       brand: c.brand,
       payoutUsd: payout,
       breakevenCpcUsd: breakeven,
-      note: `保本 CPC $${breakeven.toFixed(2)}`,
+      countryCode: c.countryCode ?? null,
+      note: `保本 CPC ${breakeven.toFixed(2)}`,
     });
   }
 

@@ -1,10 +1,14 @@
 "use client";
 
 /**
- * 商品库挑选 —— 新手流程第 2 步。
+ * 商品库挑选 —— 零输入：点一下，直接看「能做 / 不能做」。
  *
- * 从商品库里按「佣金够不够、覆盖不覆盖类目 CPC、同品牌留最优」挑出
- * 可以建成 Offer 的名单。挑不出来的原因会写清楚，不是只给空列表。
+ * 设计原则（2026-10-28 精简）：
+ *   新手不该填任何数字。佣金门槛、价格、评论、佣金率这些要么系统已知，
+ *   要么和「能不能赚钱」无关。系统只回答一个问题：
+ *     单笔佣金算出的保本 CPC，够不够付这个类目的点击成本？
+ *
+ * 列只保留 5 个：商品 / 国家 / 单笔佣金 / 保本 CPC / 结论。
  */
 import { useState } from "react";
 import {
@@ -29,8 +33,6 @@ const SOURCE_LABEL: Record<string, string> = {
 };
 
 export default function CatalogPickPage() {
-  const [minPayout, setMinPayout] = useState("12");
-  const [category, setCategory] = useState("");
   const [busy, setBusy] = useState(false);
   const [data, setData] = useState<CatalogPickPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -39,10 +41,7 @@ export default function CatalogPickPage() {
     setBusy(true);
     setError(null);
     try {
-      const r = await catalogPickAction({
-        minPayoutUsd: Number(minPayout) || undefined,
-        category: category.trim() || undefined,
-      });
+      const r = await catalogPickAction({});
       if (r.ok) setData(r.data);
       else setError(r.error);
     } finally {
@@ -50,6 +49,7 @@ export default function CatalogPickPage() {
     }
   };
 
+  const cpc = data?.baseline.cpcUsd ?? 0;
   const droppedByCode = data
     ? data.result.dropped.reduce<Record<string, number>>((acc, d) => {
         acc[d.code] = (acc[d.code] ?? 0) + 1;
@@ -62,38 +62,27 @@ export default function CatalogPickPage() {
       <div>
         <h1 className="font-display text-2xl">商品库挑选</h1>
         <p className="mt-1 text-sm text-ink/60">
-          从商品库里筛出「佣金付得起点击」的候选。挑不出来不是工具坏了，
-          是在告诉你这批货不赚钱。
+          点一下就行。系统用「单笔佣金 → 保本 CPC」和这个类目的点击成本比，
+          直接告诉你哪些能做。
         </p>
       </div>
 
-      <div className="flex flex-wrap items-end gap-3 rounded-xl border border-ink/10 p-4">
-        <label className="flex flex-col gap-1 text-sm text-ink/60">
-          佣金门槛（美元）
-          <input
-            value={minPayout}
-            onChange={(e) => setMinPayout(e.target.value)}
-            inputMode="decimal"
-            className="w-28 rounded-lg border border-ink/10 bg-white px-2 py-1 text-ink"
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-sm text-ink/60">
-          类目（可空，用于取 CPC 基线）
-          <input
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-            placeholder="chamber vacuum sealer"
-            className="w-64 rounded-lg border border-ink/10 bg-white px-2 py-1 text-ink"
-          />
-        </label>
+      <div className="flex items-center gap-3">
         <button
           type="button"
           onClick={run}
           disabled={busy}
-          className="rounded-lg bg-ink px-4 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+          className="rounded-lg bg-ink px-5 py-2 text-sm font-medium text-white disabled:opacity-50"
         >
-          {busy ? "筛选中…" : "开始挑选"}
+          {busy ? "计算中…" : "开始挑选"}
         </button>
+        {data && (
+          <span className="text-xs text-ink/55">
+            类目 CPC ${cpc.toFixed(2)}/点击（
+            {SOURCE_LABEL[data.baseline.source] ?? data.baseline.source}，样本{" "}
+            {data.baseline.samples} 条）
+          </span>
+        )}
       </div>
 
       {error && <p className="text-sm text-red-600">{error}</p>}
@@ -101,24 +90,13 @@ export default function CatalogPickPage() {
       {data && (
         <>
           <section className="rounded-xl border border-ink/10 p-4">
-            <h2 className="text-sm font-semibold">CPC 基线</h2>
-            <p className="mt-1 text-sm text-ink/80">
-              ${data.baseline.cpcUsd.toFixed(2)} / 点击
-              <span className="ml-2 text-xs text-ink/50">
-                （{SOURCE_LABEL[data.baseline.source] ?? data.baseline.source}，
-                样本 {data.baseline.samples} 条，置信度 {data.baseline.confidence}）
-              </span>
-            </p>
-            <p className="mt-1 text-xs text-ink/55">{data.baseline.note}</p>
-          </section>
-
-          <section className="rounded-xl border border-ink/10 p-4">
             <h2 className="text-sm font-semibold">
-              可建 Offer：{data.result.counts.picked} 个
+              能做 {data.result.counts.picked} 个
               <span className="ml-2 text-xs font-normal text-ink/50">
                 （商品库共 {data.result.counts.total} 个）
               </span>
             </h2>
+
             {data.result.picked.length === 0 ? (
               <p className="mt-2 text-sm text-amber-700">
                 {data.result.notes.join("；")}
@@ -128,20 +106,36 @@ export default function CatalogPickPage() {
                 <thead className="text-xs text-ink/50">
                   <tr>
                     <th className="text-left font-normal">商品</th>
-                    <th className="text-left font-normal">品牌</th>
+                    <th className="text-left font-normal">国家</th>
                     <th className="text-right font-normal">单笔佣金</th>
                     <th className="text-right font-normal">保本 CPC</th>
+                    <th className="text-right font-normal">结论</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {data.result.picked.map((p) => (
-                    <tr key={p.productId} className="border-t border-ink/5">
-                      <td className="py-1 text-ink/85">{p.name}</td>
-                      <td className="text-ink/60">{p.brand ?? "—"}</td>
-                      <td className="text-right">${p.payoutUsd.toFixed(2)}</td>
-                      <td className="text-right">${p.breakevenCpcUsd.toFixed(2)}</td>
-                    </tr>
-                  ))}
+                  {data.result.picked.map((p) => {
+                    const margin =
+                      cpc > 0 ? (p.breakevenCpcUsd / cpc - 1) * 100 : null;
+                    return (
+                      <tr key={p.productId} className="border-t border-ink/5">
+                        <td className="py-1 text-ink/85">{p.name}</td>
+                        <td className="text-ink/60">{p.countryCode ?? "—"}</td>
+                        <td className="text-right">${p.payoutUsd.toFixed(2)}</td>
+                        <td className="text-right">
+                          ${p.breakevenCpcUsd.toFixed(2)}
+                        </td>
+                        <td className="text-right">
+                          <span className="text-emerald-700">能做</span>
+                          {margin !== null && (
+                            <span className="ml-1 text-xs text-ink/50">
+                              余量 {margin > 0 ? "+" : ""}
+                              {margin.toFixed(0)}%
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             )}
@@ -150,25 +144,29 @@ export default function CatalogPickPage() {
           {data.result.dropped.length > 0 && (
             <section className="rounded-xl border border-ink/10 p-4">
               <h2 className="text-sm font-semibold">
-                淘汰 {data.result.counts.dropped} 个
+                不能做 {data.result.counts.dropped} 个
               </h2>
               <ul className="mt-2 flex flex-col gap-1 text-sm text-ink/70">
                 {Object.entries(droppedByCode)
                   .sort((a, b) => b[1] - a[1])
-                  .map(([code, n]) => (
+                  .map(([code, num]) => (
                     <li key={code}>
-                      · {CODE_LABEL[code] ?? code}：{n} 个
+                      · {CODE_LABEL[code] ?? code}：{num} 个
                     </li>
                   ))}
               </ul>
               {data.result.summary.topDropCode && (
                 <p className="mt-2 text-xs text-ink/55">
-                  主因：{CODE_LABEL[data.result.summary.topDropCode] ?? data.result.summary.topDropCode}
+                  主因：
+                  {CODE_LABEL[data.result.summary.topDropCode] ??
+                    data.result.summary.topDropCode}
                   （{data.result.summary.topDropCount} 个）
                 </p>
               )}
             </section>
           )}
+
+          <p className="text-xs text-ink/50">{data.baseline.note}</p>
         </>
       )}
     </div>

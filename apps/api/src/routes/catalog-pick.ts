@@ -75,6 +75,7 @@ export async function registerCatalogPickRoutes(
           price: true,
           commissionAmount: true,
           commissionRate: true,
+          countryCode: true,
         },
         take: 2000,
       })) as Array<{
@@ -84,6 +85,7 @@ export async function registerCatalogPickRoutes(
         price: unknown;
         commissionAmount: unknown;
         commissionRate: unknown;
+        countryCode: string | null;
       }>;
 
       /* 2. 算类目 CPC 基线（精确类目 → 大类 → 全站 → 假定） */
@@ -137,6 +139,7 @@ export async function registerCatalogPickRoutes(
         brand: p.brand,
         priceUsd: numOrNull(p.price),
         payoutUsd: payoutOf(p),
+        countryCode: p.countryCode ?? null,
       }));
 
       const result = pickFromCatalog(candidates, {
