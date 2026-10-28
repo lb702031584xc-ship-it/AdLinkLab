@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { getNavProgressAction, type NavProgress } from "@/lib/api/nav-progress-actions";
 
 export interface TrackNavItem {
   href: string;
@@ -122,6 +123,45 @@ export function TrackNav({ sections, activePath }: TrackNavProps) {
       // 隐私模式下读不到就保持默认，不影响使用。
     }
   }, []);
+  // 毕业进度：跑够一定量后提示解锁下一层。每会话只查一次（sessionStorage 缓存），
+  // 避免每次导航都打一个请求。建议层 <= 当前层时不显示。
+  const [progress, setProgress] = useState<NavProgress | null>(null);
+  const [gradDismissed, setGradDismissed] = useState<number>(-1);
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem("adll_nav_progress");
+      if (raw) setProgress(JSON.parse(raw) as NavProgress);
+      const d = Number(localStorage.getItem("adll_nav_grad_dismiss"));
+      if (Number.isFinite(d)) setGradDismissed(d);
+    } catch {
+      // 忽略缓存读取失败
+    }
+  }, []);
+  useEffect(() => {
+    if (level >= 2) return;
+    let alive = true;
+    getNavProgressAction().then((r) => {
+      if (!alive || !r.ok) return;
+      setProgress(r.data);
+      try {
+        sessionStorage.setItem("adll_nav_progress", JSON.stringify(r.data));
+      } catch {
+        // 忽略
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, [level]);
+  const dismissGrad = (to: number) => {
+    setGradDismissed(to);
+    try {
+      localStorage.setItem("adll_nav_grad_dismiss", String(to));
+    } catch {
+      // 忽略
+    }
+  };
+
   const changeLevel = (next: 0 | 1 | 2) => {
     setLevel(next);
     try {
@@ -177,6 +217,32 @@ export function TrackNav({ sections, activePath }: TrackNavProps) {
             </Link>
           );
         })}
+        {progress &&
+          progress.suggestedLevel > level &&
+          gradDismissed < progress.suggestedLevel && (
+            <div className="mt-3 rounded-md border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-100">
+              <p className="font-medium">可以解锁更多了</p>
+              <p className="mt-0.5 text-amber-100/80">
+                {progress.reasons.join("，")}
+              </p>
+              <div className="mt-1.5 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => changeLevel(progress.suggestedLevel)}
+                  className="rounded bg-amber-400/20 px-2 py-0.5 text-amber-50 hover:bg-amber-400/30"
+                >
+                  解锁
+                </button>
+                <button
+                  type="button"
+                  onClick={() => dismissGrad(progress.suggestedLevel)}
+                  className="rounded px-2 py-0.5 text-amber-100/70 hover:bg-white/5"
+                >
+                  以后再说
+                </button>
+              </div>
+            </div>
+          )}
         <button
           type="button"
           onClick={() => changeLevel(level === 0 ? 1 : 2)}

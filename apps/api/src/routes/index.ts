@@ -276,6 +276,9 @@ export async function registerRoutes(
     // 「今天」：新手一屏（待测 / 该停 / 缺证据 / 校准）
     const { registerTodayRoutes } = await import("./today.js");
     await registerTodayRoutes(app, { prisma: services.prisma });
+    // 导航毕业进度：跑够多少解锁下一层模块
+    const { registerNavProgressRoutes } = await import("./nav-progress.js");
+    await registerNavProgressRoutes(app, { prisma: services.prisma });
     await registerKeywordIdeasRoutes(app, { prisma: services.prisma });
     // DataForSEO 关键词流水线（实测扩词 → 意图过滤 → 广告测算，/keywords/starter）
     const { registerKeywordDataForSeoRoutes } = await import(
