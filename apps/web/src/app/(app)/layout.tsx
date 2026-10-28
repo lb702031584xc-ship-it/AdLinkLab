@@ -34,6 +34,7 @@ const NAV_FLOW_ORDER = [
   "/affiliate/beginner-sop",
   "/networks",
   "/catalog",
+  "/catalog/pick",
   "/offers/new",
   "/offers",
   "/keywords/starter?tab=research",
@@ -128,6 +129,11 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
             { href: "/affiliate/beginner-sop", label: ni.affiliateBeginnerSop },
             { href: "/networks", label: ni.connectNetworks, phase: ph.selection },
             { href: "/catalog", label: ni.catalog, phase: ph.selection },
+            {
+              href: "/catalog/pick",
+              label: lang === "en" ? "Pick from catalog" : "商品库挑选",
+              phase: ph.selection,
+            },
             { href: "/offers", label: ni.offerList, phase: ph.selection },
             { href: "/offers/new", label: ni.offerNewImport, phase: ph.selection },
             {
