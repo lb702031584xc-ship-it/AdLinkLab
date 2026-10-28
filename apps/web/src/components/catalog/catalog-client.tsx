@@ -2963,9 +2963,15 @@ const [sort, setSort] = useState("commission_desc");
           </label>
         </div>
         {pMode === "loose" && (
-          <p className="mt-2 rounded-lg bg-amber-50 px-4 py-2 text-sm text-amber-900">
-            {d.preset.looseHint}
-          </p>
+          <>
+            <p className="mt-2 rounded-lg bg-amber-50 px-4 py-2 text-sm text-amber-900">
+              {d.preset.looseHint}
+            </p>
+            <p className="mt-1 text-xs text-amber-800">
+              注意：宽松口径下，下方「评论数 / 佣金金额 / 佣金率 / 价格」阈值不参与判定，
+              改这些数字不会影响筛选结果。要按佣金门槛筛，请切回「常规」。
+            </p>
+          </>
         )}
         <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-3">
           <div>
