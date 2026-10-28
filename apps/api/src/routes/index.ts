@@ -263,6 +263,11 @@ export async function registerRoutes(
     await registerOfferPreferenceRoutes(app, { prisma: services.prisma });
     // P1-10：规则生成关键词 ideas（无 LLM，无假搜索量）
     const { registerKeywordIdeasRoutes } = await import("./keywords-ideas.js");
+    // 关键词推荐：按 Offer 佣金算保本 CPC，规则生成候选词（不调外部 API）
+    const { registerKeywordRecommendRoutes } = await import(
+      "./keyword-recommend.js"
+    );
+    await registerKeywordRecommendRoutes(app, { prisma: services.prisma });
     await registerKeywordIdeasRoutes(app, { prisma: services.prisma });
     // DataForSEO 关键词流水线（实测扩词 → 意图过滤 → 广告测算，/keywords/starter）
     const { registerKeywordDataForSeoRoutes } = await import(
