@@ -684,6 +684,8 @@ export const zh = {
       kwVerdictBlocked: "缺数据",
       beginnerOffersTestable: "这批最多能测",
       prescreenGoTitle: "可推进（点一下直接生成关键词）：",
+      beginnerSpreadWarning:
+        "只够测 1 个：不要摊给多个 offer —— 摊薄后每个都到不了 200 点击，永远得不出结论",
       looseQualified: "合格",
       looseDropped: "拿掉",
       hotPicksTitle: "可能热销推荐（跨品类，不改初筛结论）",
@@ -1431,6 +1433,8 @@ export const en: typeof zh = {
       kwVerdictBlocked: "No data",
       beginnerOffersTestable: "Offers testable with this budget:",
       prescreenGoTitle: "Runnable (click to generate keywords):",
+      beginnerSpreadWarning:
+        "Only enough for one: don't split across offers — each would stay below 200 clicks and never yield a conclusion",
       looseQualified: "Qualified",
       looseDropped: "Dropped",
       hotPicksTitle: "Likely hot picks (cross-category, prescreen verdicts unchanged)",

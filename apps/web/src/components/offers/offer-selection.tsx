@@ -236,6 +236,7 @@ export function OfferPrescreenBar({
     kwVerdictBlocked: string;
     beginnerOffersTestable: string;
     prescreenGoTitle: string;
+    beginnerSpreadWarning: string;
   };
   offers: Array<{ id: string; name: string }>;
 }) {
@@ -641,6 +642,11 @@ export function OfferPrescreenBar({
                 <span className="text-ink/60">
                   {dict.beginnerOffersTestable} {beginnerAssess.offersTestable}
                 </span>
+                {beginnerAssess.offersTestable <= 1 && (
+                  <span className="w-full text-xs text-red-600">
+                    {dict.beginnerSpreadWarning}
+                  </span>
+                )}
                 {!beginnerAssess.budgetEnough && (
                   <span className="text-xs text-red-600">
                     预算不足：至少需要 ${beginnerAssess.neededBudget.toFixed(0)} 才能判断这个 offer

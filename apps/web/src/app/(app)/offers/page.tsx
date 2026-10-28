@@ -785,6 +785,8 @@ export default async function OffersPage({
                 beginnerOffersTestable:
                   t.entities.forms.offer.beginnerOffersTestable,
                 prescreenGoTitle: t.entities.forms.offer.prescreenGoTitle,
+                beginnerSpreadWarning:
+                  t.entities.forms.offer.beginnerSpreadWarning,
               }}
               offers={data.items.map((o) => ({ id: o.id, name: o.name }))}
             />

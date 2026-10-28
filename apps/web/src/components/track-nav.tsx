@@ -51,6 +51,7 @@ interface TrackNavProps {
  */
 const NAV_LEVEL_BY_HREF: Record<string, 0 | 1 | 2> = {
   "/today": 0,
+  "/start": 0,
   "/dashboard": 0,
   "/quickstart": 0,
   "/offers": 0,
