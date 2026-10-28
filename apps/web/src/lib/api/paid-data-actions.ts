@@ -149,6 +149,8 @@ export interface OfferPrescreenResult {
   outcomes: Array<{ offerId: string; verdict: "go" | "unknown" | "stop"; reason: string }>;
   counts: { go: number; unknown: number; stop: number; notFound: number };
   skippedPaidLayer: boolean;
+  /** 付费数据层被降级的原因（如站长未配 DataForSEO）。 */
+  paidLayerError?: string | null;
   hotPicks?: HotPicksResult;
 }
 

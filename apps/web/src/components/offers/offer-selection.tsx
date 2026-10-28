@@ -203,8 +203,22 @@ export function OfferPrescreenBar({
   const [excludedBrands, setExcludedBrands] = useState("");
   const [excludedCategories, setExcludedCategories] = useState("");
   const [evidence, setEvidence] = useState<
-    Record<string, { seasonal: string; stock: string; traffic: string }>
+    Record<
+      string,
+      {
+        seasonal: string;
+        stock: string;
+        traffic: string;
+        epc: string;
+        cvr: string;
+        cpc: string;
+        rating: string;
+        reviews: string;
+        sales: string;
+      }
+    >
   >({});
+  const [paidNotice, setPaidNotice] = useState<string | null>(null);
   const [looseDetails, setLooseDetails] = useState<LooseScreenResult | null>(
     null
   );
@@ -216,9 +230,58 @@ export function OfferPrescreenBar({
 
   const setEvidenceField = (id: string, field: string, value: string) => {
     setEvidence((prev) => {
-      const cur = prev[id] ?? { seasonal: "", stock: "", traffic: "" };
+      const cur = prev[id] ?? {
+        seasonal: "",
+        stock: "",
+        traffic: "",
+        epc: "",
+        cvr: "",
+        cpc: "",
+        rating: "",
+        reviews: "",
+        sales: "",
+      };
       return { ...prev, [id]: { ...cur, [field]: value } };
     });
+  };
+
+  /**
+   * 把表单证据拼成 API 的 evidence 结构。
+   * 数字项只在 >0 时提交，空串/非法值一律不发——宁缺勿造。
+   * EPC / CVR 是人工假设；CPC 是经济性判定（保本 CVR）的必要输入。
+   */
+  const buildEvidence = (): LooseScreenEvidence => {
+    const ev: LooseScreenEvidence = {
+      seasonal: {},
+      stock: {},
+      lowPriceTraffic: {},
+      epcUsd: {},
+      conversionRate: {},
+      cpc: {},
+      rating: {},
+      reviewCount: {},
+      monthlySales: {},
+    };
+    const putNum = (target: Record<string, number>, id: string, raw: string) => {
+      const v = Number(raw);
+      if (raw.trim() !== "" && Number.isFinite(v) && v > 0) target[id] = v;
+    };
+    for (const id of selected) {
+      const e = evidence[id];
+      if (!e) continue;
+      if (e.seasonal.trim()) ev.seasonal![id] = e.seasonal.trim();
+      if (e.stock === "in_stock" || e.stock === "out_of_stock")
+        ev.stock![id] = e.stock;
+      if (e.traffic === "winnable" || e.traffic === "not_winnable")
+        ev.lowPriceTraffic![id] = e.traffic;
+      putNum(ev.epcUsd!, id, e.epc);
+      putNum(ev.conversionRate!, id, e.cvr);
+      putNum(ev.cpc!, id, e.cpc);
+      putNum(ev.rating!, id, e.rating);
+      putNum(ev.reviewCount!, id, e.reviews);
+      putNum(ev.monthlySales!, id, e.sales);
+    }
+    return ev;
   };
 
   const onPrescreen = async () => {
@@ -233,6 +296,7 @@ export function OfferPrescreenBar({
       const result = await prescreenOffersAction([...selected], {
         excludedBrands: splitList(excludedBrands),
         excludedCategories: splitList(excludedCategories),
+        evidence: buildEvidence(),
       });
       if (!result.ok) {
         setError(result.error);
@@ -247,6 +311,11 @@ export function OfferPrescreenBar({
       );
       setLooseDetails(null);
       setHotPicks(result.data.hotPicks ?? null);
+      setPaidNotice(
+        result.data.skippedPaidLayer
+          ? `广告数据层已跳过${result.data.paidLayerError ? `（${result.data.paidLayerError}）` : ""}：本次结论不含广告数证据，请人工核实该品牌是否有人投放`
+          : null
+      );
       router.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -259,20 +328,7 @@ export function OfferPrescreenBar({
     setBusy(true);
     setError(null);
     try {
-      const ev: LooseScreenEvidence = {
-        seasonal: {},
-        stock: {},
-        lowPriceTraffic: {},
-      };
-      for (const id of selected) {
-        const e = evidence[id];
-        if (!e) continue;
-        if (e.seasonal.trim()) ev.seasonal![id] = e.seasonal.trim();
-        if (e.stock === "in_stock" || e.stock === "out_of_stock")
-          ev.stock![id] = e.stock;
-        if (e.traffic === "winnable" || e.traffic === "not_winnable")
-          ev.lowPriceTraffic![id] = e.traffic;
-      }
+      const ev = buildEvidence();
       const splitList = (s: string) =>
         s
           .split(",")
@@ -299,6 +355,7 @@ export function OfferPrescreenBar({
       );
       setLooseDetails(result.data);
       setHotPicks(null);
+      setPaidNotice(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -339,6 +396,11 @@ export function OfferPrescreenBar({
         {note && <span className="text-sm text-emerald-700">{note}</span>}
         {error && <span className="text-sm text-red-600">{error}</span>}
       </div>
+      {paidNotice && (
+        <p className="rounded-lg bg-amber-50 px-3 py-1.5 text-xs text-amber-800">
+          {paidNotice}
+        </p>
+      )}
       {mode === "loose" && n > 0 && (
         <div className="flex flex-col gap-2">
           <div className="flex flex-wrap items-center gap-3 text-sm">
@@ -404,6 +466,61 @@ export function OfferPrescreenBar({
                     <option value="not_winnable">{dict.looseTrafficNotWinnable}</option>
                   </select>
                 </label>
+                {/* 以下为经济性与需求证据：空着就是 unknown，不会被当成 0 */}
+                <label className="text-ink/60">
+                  EPC($){" "}
+                  <input
+                    value={e.epc}
+                    onChange={(ev) => setEvidenceField(o.id, "epc", ev.target.value)}
+                    inputMode="decimal"
+                    className="w-16 rounded-lg border border-ink/10 bg-white px-2 py-1 text-sm text-ink"
+                  />
+                </label>
+                <label className="text-ink/60">
+                  CVR(%){" "}
+                  <input
+                    value={e.cvr}
+                    onChange={(ev) => setEvidenceField(o.id, "cvr", ev.target.value)}
+                    inputMode="decimal"
+                    className="w-16 rounded-lg border border-ink/10 bg-white px-2 py-1 text-sm text-ink"
+                  />
+                </label>
+                <label className="text-ink/60">
+                  CPC($){" "}
+                  <input
+                    value={e.cpc}
+                    onChange={(ev) => setEvidenceField(o.id, "cpc", ev.target.value)}
+                    inputMode="decimal"
+                    className="w-16 rounded-lg border border-ink/10 bg-white px-2 py-1 text-sm text-ink"
+                  />
+                </label>
+                <label className="text-ink/60">
+                  评分{" "}
+                  <input
+                    value={e.rating}
+                    onChange={(ev) => setEvidenceField(o.id, "rating", ev.target.value)}
+                    inputMode="decimal"
+                    className="w-14 rounded-lg border border-ink/10 bg-white px-2 py-1 text-sm text-ink"
+                  />
+                </label>
+                <label className="text-ink/60">
+                  评论{" "}
+                  <input
+                    value={e.reviews}
+                    onChange={(ev) => setEvidenceField(o.id, "reviews", ev.target.value)}
+                    inputMode="numeric"
+                    className="w-16 rounded-lg border border-ink/10 bg-white px-2 py-1 text-sm text-ink"
+                  />
+                </label>
+                <label className="text-ink/60">
+                  月销{" "}
+                  <input
+                    value={e.sales}
+                    onChange={(ev) => setEvidenceField(o.id, "sales", ev.target.value)}
+                    inputMode="numeric"
+                    className="w-16 rounded-lg border border-ink/10 bg-white px-2 py-1 text-sm text-ink"
+                  />
+                </label>
               </div>
             );
           })}
@@ -464,7 +581,15 @@ export function OfferPrescreenBar({
             <p>
               <span className="font-medium">{dict.looseQualified}：</span>
               {looseDetails.qualified
-                .map((q) => `${q.name}（$${q.commissionUsd}）`)
+                .map((q) => {
+                  const parts = [`${q.commissionUsd}`];
+                  if (q.economics && q.economics !== "unknown")
+                    parts.push(`经济性 ${q.economics}`);
+                  if (typeof q.breakevenCvr === "number")
+                    parts.push(`保本CVR ${q.breakevenCvr.toFixed(1)}%`);
+                  if (q.epcSource) parts.push(`EPC:${q.epcSource}`);
+                  return `${q.name}（${parts.join("，")}）`;
+                })
                 .join("、")}
             </p>
           )}
