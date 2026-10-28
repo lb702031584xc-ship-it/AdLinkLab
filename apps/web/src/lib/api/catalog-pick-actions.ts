@@ -12,6 +12,8 @@ export interface CatalogPickItem {
   name: string;
   brand: string | null;
   payoutUsd: number;
+  /** 预期每单佣金（页面佣金 × 折损系数）。 */
+  expectedPayoutUsd?: number;
   breakevenCpcUsd: number;
   countryCode: string | null;
   note: string;

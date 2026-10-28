@@ -158,7 +158,7 @@ export default function CatalogPickPage() {
                   <tr>
                     <th className="text-left font-normal">商品</th>
                     <th className="text-left font-normal">国家</th>
-                    <th className="text-right font-normal">单笔佣金</th>
+                    <th className="text-right font-normal">页面 / 预期佣金</th>
                     <th className="text-right font-normal">保本 CPC</th>
                     <th className="text-right font-normal">结论</th>
                   </tr>
@@ -171,7 +171,14 @@ export default function CatalogPickPage() {
                       <tr key={p.productId} className="border-t border-ink/5">
                         <td className="py-1 text-ink/85">{p.name}</td>
                         <td className="text-ink/60">{p.countryCode ?? "—"}</td>
-                        <td className="text-right">${p.payoutUsd.toFixed(2)}</td>
+                        <td className="text-right">
+                          ${p.payoutUsd.toFixed(2)}
+                          <span className="ml-1 text-xs text-ink/45">页面</span>
+                          <br />
+                          <span className="text-xs text-ink/60">
+                            ${(p.expectedPayoutUsd ?? p.payoutUsd * 0.6).toFixed(2)} 预期
+                          </span>
+                        </td>
                         <td className="text-right">
                           ${p.breakevenCpcUsd.toFixed(2)}
                         </td>
