@@ -78,6 +78,21 @@ describe("validateCreateCampaignPlan", () => {
       validateCreateCampaignPlan(plan2).some((p) => p.includes("headlines"))
     ).toBe(true);
   });
+
+  it("rejects RSA display paths over 15 chars (Google limit)", () => {
+    // 2026-10-28 Qrevo Edge 3 Pro：path2 超长直到 Google 拒登才暴露。
+    const plan = samplePlan();
+    plan.adGroups[0]!.rsa.path2 = "qrevo-edge-3-pro"; // 16 chars
+    expect(
+      validateCreateCampaignPlan(plan).some((p) => p.includes("path2"))
+    ).toBe(true);
+    expect(() => buildCreateCampaignScript(plan)).toThrow(/path2/);
+  });
+
+  it("template aborts before creating anything when a path is over 15 chars", () => {
+    const src = buildCreateCampaignScript(samplePlan());
+    expect(src).toContain("exceeds 15 chars");
+  });
 });
 
 describe("buildCreateCampaignScript", () => {

@@ -26,7 +26,7 @@
 import { jsStringLiteral } from "./script-generator-source.js";
 import type { AdPlan } from "../ai/ad-generator.js";
 
-export const CREATE_CAMPAIGN_SCRIPT_VERSION = "1.3.0";
+export const CREATE_CAMPAIGN_SCRIPT_VERSION = "1.3.1";
 
 /** ISO country code → Google Ads geo target location ID (criteria ID). */
 export const COUNTRY_LOCATION_IDS: Record<string, number> = {
@@ -88,6 +88,14 @@ export function validateCreateCampaignPlan(plan: AdPlan): string[] {
     }
     if (!block?.rsa?.finalUrl) {
       problems.push(`adGroups[${i}].rsa.finalUrl is required`);
+    }
+    // Google RSA 显示路径每段上限 15 字符：旧计划（生成校验收紧前存量）
+    // 在下载脚本时就拒绝，不让它流到 Google 建出空壳系列。
+    if (typeof block?.rsa?.path1 === "string" && block.rsa.path1.length > 15) {
+      problems.push(`adGroups[${i}].rsa.path1 must be at most 15 chars (Google RSA display path limit)`);
+    }
+    if (typeof block?.rsa?.path2 === "string" && block.rsa.path2.length > 15) {
+      problems.push(`adGroups[${i}].rsa.path2 must be at most 15 chars (Google RSA display path limit)`);
     }
   }
   // P1-25：排期形状校验（非法排期拒绝建 Script，不静默丢弃）。
@@ -263,6 +271,17 @@ function validatePlan_(plan) {
   }
   if (!plan.adGroups || plan.adGroups.length === 0) {
     problems.push("at least one ad group is required");
+  }
+  // RSA 显示路径：Google 每段上限 15 字符。超长直接中止，绝不建出
+  // “系列+广告组建好了、广告失败”的半截状态（2026-10-28 Qrevo Edge 3 Pro 实测教训）。
+  for (var i = 0; i < (plan.adGroups || []).length; i++) {
+    var rsa = plan.adGroups[i] && plan.adGroups[i].rsa;
+    if (rsa && typeof rsa.path1 === "string" && rsa.path1.length > 15) {
+      problems.push("adGroups[" + i + "].rsa.path1 exceeds 15 chars (Google RSA display path limit)");
+    }
+    if (rsa && typeof rsa.path2 === "string" && rsa.path2.length > 15) {
+      problems.push("adGroups[" + i + "].rsa.path2 exceeds 15 chars (Google RSA display path limit)");
+    }
   }
   // P1-25：排期形状（TS 侧已校验；Script 内再防卫，非法直接中止）。
   var DAYS = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"];

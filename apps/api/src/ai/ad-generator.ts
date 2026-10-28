@@ -706,14 +706,17 @@ const headlines = normStrArray(o.headlines, 15, 15, "headlines").map((h) =>
 const descriptions = normStrArray(o.descriptions, 4, 4, "descriptions").map((d) =>
   truncateToLimit(d, 90)
 );
-const path1 =
-o.path1 === null || o.path1 === undefined
-? null
-: normStr(o.path1, "path1", true) || null;
-const path2 =
-o.path2 === null || o.path2 === undefined
-? null
-: normStr(o.path2, "path2", true) || null;
+  // Google RSA 显示路径每段上限 15 字符：与标题（30）/描述（90）同口径截断。
+  // 超长值绝不流到 Google——2026-10-28 Qrevo Edge 3 Pro 的 path2 超长，
+  // 直到 Google 拒登才暴露，系列已建成空壳。
+  const path1 =
+    o.path1 === null || o.path1 === undefined
+      ? null
+      : truncateToLimit(normStr(o.path1, "path1", true), 15) || null;
+  const path2 =
+    o.path2 === null || o.path2 === undefined
+      ? null
+      : truncateToLimit(normStr(o.path2, "path2", true), 15) || null;
 
 return {
 campaignName,
