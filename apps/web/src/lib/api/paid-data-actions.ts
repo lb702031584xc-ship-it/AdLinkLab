@@ -303,7 +303,13 @@ export interface KeywordRecommendResult {
   } | null;
   suggestions: KeywordSuggestionDto[];
   /** 长尾候选（规格词重组），不含搜索量。 */
-  longTail?: Array<{ keyword: string; basis: string; note: string }>;
+  longTail?: Array<{
+    keyword: string;
+    basis: string;
+    note: string;
+    verdict?: "verify" | "bid";
+    gateReason?: string;
+  }>;
   skipped: Array<{ keyword: string; reason: string }>;
   notes: string[];
 }

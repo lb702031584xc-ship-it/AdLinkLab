@@ -22,6 +22,8 @@
  *
  * 品牌词：brandBiddingForbidden 为真时不生成，并记入 skipped 说明原因。
  */
+import { assessKeyword } from "./keyword-gate.js";
+
 export type KeywordIntent = "transactional" | "commercial" | "informational";
 export type KeywordVerdict = "test" | "skip" | "blocked";
 export type KeywordMatchType = "exact" | "phrase";
@@ -57,11 +59,20 @@ export interface KeywordSuggestion {
 }
 
 /** 长尾候选：从产品名的规格词重组出来的更具体组合。 */
-export interface LongTailSuggestion {
+/** 未过闸门的原始长尾（只有字符串与来源）。 */
+export interface RawLongTail {
   keyword: string;
   /** 来自哪一类：规格 / 品牌+规格。 */
   basis: "spec" | "brand_spec";
   note: string;
+}
+
+/** 过闸门后的长尾：带判定与原因。 */
+export interface LongTailSuggestion extends RawLongTail {
+  /** 闸门判定：verify = 待实测；bid = 有搜索量且达标（本模块不产生 bid）。 */
+  verdict: "verify" | "bid";
+  /** 闸门给的一句话。 */
+  gateReason: string;
 }
 
 export interface KeywordRecommendSkipped {
@@ -144,13 +155,13 @@ export function buildLongTailCandidates(input: {
   core: string;
   brandName?: string | null;
   limit?: number;
-}): LongTailSuggestion[] {
+}): RawLongTail[] {
   const { base, specs } = splitCoreAndSpecs(input.core);
   if (!base || specs.length === 0) return [];
   const brand = (input.brandName ?? "").trim().toLowerCase();
   const limit = Math.max(1, Math.min(30, input.limit ?? 12));
 
-  const out: LongTailSuggestion[] = [];
+  const out: RawLongTail[] = [];
   const seen = new Set<string>();
   const push = (keyword: string, basis: LongTailSuggestion["basis"]) => {
     const kw = keyword.trim().replace(/\s+/g, " ");
@@ -316,14 +327,36 @@ export function recommendKeywords(
     "候选词按意图模板规则生成，不含搜索量与竞争度（需付费数据）；保本 CPC 由 Offer 佣金与目标 CVR 算出，是唯一可确定的经济性门槛"
   );
 
-  const longTail = buildLongTailCandidates({
+  // 长尾候选必须过闸门：结构上不可能的（含后台代码 / 对比 / 折扣 / 品牌禁令）
+  // 直接扔进 skipped，不展示给用户，避免"生成一堆没用的长尾"。
+  const rawLongTail = buildLongTailCandidates({
     core,
     brandName: input.brandName,
   });
+  const gated = rawLongTail.map((c) => {
+    const g = assessKeyword(c.keyword, {
+      brandName: input.brandName ?? null,
+      brandBiddingForbidden: input.brandBiddingForbidden === true,
+    });
+    return { ...c, verdict: g.verdict, gateReason: g.reason, codes: g.codes };
+  });
+  const longTail: LongTailSuggestion[] = gated
+    .filter((x) => x.verdict !== "reject")
+    .map(({ codes: _codes, ...rest }) => ({
+      ...rest,
+      verdict: rest.verdict as "verify" | "bid",
+    }));
+  for (const d of gated.filter((x) => x.verdict === "reject")) {
+    skipped.push({ keyword: d.keyword, reason: `闸门淘汰：${d.gateReason}` });
+  }
   if (longTail.length > 0) {
     notes.push(
-      `长尾候选 ${longTail.length} 条（规格词重组）：不含搜索量，先用 /api/v1/keywords/expand 验证再投`
+      `长尾候选 ${longTail.length} 条（已过闸门）：不含搜索量，先用 /api/v1/keywords/expand 验证再投`
     );
+  }
+  const droppedCount = gated.length - longTail.length;
+  if (droppedCount > 0) {
+    notes.push(`另有 ${droppedCount} 条被闸门淘汰，未展示（原因见 skipped）`);
   }
 
   return {

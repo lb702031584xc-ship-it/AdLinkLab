@@ -278,6 +278,26 @@ export function OfferPrescreenBar({
   const [advanced, setAdvanced] = useState(false);
   const [kwBusy, setKwBusy] = useState(false);
   const [kwResults, setKwResults] = useState<KeywordRecommendResult[]>([]);
+  // 长尾候选勾选（跨结果共用一池，按 keyword 去重）
+  const [pickedLongTail, setPickedLongTail] = useState<Set<string>>(new Set());
+  const toggleLongTail = (kw: string) =>
+    setPickedLongTail((prev) => {
+      const next = new Set(prev);
+      if (next.has(kw)) next.delete(kw);
+      else next.add(kw);
+      return next;
+    });
+  const copyPickedLongTail = async () => {
+    if (pickedLongTail.size === 0) return;
+    // 长尾一律用完全匹配：越具体越要锁死，避免广泛匹配烧钱
+    const text = [...pickedLongTail].map((k) => `[${k}]`).join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      setNote(`已复制 ${pickedLongTail.size} 个长尾词（完全匹配格式），可直接粘进 Google Ads`);
+    } catch {
+      setError("复制失败，请手动选择文本");
+    }
+  };
   // 初筛结论留存（含 go 的 offerId），用于「筛完直接生成关键词」，
   // 避免用户重新勾选一遍。
   const [prescreenOutcomes, setPrescreenOutcomes] = useState<
@@ -857,10 +877,37 @@ export function OfferPrescreenBar({
                 </table>
               )}
               {r.longTail && r.longTail.length > 0 && (
-                <p className="mt-2 text-xs text-ink/60">
-                  长尾候选（需用关键词扩展验证搜索量）：
-                  {r.longTail.map((x) => x.keyword).join("、")}
-                </p>
+                <div className="mt-2 rounded-lg border border-ink/10 p-2 text-xs">
+                  <p className="text-ink/60">
+                    长尾候选（已过闸门，勾选后可复制）：
+                  </p>
+                  <div className="mt-1 flex flex-col gap-0.5">
+                    {r.longTail.map((x) => (
+                      <label
+                        key={x.keyword}
+                        className="flex cursor-pointer items-center gap-2"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={pickedLongTail.has(x.keyword)}
+                          onChange={() => toggleLongTail(x.keyword)}
+                        />
+                        <span className="text-ink/85">{x.keyword}</span>
+                        <span className="text-ink/40">
+                          {x.verdict === "bid" ? "可投" : "待验证"}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={copyPickedLongTail}
+                    disabled={pickedLongTail.size === 0}
+                    className="mt-1.5 rounded border border-ink/20 px-2 py-0.5 text-xs text-ink/70 hover:bg-ink/5 disabled:opacity-40"
+                  >
+                    复制选中（完全匹配格式）
+                  </button>
+                </div>
               )}
               {r.notes.length > 0 && (
                 <p className="mt-1 text-xs text-ink/50">{r.notes.join("；")}</p>
