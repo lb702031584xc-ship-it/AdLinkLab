@@ -155,6 +155,30 @@ export interface CpcProbePlan {
   note: string;
 }
 
+/**
+ * 按类目 CPC 反推「最低单笔佣金」。
+ *
+ * 新手不该手填这个数：他既不知道类目 CPC，也不知道该留多少余量。
+ * 反过来算只有一条公式——
+ *   保本 CPC = 佣金 × (1−拒单) × (1−退款) × 目标CVR
+ *   佣金门槛 = 类目 CPC ÷ 同样那组系数
+ * 得出的正好是「在这个类目里打得平的最低佣金」。
+ */
+export function deriveMinCommissionAmount(input: {
+  categoryCpcUsd: number;
+  targetCvrPct?: number;
+  rejectionRate?: number;
+  refundRate?: number;
+}): number {
+  const cpc = Math.max(0, num(input.categoryCpcUsd) ?? 0);
+  const cvr = Math.min(100, Math.max(0.1, input.targetCvrPct ?? 2.5));
+  const rej = Math.min(1, Math.max(0, input.rejectionRate ?? 0.15));
+  const refund = Math.min(1, Math.max(0, input.refundRate ?? 0.05));
+  const keep = (1 - rej) * (1 - refund) * (cvr / 100);
+  if (cpc <= 0 || keep <= 0) return 0;
+  return Math.ceil((cpc / keep) * 100) / 100;
+}
+
 export function planCpcProbe(input: CpcProbeInput): CpcProbePlan {
   const cpc = Math.max(0.01, num(input.assumedCpcUsd) ?? 0.01);
   const targetClicks = Math.max(20, Math.floor(input.targetClicks ?? 100));

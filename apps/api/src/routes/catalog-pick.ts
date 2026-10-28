@@ -12,7 +12,11 @@ import {
   type SessionAuthInfo,
 } from "../auth/sessions.js";
 import { pickFromCatalog, type CatalogCandidate } from "../services/catalog-pick.js";
-import { resolveCpcBaseline, type CpcSample } from "../services/cpc-baseline.js";
+import {
+  deriveMinCommissionAmount,
+  resolveCpcBaseline,
+  type CpcSample,
+} from "../services/cpc-baseline.js";
 
 export interface CatalogPickRouteDeps {
   prisma: PrismaClient;
@@ -158,7 +162,13 @@ export async function registerCatalogPickRoutes(
         categoryCpcUsd: baseline.cpcUsd > 0 ? baseline.cpcUsd : null,
       });
 
-      return { baseline, result };
+      // 建议门槛：由类目 CPC 反推，新手不必手填
+      const suggestedMinCommissionUsd =
+        baseline.cpcUsd > 0
+          ? deriveMinCommissionAmount({ categoryCpcUsd: baseline.cpcUsd })
+          : 0;
+
+      return { baseline, suggestedMinCommissionUsd, result };
     }
   );
 }

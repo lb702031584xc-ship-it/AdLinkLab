@@ -33,6 +33,8 @@ export interface CatalogPickPayload {
     confidence: string;
     note: string;
   };
+  /** 按类目 CPC 反推的建议佣金门槛（美元）；0 = 算不出来。 */
+  suggestedMinCommissionUsd?: number;
   result: {
     picked: CatalogPickItem[];
     dropped: CatalogPickDropped[];
