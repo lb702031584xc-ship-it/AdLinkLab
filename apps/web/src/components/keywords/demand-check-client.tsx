@@ -193,6 +193,29 @@ const verdictCls: Record<DemandVerdict, string> = {
   bad: "bg-red-100 text-red-700",
 };
 
+/** 行内复制按钮：点一下把关键词放进剪贴板，1.5 秒后恢复。 */
+function CopyKwButton({ text }: { text: string }) {
+  const [done, setDone] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+        } catch {
+          /* 剪贴板不可用时静默失败 */
+        }
+        setDone(true);
+        setTimeout(() => setDone(false), 1500);
+      }}
+      className="text-xs text-ink/40 hover:text-emerald-700"
+      title={text}
+    >
+      {done ? "已复制" : "复制"}
+    </button>
+  );
+}
+
 export function DemandCheckClient({
   dict: d,
   importSignal,
@@ -940,6 +963,7 @@ export function DemandCheckClient({
                       className=""
                       onPick={(c) => void fillFromCapture(c.id, r.id)}
                     />
+                    <CopyKwButton text={r.keyword} />
                     <button
                       type="button"
                       onClick={() => removeRow(r.id)}
