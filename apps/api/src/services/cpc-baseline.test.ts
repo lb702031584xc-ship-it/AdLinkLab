@@ -90,3 +90,27 @@ describe("planCpcProbe", () => {
     expect(p.note).toContain("回填");
   });
 });
+
+describe("deriveMinCommissionAmount", () => {
+  it("按类目 CPC 反推最低佣金", () => {
+    // 1.56 / (0.85 x 0.95 x 2.5%) ≈ 77.3
+    expect(deriveMinCommissionAmount({ categoryCpcUsd: 1.56 })).toBeCloseTo(77.3, 1);
+  });
+
+  it("CPC 越高，需要的佣金越高", () => {
+    const low = deriveMinCommissionAmount({ categoryCpcUsd: 0.34 });
+    const high = deriveMinCommissionAmount({ categoryCpcUsd: 1.56 });
+    expect(high).toBeGreaterThan(low);
+    expect(low).toBeCloseTo(16.85, 1);
+  });
+
+  it("目标 CVR 提高后，佣金门槛下降", () => {
+    const at25 = deriveMinCommissionAmount({ categoryCpcUsd: 1.56, targetCvrPct: 2.5 });
+    const at5 = deriveMinCommissionAmount({ categoryCpcUsd: 1.56, targetCvrPct: 5 });
+    expect(at5).toBeLessThan(at25);
+  });
+
+  it("CPC 为 0 时返回 0（不猜）", () => {
+    expect(deriveMinCommissionAmount({ categoryCpcUsd: 0 })).toBe(0);
+  });
+});
