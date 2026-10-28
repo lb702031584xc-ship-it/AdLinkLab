@@ -25,7 +25,9 @@ export type KeywordRejectCode =
   | "BRAND_FORBIDDEN"
   | "INFORMATIONAL"
   | "TOO_GENERIC"
-  | "NEGATIVE_INTENT";
+  | "NEGATIVE_INTENT"
+  | "BIG_HEAD_TERM"
+  | "SPEC_PARAM_TERM";
 
 export interface KeywordGateContext {
   brandName?: string | null;
@@ -69,6 +71,10 @@ const CHEAP_RE = /\b(affordable|cheap|cheapest|budget|inexpensive|low cost|under
 const INFO_RE = /\b(how to|what is|why|guide|diy|tutorial|instructions)\b/i;
 /** 负面/维修意图：搜的人是修不是买。 */
 const NEGATIVE_RE = /\b(repair|replacement|parts|troubleshoot|not working|broken|manual)\b/i;
+/** 品类大词：best/top + 品类，没有品牌。浏览型搜索，转化极低但竞价很贵。 */
+const BIG_HEAD_RE = /\b(best|top|top-rated|highest rated|best seller|bestseller)\b/i;
+/** 纯参数词：36000 pa / 8 kw 这类规格数字本身。没人按参数搜索。 */
+const SPEC_PARAM_RE = /\b\d+(?:\.\d+)?\s?(pa|kw|mah|psi|gpm|rpm)\b/i;
 
 const normalise = (s: string) => (s ?? "").toLowerCase().replace(/\s+/g, " ").trim();
 
@@ -120,6 +126,15 @@ export function assessKeyword(
   if (INFO_RE.test(kw)) reject("INFORMATIONAL");
   if (NEGATIVE_RE.test(kw)) reject("NEGATIVE_INTENT");
 
+  /* 6b. 品类大词 / 纯参数词：只在【不含品牌】时才拒绝。
+         "vevor 260w vacuum sealer" 含品牌，是正当的长尾，不能拦。 */
+  const hasBrandToken = brand ? kw.split(" ").includes(brand.split(" ")[0]) : false;
+  const brandPresent = brand ? kw.includes(brand) : false;
+  if (!brandPresent && !hasBrandToken) {
+    if (BIG_HEAD_RE.test(kw)) reject("BIG_HEAD_TERM");
+    if (SPEC_PARAM_RE.test(kw)) reject("SPEC_PARAM_TERM");
+  }
+
   /* 7. 只有一个词 = 太宽（例如 "sealer"） */
   if (tokens.length < 2) reject("TOO_GENERIC");
 
@@ -133,6 +148,8 @@ export function assessKeyword(
       INFORMATIONAL: "信息型意图，冷搜索几乎不成交",
       TOO_GENERIC: "太宽，会匹配到无关查询",
       NEGATIVE_INTENT: "维修/配件意图，不是购买",
+      BIG_HEAD_TERM: "品类大词且不含品牌：浏览型搜索，竞价贵、转化低",
+      SPEC_PARAM_TERM: "纯参数词（如 36000 pa）：没人按参数搜索",
     };
     return {
       keyword,
