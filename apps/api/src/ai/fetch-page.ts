@@ -7,7 +7,10 @@
  *   against private/loopback/link-local/multicast/reserved ranges.
  * - Redirects are followed manually (max 3 hops) with re-validation per hop,
  *   so a redirect to an internal address cannot bypass the check.
- * - 10s timeout per request, 2MB body cap.
+ * - 10s timeout per request, 8MB body cap. The cap counts RAW bytes before
+ *   stripping scripts/styles (modern product pages easily exceed 2MB raw
+ *   while only 12KB of text is kept), so it must sit well above real page
+ *   sizes; it still bounds memory against abuse URLs.
  *
  * No new dependencies. Never log fetched URLs with credentials.
  */
@@ -15,7 +18,7 @@ import { lookup } from "node:dns/promises";
 import { AiError } from "./llm.js";
 
 export const FETCH_TIMEOUT_MS = 10_000;
-export const MAX_BODY_BYTES = 2 * 1024 * 1024;
+export const MAX_BODY_BYTES = 8 * 1024 * 1024;
 export const MAX_TEXT_CHARS = 12_000;
 const MAX_REDIRECTS = 3;
 
@@ -149,6 +152,24 @@ async function readCapped(res: Response): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
+/**
+ * readCapped 的调用点包装：超限时把当时的 URL 带进报错里，
+ * 多链接粘贴时用户能一眼看出是哪条链接超了。
+ */
+async function readCappedWithUrl(res: Response, url: string): Promise<Buffer> {
+  try {
+    return await readCapped(res);
+  } catch (e) {
+    if (e instanceof AiError && e.message === "Page too large") {
+      throw new AiError(
+        `Page too large (raw HTML over ${MAX_BODY_BYTES / 1024 / 1024}MB): ${url}`,
+        400
+      );
+    }
+    throw e;
+  }
+}
+
 export interface FetchedPage {
   finalUrl: string;
   text: string;
@@ -171,7 +192,7 @@ export interface FetchedHtmlPage {
 
 /**
  * Fetch a page with the SAME SSRF guards as fetchPage (private-IP blocking,
- * manual redirects with per-hop re-validation, 10s timeout, 2MB body cap),
+ * manual redirects with per-hop re-validation, 10s timeout, 8MB body cap),
  * but return the raw HTML for structural analysis. Additive only: the SSRF
  * logic above is untouched.
  */
@@ -226,7 +247,7 @@ export async function fetchPageHtml(rawUrl: string): Promise<FetchedHtmlPage> {
     if (!res.ok) {
       throw new AiError(`Page fetch failed (status ${res.status})`);
     }
-    const buf = await readCapped(res);
+    const buf = await readCappedWithUrl(res, current);
     const html = buf.toString("utf8");
     return {
       finalUrl: current,
@@ -294,7 +315,7 @@ export async function fetchPage(rawUrl: string): Promise<FetchedPage> {
     if (!res.ok) {
       throw new AiError(`Page fetch failed (status ${res.status})`);
     }
-    const buf = await readCapped(res);
+    const buf = await readCappedWithUrl(res, current);
     const text = stripHtml(buf.toString("utf8")).slice(0, MAX_TEXT_CHARS);
     return { finalUrl: current, text, redirectChain };
   }
