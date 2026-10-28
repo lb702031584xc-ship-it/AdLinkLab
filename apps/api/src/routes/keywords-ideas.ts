@@ -8,6 +8,7 @@ import type { PrismaClient } from "@adlinklab/database";
 import { UnauthorizedError, ValidationError } from "@adlinklab/shared";
 import { authenticateSessionRequest, type SessionAuthInfo } from "../auth/sessions.js";
 import { generateRuleIdeas } from "../services/keyword-ideas.js";
+import { assessKeyword } from "../services/keyword-gate.js";
 
 export interface KeywordIdeasRouteDeps {
   prisma: PrismaClient;
@@ -52,7 +53,23 @@ export async function registerKeywordIdeasRoutes(
       if (!Number.isInteger(limitPerKind) || limitPerKind < 1 || limitPerKind > 50) {
         throw new ValidationError("limitPerKind must be an integer between 1 and 50");
       }
-      const ideas = generateRuleIdeas({ seeds, brandTerms, domain, limitPerKind });
+      // 每条 idea 过关键词闸门：对比无页 / 折扣无码 / 后台代码 / 品类大词 /
+      // 纯参数词 / 信息型 / 维修型 —— 结构上不可能的，直接带 reject 标记。
+      const brand = brandTerms[0] ?? null;
+      const ideas = generateRuleIdeas({
+        seeds,
+        brandTerms,
+        domain,
+        limitPerKind,
+      }).map((idea) => {
+        const g = assessKeyword(idea.keyword, { brandName: brand });
+        return {
+          ...idea,
+          gateVerdict: g.verdict,
+          gateReason: g.reason,
+          gateCodes: g.codes,
+        };
+      });
       return {
         ideas,
         count: ideas.length,
