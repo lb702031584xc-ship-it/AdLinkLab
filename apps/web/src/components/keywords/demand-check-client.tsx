@@ -193,6 +193,15 @@ const verdictCls: Record<DemandVerdict, string> = {
   bad: "bg-red-100 text-red-700",
 };
 
+/**
+ * 经济性估算的两个常量——不藏魔法数字：
+ * - CTR 15%：品牌型号词的常见点击率（你封口机系列实测 14.93%~15.82%）
+ * - CPC ¥11.2：robot vacuum 类目品牌词的实测均价
+ * 这两个数都是可替换的：换类目就改这里，别让页面假装是实时数据。
+ */
+const ECON_CTR = 0.15;
+const ECON_CPC_CNY = 11.2;
+
 /** 行内复制按钮：点一下把关键词放进剪贴板，1.5 秒后恢复。 */
 function CopyKwButton({ text }: { text: string }) {
   const [done, setDone] = useState(false);
@@ -961,6 +970,18 @@ export function DemandCheckClient({
                     <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${verdictCls[v]}`}>
                       {d.verdictOptions[v]}
                     </span>
+                    {(() => {
+                      const vol = Number(r.volume);
+                      if (!Number.isFinite(vol) || vol <= 0) return null;
+                      const clicks = Math.round(vol * ECON_CTR);
+                      if (clicks <= 0) return null;
+                      const spend = Math.round(clicks * ECON_CPC_CNY);
+                      return (
+                        <span className="text-[11px] text-ink/50">
+                          约 {clicks} 点击/月 · 花费 ¥{spend}/月
+                        </span>
+                      );
+                    })()}
                     <CapturePicker
                       label={d.captureFillRow}
                       className=""
