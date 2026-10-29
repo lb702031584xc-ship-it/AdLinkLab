@@ -68,6 +68,33 @@ export interface GoogleAdsAdGroupCriterion {
   status: string;
 }
 
+/**
+ * Per-campaign performance row for a date range (GAQL metrics.* aggregated
+ * client-side across segments.date rows). costMicros is in micros of the
+ * account currency (divide by 1_000_000 for display). Campaigns with zero
+ * activity in range return no row — callers left-join listCampaigns to show
+ * zeroes.
+ */
+export interface GoogleAdsCampaignStats {
+  campaignId: string;
+  campaignName: string;
+  impressions: number;
+  clicks: number;
+  costMicros: number;
+  conversions: number;
+}
+
+export interface CampaignStatsOptions {
+  /** Inclusive start, YYYY-MM-DD. */
+  startDate: string;
+  /** Inclusive end, YYYY-MM-DD. Must be >= startDate. */
+  endDate: string;
+  /** Restrict to these Google external campaign IDs; omit for all. */
+  campaignIds?: string[];
+  /** Soft cap for returned rows after aggregation. */
+  pageSize?: number;
+}
+
 export interface ConversionUploadInput {
   customerId: string;
   conversionAction: string;
@@ -98,9 +125,12 @@ export interface GoogleAdsListOptions {
 /**
  * Provider interface isolating Google Ads from application / domain code.
  *
- * Read methods are Phase 2 primary surface.
- * updateAdUrl / uploadConversion remain for Phase 0.1 mock workflows;
- * GoogleAdsApiProvider must NOT implement real mutations.
+ * Read methods are the primary surface. GoogleAdsApiProvider implements
+ * reads against the live REST API (GAQL); MockGoogleAdsProvider serves
+ * deterministic fixtures. Mutations stay refused on the ApiProvider by
+ * design — real changes go through Google Ads Scripts the advertiser runs
+ * manually, never through this provider.
+ * updateAdUrl / uploadConversion remain mock-only hooks.
  */
 export interface GoogleAdsProvider {
   getCustomer(customerId: string): Promise<GoogleAdsCustomer>;
@@ -111,6 +141,15 @@ export interface GoogleAdsProvider {
     customerId: string,
     options?: GoogleAdsListOptions
   ): Promise<GoogleAdsCampaign[]>;
+
+  /**
+   * Per-campaign performance for a date range (metrics aggregated across
+   * segments.date rows). Implemented by ApiProvider (GAQL) and Mock.
+   */
+  listCampaignStats(
+    customerId: string,
+    options: CampaignStatsOptions
+  ): Promise<GoogleAdsCampaignStats[]>;
 
   getAdGroup(campaignId: string, adGroupId: string): Promise<GoogleAdsAdGroup>;
   listAdGroups(

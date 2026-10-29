@@ -15,12 +15,15 @@ export interface GoogleCredentialProvider {
 
 /**
  * Resolves whether live API env is configured — never returns token values.
+ * The real client needs all four: developer token, OAuth client id + secret,
+ * and refresh token. Only variable NAMES are ever reported, never values.
  */
 export class EnvGoogleCredentialProvider implements GoogleCredentialProvider {
   async resolve(credentialRef: string): Promise<GoogleAdsCredentialHandle> {
     const isConfigured = Boolean(
       process.env.GOOGLE_ADS_DEVELOPER_TOKEN &&
         process.env.GOOGLE_ADS_CLIENT_ID &&
+        process.env.GOOGLE_ADS_CLIENT_SECRET &&
         process.env.GOOGLE_ADS_REFRESH_TOKEN
     );
     return { credentialRef, isConfigured };

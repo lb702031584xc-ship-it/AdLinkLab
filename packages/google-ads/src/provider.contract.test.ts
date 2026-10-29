@@ -10,13 +10,15 @@ import {
 import { MockGoogleCredentialProvider } from "./credentials.js";
 
 /**
- * Phase 2 provider contract suite — Mock must pass fully.
+ * Provider contract suite — Mock must pass fully.
  * ApiProvider: construction + type surface + explicit mutation refusal.
+ * Live reads are implemented: without credentials they fail UNAUTHORIZED
+ * (naming the missing variables) before any network call.
  */
 function runGoogleAdsProviderContract(
   label: string,
   createProvider: () => GoogleAdsProvider,
-  mode: "mock" | "api-skeleton"
+  mode: "mock" | "api"
 ) {
   describe(`GoogleAdsProvider contract (${label})`, () => {
     it("exposes required read methods", () => {
@@ -25,6 +27,7 @@ function runGoogleAdsProviderContract(
       expect(typeof provider.listCustomers).toBe("function");
       expect(typeof provider.getCampaign).toBe("function");
       expect(typeof provider.listCampaigns).toBe("function");
+      expect(typeof provider.listCampaignStats).toBe("function");
       expect(typeof provider.getAdGroup).toBe("function");
       expect(typeof provider.listAdGroups).toBe("function");
       expect(typeof provider.getAd).toBe("function");
@@ -32,18 +35,34 @@ function runGoogleAdsProviderContract(
       expect(typeof provider.listAdGroupCriteria).toBe("function");
     });
 
-    if (mode === "api-skeleton") {
-      it("read methods return NOT_IMPLEMENTED without live credentials", async () => {
-        const provider = createProvider();
-        await expect(provider.listCustomers()).rejects.toMatchObject({
-          googleCode: "NOT_IMPLEMENTED",
-        });
-        await expect(
-          provider.getCustomer("mock-customer-001")
-        ).rejects.toMatchObject({ googleCode: "NOT_IMPLEMENTED" });
+    if (mode === "api") {
+      it("read methods fail UNAUTHORIZED without credentials, before any network call", async () => {
+        const vars = [
+          "GOOGLE_ADS_DEVELOPER_TOKEN",
+          "GOOGLE_ADS_CLIENT_ID",
+          "GOOGLE_ADS_CLIENT_SECRET",
+          "GOOGLE_ADS_REFRESH_TOKEN",
+        ];
+        const saved = new Map(vars.map((k) => [k, process.env[k]]));
+        try {
+          for (const k of vars) delete process.env[k];
+          const provider = createProvider();
+          await expect(provider.listCustomers()).rejects.toMatchObject({
+            googleCode: "UNAUTHORIZED",
+          });
+          await expect(
+            provider.getCustomer("1234567890")
+          ).rejects.toMatchObject({ googleCode: "UNAUTHORIZED" });
+        } finally {
+          for (const k of vars) {
+            const value = saved.get(k);
+            if (value === undefined) delete process.env[k];
+            else process.env[k] = value;
+          }
+        }
       });
 
-      it("refuses mutations in Phase 2", async () => {
+      it("refuses mutations", async () => {
         const provider = createProvider();
         await expect(
           provider.updateAdUrl("ad-3001", "https://example.com/x")
@@ -205,14 +224,14 @@ runGoogleAdsProviderContract(
 );
 
 runGoogleAdsProviderContract(
-  "GoogleAdsApiProvider skeleton",
+  "GoogleAdsApiProvider",
   () =>
     new GoogleAdsApiProvider({
       credentialRef: "vault:ref:test-only",
       credentialProvider: new MockGoogleCredentialProvider(),
       developerTokenConfigured: false,
     }),
-  "api-skeleton"
+  "api"
 );
 
 describe("MockGoogleAdsProvider error simulation", () => {

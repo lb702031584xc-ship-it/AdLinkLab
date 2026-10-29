@@ -1,10 +1,12 @@
 import type {
+  CampaignStatsOptions,
   ConversionUploadInput,
   ConversionUploadResult,
   GoogleAdsAd,
   GoogleAdsAdGroup,
   GoogleAdsAdGroupCriterion,
   GoogleAdsCampaign,
+  GoogleAdsCampaignStats,
   GoogleAdsCustomer,
   GoogleAdsListOptions,
   GoogleAdsProvider,
@@ -124,6 +126,40 @@ export class MockGoogleAdsProvider implements GoogleAdsProvider {
       })),
       options
     );
+  }
+
+  async listCampaignStats(
+    customerId: string,
+    options: CampaignStatsOptions
+  ): Promise<GoogleAdsCampaignStats[]> {
+    this.maybeThrow("listCampaignStats");
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(options.startDate) ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(options.endDate) ||
+      options.startDate > options.endDate
+    ) {
+      throw new GoogleAdsProviderError(
+        "startDate and endDate must be YYYY-MM-DD with start <= end.",
+        { code: "INVALID_ARGUMENT" }
+      );
+    }
+    // Deterministic per-campaign figures keyed by position, not random.
+    const rows = MOCK_CAMPAIGNS.filter(
+      (c) =>
+        c.customerId === customerId &&
+        (!options.campaignIds || options.campaignIds.includes(c.campaignId))
+    ).map((c, i) => ({
+      campaignId: c.campaignId,
+      campaignName: c.name,
+      impressions: 1000 + i * 250,
+      clicks: 40 + i * 10,
+      costMicros: 5_000_000 + i * 1_000_000,
+      conversions: i === 0 ? 2 : 0,
+    }));
+    if (options.pageSize !== undefined && options.pageSize >= 0) {
+      return rows.slice(0, options.pageSize);
+    }
+    return rows;
   }
 
   async getAdGroup(
