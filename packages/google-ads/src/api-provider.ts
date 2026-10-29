@@ -570,4 +570,3 @@ export class GoogleAdsApiProvider implements GoogleAdsProvider {
     this.mutationForbidden("uploadConversion");
   }
 }
-
