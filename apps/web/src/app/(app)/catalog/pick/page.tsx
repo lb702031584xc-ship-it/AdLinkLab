@@ -181,12 +181,17 @@ export default function CatalogPickPage() {
       {audit && (
         <section className="rounded-xl border border-ink/10 p-4">
           <h2 className="text-sm font-semibold">
-            全站体检：能做 {audit.counts.picked} 个
+            全站体检：{audit.picked.length} 个候选
             <span className="ml-2 text-xs font-normal text-ink/50">
               （共 {audit.counts.total} 条 · {audit.counts.categories} 个类目 ·
               淘汰 {audit.counts.dropped}）
             </span>
           </h2>
+          {audit.picked.some((p) => !(p.cpcUsd > 0)) && (
+            <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              ⚠️ 有 {audit.picked.filter((p) => !(p.cpcUsd > 0)).length} 个商品没有类目 CPC 基线，它们的「能做」不成立——只是佣金够，并不知道点击要多少钱。只有 CPC 大于 0 的才算真正通过判定。
+            </p>
+          )}
           {audit.picked.length === 0 ? (
             <p className="mt-2 text-sm text-amber-700">
               没有通过判定的商品。{audit.notes[0] ?? ""}
@@ -200,6 +205,7 @@ export default function CatalogPickPage() {
                   <th className="text-right font-normal">佣金 / 预期</th>
                   <th className="text-right font-normal">保本 CPC</th>
                   <th className="text-right font-normal">基线</th>
+                  <th className="text-right font-normal">结论</th>
                 </tr>
               </thead>
               <tbody>
@@ -217,7 +223,14 @@ export default function CatalogPickPage() {
                       ${p.breakevenCpcUsd.toFixed(2)}
                     </td>
                     <td className="text-right text-xs text-ink/50">
-                      {p.baselineSource}
+                      {p.cpcUsd > 0 ? p.baselineSource : "无"}
+                    </td>
+                    <td className="text-right text-xs">
+                      {p.cpcUsd > 0 ? (
+                        <span className="text-emerald-700">可判</span>
+                      ) : (
+                        <span className="text-amber-700">待补基线</span>
+                      )}
                     </td>
                   </tr>
                 ))}
