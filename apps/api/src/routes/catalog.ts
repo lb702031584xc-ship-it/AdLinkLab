@@ -1646,7 +1646,13 @@ export async function registerCatalogRoutes(
       prisma.networkProduct.count({
         where: {
           ...base,
-          OR: [{ adCount: { gte: 1 } }, { adCountLongtail: { gte: 1 } }],
+          OR: [
+            { adCount: { gte: 1 } },
+            { adCountLongtail: { gte: 1 } },
+            // 两个广告数都是 null = 该网络不提供这个字段（YP 的 Get Products
+            // 就没有 adCount）。「没数据」不等于「没人在投」，不能当 0 判死。
+            { AND: [{ adCount: null }, { adCountLongtail: null }] },
+          ],
         },
       }),
     ]);
