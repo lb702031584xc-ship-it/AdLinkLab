@@ -279,6 +279,9 @@ export async function registerRoutes(
     // 商品库挑选：佣金门槛 → 覆盖类目 CPC → 品牌去重
     const { registerCatalogPickRoutes } = await import("./catalog-pick.js");
     await registerCatalogPickRoutes(app, { prisma: services.prisma });
+    // 全站体检：按类目 CPC 判定，只读不写库
+    const { registerCatalogAuditRoutes } = await import("./catalog-audit.js");
+    await registerCatalogAuditRoutes(app, { prisma: services.prisma });
     // 复盘校准：计划 EPC vs 实测 EPC，算高估倍数 k
     const { registerOfferCalibrationRoutes } = await import(
       "./offer-calibration.js"
