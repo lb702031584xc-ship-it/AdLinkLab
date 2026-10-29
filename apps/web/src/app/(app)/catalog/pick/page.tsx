@@ -15,6 +15,10 @@ import {
   catalogPickAction,
   type CatalogPickPayload,
 } from "@/lib/api/catalog-pick-actions";
+import {
+  catalogAuditAction,
+  type AuditPayload,
+} from "@/lib/api/catalog-audit-actions";
 import { batchCreateOffersAction } from "@/lib/api/catalog-actions";
 
 const CODE_LABEL: Record<string, string> = {
@@ -66,6 +70,21 @@ export default function CatalogPickPage() {
   const [busy, setBusy] = useState(false);
   const [data, setData] = useState<CatalogPickPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [auditBusy, setAuditBusy] = useState(false);
+  const [audit, setAudit] = useState<AuditPayload | null>(null);
+  const [auditError, setAuditError] = useState<string | null>(null);
+
+  const runAudit = async () => {
+    setAuditBusy(true);
+    setAuditError(null);
+    try {
+      const r = await catalogAuditAction({ minReviews: 20 });
+      if (r.ok) setAudit(r.data);
+      else setAuditError(r.error);
+    } finally {
+      setAuditBusy(false);
+    }
+  };
   const [creating, setCreating] = useState<string | null>(null);
   const [created, setCreated] = useState<Set<string>>(new Set());
 
@@ -133,6 +152,15 @@ export default function CatalogPickPage() {
         >
           {busy ? "计算中…" : "开始挑选"}
         </button>
+        <button
+          type="button"
+          onClick={runAudit}
+          disabled={auditBusy}
+          className="rounded-lg border border-ink/20 px-4 py-2 text-sm text-ink/75 hover:bg-ink/5 disabled:opacity-50"
+          title="按类目 CPC 判全站商品，只读不写库"
+        >
+          {auditBusy ? "全站体检中…" : "全站体检"}
+        </button>
         {data && (
           <span className="text-xs text-ink/55">
             类目 CPC ${cpc.toFixed(2)}/点击（
@@ -147,6 +175,64 @@ export default function CatalogPickPage() {
           </span>
         )}
       </div>
+
+      {auditError && <p className="text-sm text-red-600">{auditError}</p>}
+
+      {audit && (
+        <section className="rounded-xl border border-ink/10 p-4">
+          <h2 className="text-sm font-semibold">
+            全站体检：能做 {audit.counts.picked} 个
+            <span className="ml-2 text-xs font-normal text-ink/50">
+              （共 {audit.counts.total} 条 · {audit.counts.categories} 个类目 ·
+              淘汰 {audit.counts.dropped}）
+            </span>
+          </h2>
+          {audit.picked.length === 0 ? (
+            <p className="mt-2 text-sm text-amber-700">
+              没有通过判定的商品。{audit.notes[0] ?? ""}
+            </p>
+          ) : (
+            <table className="mt-2 w-full text-sm">
+              <thead className="text-xs text-ink/50">
+                <tr>
+                  <th className="text-left font-normal">商品</th>
+                  <th className="text-left font-normal">类目</th>
+                  <th className="text-right font-normal">佣金 / 预期</th>
+                  <th className="text-right font-normal">保本 CPC</th>
+                  <th className="text-right font-normal">基线</th>
+                </tr>
+              </thead>
+              <tbody>
+                {audit.picked.slice(0, 25).map((p) => (
+                  <tr key={p.productId} className="border-t border-ink/5">
+                    <td className="py-1 text-ink/85">{p.name.slice(0, 46)}</td>
+                    <td className="text-ink/60">{p.category}</td>
+                    <td className="text-right">
+                      ${p.payoutUsd.toFixed(2)}
+                      <span className="ml-1 text-xs text-ink/45">
+                        / ${p.expectedPayoutUsd.toFixed(2)}
+                      </span>
+                    </td>
+                    <td className="text-right">
+                      ${p.breakevenCpcUsd.toFixed(2)}
+                    </td>
+                    <td className="text-right text-xs text-ink/50">
+                      {p.baselineSource}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {audit.notes.length > 0 && (
+            <ul className="mt-2 flex flex-col gap-0.5 text-xs text-ink/55">
+              {audit.notes.slice(0, 6).map((n) => (
+                <li key={n}>· {n}</li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
 
       {error && <p className="text-sm text-red-600">{error}</p>}
 
