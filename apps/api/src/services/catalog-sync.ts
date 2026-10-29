@@ -59,6 +59,8 @@ import {
   SessionTemplateError,
   type SessionProduct,
 } from "../networks/session-adapter.js";
+// 全站同步会连续打几十个商家，必须限速 + 429 退避，否则一次限流整批作废
+import { withThrottle } from "./net-throttle.js";
 import { NetworkAdapterError } from "../networks/partnerboost-adapter.js";
 import { PartnerBoostAdapter } from "../networks/partnerboost-adapter.js";
 import type {
@@ -565,7 +567,7 @@ export async function syncCatalog(
           const pbOpts = input.brandId?.trim()
             ? { brandId: input.brandId.trim() }
             : {};
-          const fbaOffers = await adapter.pullOffers(ctx, pbOpts);
+          const fbaOffers = await withThrottle(() => adapter.pullOffers(ctx, pbOpts));
           // 第二数据源：Datafeed 通用 list（DTC + Walmart 商品，FBA 口没有）。
           // 该腿失败不拖垮 FBA 主腿：错误记入 datafeedError（summary/审计可见，
           // 不静默）并降级继续；403 账号受限除外——与主腿同口径走黑名单路径。
@@ -605,7 +607,7 @@ export async function syncCatalog(
           };
           return [...fbaOffers, ...dfOffers].map(offerToSessionProduct);
         }
-        const offers = await adapter.pullOffers(ctx);
+        const offers = await withThrottle(() => adapter.pullOffers(ctx));
         return offers.map(offerToSessionProduct);
       } catch (error) {
         // API 明确 403 = 账号受限/权限回收 → 自动黑名单。
