@@ -190,3 +190,4 @@ export interface GoogleAdsProvider {
     input: ConversionUploadInput
   ): Promise<ConversionUploadResult>;
 }
+

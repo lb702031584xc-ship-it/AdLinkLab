@@ -289,3 +289,4 @@ export class MockGoogleAdsProvider implements GoogleAdsProvider {
     };
   }
 }
+
