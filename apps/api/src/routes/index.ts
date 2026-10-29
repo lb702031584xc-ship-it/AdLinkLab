@@ -32,6 +32,7 @@ import type {
   TrackingLinkManagementService,
 } from "../services/click-ingestion.js";
 import type { GoogleAdsSyncService } from "../services/google-ads-sync.js";
+import type { GoogleAdsStatsService } from "../services/google-ads-stats.js";
 import type {
   GoogleAdsScriptIntegrationRepository,
   SyncJobRepository,
@@ -145,6 +146,7 @@ export interface AppServices {
   urlChangeRequests: UrlChangeRequestService;
   sync: SyncService;
   googleAdsSync: GoogleAdsSyncService;
+  googleAdsStats: GoogleAdsStatsService;
   audit: AuditService;
 }
 
@@ -319,6 +321,14 @@ export async function registerRoutes(
     await registerGoogleAccountsExtraRoutes(app, {
       prisma: services.prisma,
       googleAccounts: services.googleAccounts,
+    });
+    // Google Ads 效果数据（provider 直读，只读不写库）
+    const { registerGoogleAccountsStatsRoutes } = await import(
+      "./google-accounts-stats.js"
+    );
+    await registerGoogleAccountsStatsRoutes(app, {
+      prisma: services.prisma,
+      googleAdsStats: services.googleAdsStats,
     });
     // P1-14：Preflight 双类型上线前检查
     const { registerPreflightRoutes } = await import("./preflight.js");
