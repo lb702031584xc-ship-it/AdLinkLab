@@ -14,6 +14,8 @@ export function createGoogleAdsProvider(
       credentialRef: options?.credentialRef ?? "env:GOOGLE_ADS_*",
       credentialProvider: new EnvGoogleCredentialProvider(),
       developerTokenConfigured: Boolean(process.env.GOOGLE_ADS_DEVELOPER_TOKEN),
+      apiVersion: process.env.GOOGLE_ADS_API_VERSION,
+      loginCustomerId: process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID,
     });
   }
   return new MockGoogleAdsProvider();

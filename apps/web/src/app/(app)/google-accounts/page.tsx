@@ -130,6 +130,12 @@ export default async function GoogleAccountsPage({
       render: (a) => (
         <span className="inline-flex flex-col items-start justify-end gap-2">
           <span className="inline-flex items-start gap-2">
+            <a
+              href={`/google-accounts/${a.id}/stats`}
+              className="rounded-lg border border-ink/15 bg-white px-3 py-1.5 text-sm font-medium text-ink hover:bg-ink/5"
+            >
+              {ga.statsLink}
+            </a>
             <GoogleAccountCurrencySelect accountId={a.id} currency={a.currency} />
             <SyncAccountButton accountId={a.id} />
           </span>

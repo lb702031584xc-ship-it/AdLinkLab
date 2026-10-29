@@ -52,6 +52,7 @@ import {
   TrafficEventService,
 } from "./services/traffic-events.js";
 import { GoogleAdsSyncService } from "./services/google-ads-sync.js";
+import { GoogleAdsStatsService } from "./services/google-ads-stats.js";
 import { ScriptConfigService } from "./services/script-config-service.js";
 import { ScriptSyncResultService } from "./services/script-sync-result-service.js";
 import { ScriptGeneratorService } from "./services/script-generator-service.js";
@@ -105,6 +106,11 @@ export function createServices(
     repos.googleAccounts,
     provider,
     repos.unitOfWork
+  );
+  const googleAdsStats = new GoogleAdsStatsService(
+    repos.googleAccounts,
+    provider,
+    googleAdsKind
   );
   const trackingResolver = new TrackingLinkResolver(
     repos.trackingLinks,
@@ -283,6 +289,7 @@ export function createServices(
     urlChangeRequests,
     sync: new SyncService(repos.syncJobs),
     googleAdsSync,
+    googleAdsStats,
     audit,
   };
 }
