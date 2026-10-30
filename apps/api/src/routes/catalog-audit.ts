@@ -13,6 +13,9 @@ import {
 } from "../auth/sessions.js";
 import { auditCatalog, type AuditProduct } from "../services/catalog-audit.js";
 import type { CpcSample } from "../services/cpc-baseline.js";
+import { probeCategoryCpc } from "../services/catalog-cpc-probe.js";
+import { DataForSeoKeywordService } from "../services/dataforseo-keywords.js";
+import { getTenantDataForSeoCredentials } from "../services/tenant-dataforseo.js";
 
 export interface CatalogAuditRouteDeps {
   prisma: PrismaClient;
@@ -131,16 +134,68 @@ export async function registerCatalogAuditRoutes(
         countryCode: p.countryCode,
       }));
 
+      /* 历史样本不足时，用 DataForSEO 补类目 CPC（只查美国，批量一次） */
+      let probeSamples: CpcSample[] = [];
+      let probeNote: string | null = null;
+      if (cpcSamples.length === 0 && body.probeCpc !== false) {
+        try {
+          const creds = await getTenantDataForSeoCredentials(
+            deps.prisma,
+            info.tenantId
+          );
+          const service = new DataForSeoKeywordService(
+            deps.prisma,
+            fetch,
+            creds ?? undefined
+          );
+          const probe = await probeCategoryCpc(
+            candidates.map((c) => ({
+              productId: c.productId,
+              name: c.name,
+              payoutUsd: c.payoutUsd,
+              priceUsd: c.priceUsd,
+            })),
+            (keywords) =>
+              service.getKeywordOverviewCpc({
+                keywords,
+                locationCode: 2840,
+                languageCode: "en",
+              }),
+            { topPerCategory: 6 }
+          );
+          probeSamples = probe.samples;
+          if (probeSamples.length === 0) {
+            probeNote =
+              "DataForSEO 没有返回可用 CPC（查了 " +
+              (probe.misses > 0 ? probe.misses : 0) +
+              " 个词未命中），类目基线仍然缺失";
+          }
+        } catch (error) {
+          probeNote =
+            "DataForSEO 探测失败（" +
+            (error instanceof Error ? error.message : String(error)) +
+            "），类目基线仍然缺失";
+        }
+      }
+
       const minReviews = numOrNull(body.minReviews);
       const minPayout = numOrNull(body.minPayoutUsd);
       const assumed = numOrNull(body.assumedCpcUsd);
 
-      return auditCatalog(candidates, {
-        cpcSamples,
+      const result = auditCatalog(candidates, {
+        cpcSamples: [...cpcSamples, ...probeSamples],
         assumedCpcUsd: assumed,
         ...(minReviews != null ? { minReviews } : {}),
         ...(minPayout != null ? { minPayoutUsd: minPayout } : {}),
       });
+      return {
+        ...result,
+        probe: {
+          used: probeSamples.length > 0,
+          categories: probeSamples.length,
+          note: probeNote,
+        },
+      };
     }
   );
 }
