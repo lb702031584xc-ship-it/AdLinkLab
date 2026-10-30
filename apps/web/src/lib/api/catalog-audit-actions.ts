@@ -18,6 +18,8 @@ export interface AuditPickedItem {
   category: string;
   baselineSource: string;
   cpcUsd: number;
+  roi: number | null;
+  verdict: "invest" | "breakeven" | "unknown";
 }
 
 export interface AuditPayload {

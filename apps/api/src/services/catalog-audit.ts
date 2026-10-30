@@ -52,6 +52,8 @@ export interface AuditOptions {
   minPayoutUsd?: number;
   minReviews?: number;
   perBrand?: number;
+  /** ROI 达标线，默认 1.5（投入 1 拿回 1.5）。 */
+  minRoi?: number;
 }
 
 export interface AuditedItem extends PickedItem {
@@ -59,6 +61,14 @@ export interface AuditedItem extends PickedItem {
   /** CPC 基线来源：exact / global / assumed。 */
   baselineSource: string;
   cpcUsd: number;
+  /**
+   * ROI = 保本 CPC ÷ 类目 CPC。
+   * 保本 CPC 是「每点击收入」，所以这个比值就是每花 1 元收回多少。
+   * null = 没有类目 CPC，无法判断。
+   */
+  roi: number | null;
+  /** invest = ROI 达标 / breakeven = 能跑但不赚 / unknown = 无基线。 */
+  verdict: "invest" | "breakeven" | "unknown";
 }
 
 export interface AuditResult {
@@ -79,6 +89,7 @@ export function auditCatalog(
   const minPayout = opts.minPayoutUsd ?? 12;
   const minReviews = opts.minReviews ?? 0;
   const perBrand = opts.perBrand ?? 1;
+  const minRoi = opts.minRoi ?? 1.5;
 
   const groups = new Map<string, AuditProduct[]>();
   for (const p of products) {
@@ -116,11 +127,22 @@ export function auditCatalog(
     });
 
     for (const p of r.picked) {
+      // ROI = 每点击收入 ÷ 每点击成本 = 保本 CPC ÷ 类目 CPC
+      const roi =
+        baseline.cpcUsd > 0 ? p.breakevenCpcUsd / baseline.cpcUsd : null;
+      const verdict: "invest" | "breakeven" | "unknown" =
+        roi == null
+          ? "unknown"
+          : roi >= minRoi
+            ? "invest"
+            : "breakeven";
       picked.push({
         ...p,
         category: cat,
         baselineSource: baseline.source,
         cpcUsd: baseline.cpcUsd,
+        roi,
+        verdict,
       });
     }
     for (const d of r.dropped) {

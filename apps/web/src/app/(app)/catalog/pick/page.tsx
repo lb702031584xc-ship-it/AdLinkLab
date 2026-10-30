@@ -213,6 +213,8 @@ export default function CatalogPickPage() {
                   <th className="text-left font-normal">类目</th>
                   <th className="text-right font-normal">佣金 / 预期</th>
                   <th className="text-right font-normal">保本 CPC</th>
+                  <th className="text-right font-normal">类目 CPC</th>
+                  <th className="text-right font-normal">ROI</th>
                   <th className="text-right font-normal">基线</th>
                   <th className="text-right font-normal">结论</th>
                 </tr>
@@ -231,14 +233,34 @@ export default function CatalogPickPage() {
                     <td className="text-right">
                       ${p.breakevenCpcUsd.toFixed(2)}
                     </td>
+                    <td className="text-right text-ink/70">
+                      {p.cpcUsd > 0 ? `${p.cpcUsd.toFixed(2)}` : "—"}
+                    </td>
+                    <td className="text-right">
+                      {p.roi == null ? (
+                        <span className="text-xs text-ink/40">—</span>
+                      ) : (
+                        <span
+                          className={
+                            p.roi >= 1.5
+                              ? "font-medium text-emerald-700"
+                              : "text-amber-700"
+                          }
+                        >
+                          {p.roi.toFixed(2)}
+                        </span>
+                      )}
+                    </td>
                     <td className="text-right text-xs text-ink/50">
                       {p.cpcUsd > 0 ? p.baselineSource : "无"}
                     </td>
                     <td className="text-right text-xs">
-                      {p.cpcUsd > 0 ? (
-                        <span className="text-emerald-700">可判</span>
+                      {p.verdict === "invest" ? (
+                        <span className="font-medium text-emerald-700">可投</span>
+                      ) : p.verdict === "breakeven" ? (
+                        <span className="text-amber-700">保本</span>
                       ) : (
-                        <span className="text-amber-700">待补基线</span>
+                        <span className="text-ink/40">无基线</span>
                       )}
                     </td>
                   </tr>
