@@ -165,11 +165,17 @@ export async function registerCatalogAuditRoutes(
             { topPerCategory: 12 }
           );
           probeSamples = probe.samples;
+          // 无论成败都记下规模，否则「覆盖 2 个类目」这种结果无法诊断
+          probeNote =
+            "查了 " +
+            probe.countries +
+            " 个国家批次，命中 " +
+            probeSamples.length +
+            " 个词，未命中 " +
+            probe.misses +
+            " 个";
           if (probeSamples.length === 0) {
-            probeNote =
-              "DataForSEO 没有返回可用 CPC（查了 " +
-              (probe.misses > 0 ? probe.misses : 0) +
-              " 个词未命中），类目基线仍然缺失";
+            probeNote += "（没有任何词查到 CPC，类目基线仍然缺失）";
           }
         } catch (error) {
           probeNote =
