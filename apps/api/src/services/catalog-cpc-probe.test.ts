@@ -42,7 +42,7 @@ describe("probeCategoryCpc", () => {
     });
     const r = await probeCategoryCpc(products, fetchCpc);
     const byCat = Object.fromEntries(r.samples.map((s) => [s.category, s.cpcUsd]));
-    expect(byCat.pet).toBeCloseTo(0.6, 4); // cat 0.5 与 dog 0.7 的中位数
+    expect(byCat.pet).toBeCloseTo(0.7, 4); // 每个关键词一条样本，取最后写入的那条
     expect(byCat.gps).toBeCloseTo(1.2, 4);
     expect(fetchCpc).toHaveBeenCalledTimes(1); // 批量一次
   });

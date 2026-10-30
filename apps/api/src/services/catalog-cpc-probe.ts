@@ -60,12 +60,6 @@ export interface ProbeResult {
   misses: number;
 }
 
-function median(xs: number[]): number | null {
-  if (xs.length === 0) return null;
-  const s = [...xs].sort((a, b) => a - b);
-  const mid = Math.floor(s.length / 2);
-  return s.length % 2 === 0 ? (s[mid - 1] + s[mid]) / 2 : s[mid];
-}
 
 /**
  * 鎸夌被鐩帰娴?CPC銆? *
@@ -119,16 +113,19 @@ export async function probeCategoryCpc(
     cpcByCat.set(cat, arr);
   }
 
+  // 每个关键词一条样本，而不是每个类目一条中位数。
+  // resolveCpcBaseline 要求同类目 ≥3 条样本才认「精确基线」；
+  // 若每类只给一条，样本数永远不够，基线会退回 assumed 0。
   const samples: CpcSample[] = [];
   const perCategory: Record<string, number> = {};
   for (const [cat, values] of cpcByCat) {
-    const med = median(values);
-    if (med == null) continue;
-    samples.push({
-      category: cat,
-      cpcUsd: Math.round(med * 10000) / 10000,
-      clicks: values.length,
-    });
+    for (const v of values) {
+      samples.push({
+        category: cat,
+        cpcUsd: Math.round(v * 10000) / 10000,
+        clicks: 1,
+      });
+    }
     perCategory[cat] = values.length;
   }
 

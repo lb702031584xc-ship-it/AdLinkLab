@@ -192,7 +192,7 @@ export async function registerCatalogAuditRoutes(
         ...result,
         probe: {
           used: probeSamples.length > 0,
-          categories: probeSamples.length,
+          categories: new Set(probeSamples.map((s) => s.category)).size,
           note: probeNote,
         },
       };
