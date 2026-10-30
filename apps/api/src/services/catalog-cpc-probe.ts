@@ -4,29 +4,76 @@
  * 全站体检卡在「没有类目 CPC」——历史投放样本为空，基线退到 assumed 0，
  * 于是任何佣金都能覆盖 0，全部判可投。
  *
- * 这里用 DataForSEO 的批量 Keyword Overview 补上基线：
- *   佣金降序取每类前 N 个 → 从标题提核心词 → 按商品所在国家分组查 CPC
- *   → 每个关键词一条样本 → 由 resolveCpcBaseline 自己加权取中位数
+ * 这里用 DataForSEO 的批量 Keyword Overview 补上基线。
  *
- * 为什么按国家分组：欧洲商品的型号词在美国库里查不到。只用 2840(US)
- * 查 beatbot aquasense 会大面积 miss，样本凑不够，基线又退回 global。
+ * 关键教训：**要查的是品类词，不是型号词。**
+ * 型号全称（beatbot aquasense 2）月搜接近 0，Keyword Overview 不会给 CPC；
+ * 实测 48 个型号词只命中 4 个。而「pool cleaner」「robot vacuum」这类品类词
+ * 有稳定的 CPC 数据，而且正好回答「这个类目打一次点击要多少钱」。
  */
 import { inferCategory } from "./catalog-audit.js";
 import type { CpcSample } from "./cpc-baseline.js";
 
-/** 提词时要跳过的纯修饰词（pro / max / plus 是型号词，不能删）。 */
-const SKIP = new Set([
-  "new", "latest", "updated", "the", "a", "an", "and", "or", "for", "with",
-  "of", "in", "on", "by", "to", "from", "set", "pack",
-]);
+/**
+ * 商品标题 → 品类查询词。
+ * 顺序即优先级（先匹配更具体的）。
+ */
+const PHRASE_RULES: Array<[RegExp, string]> = [
+  [/robot ?vacuum|saugroboter|aspirapolvere|robot aspirador|robot aspirateur|trockensauger/i, "robot vacuum"],
+  [/mop|wet ?dry vacuum|nass ?trocken/i, "robot mop"],
+  [/pool ?(cleaner|robot|sauger|roboter|reiniger)|poolsauger|poolroboter/i, "pool cleaner"],
+  [/mini ?split|air conditioner|portable ac|klimaanlage|climatiseur/i, "portable air conditioner"],
+  [/vacuum sealer|chamber ?sealer|vakuumierer/i, "vacuum sealer"],
+  [/leaf ?blower|laubbläser/i, "leaf blower"],
+  [/dehumidifier|luftentfeuchter/i, "dehumidifier"],
+  [/humidifier|luftbefeuchter/i, "humidifier"],
+  [/air ?purifier|luftreiniger/i, "air purifier"],
+  [/gps ?tracker|gps ?traqueur/i, "gps tracker"],
+  [/power ?station|solar ?generator/i, "portable power station"],
+  [/espresso machine|kaffeemaschine/i, "espresso machine"],
+  [/standing desk|schreibtisch|schreibtische/i, "standing desk"],
+  [/tv ?(cabinet|stand|mount)/i, "tv stand"],
+  [/dash ?cam|dashcam/i, "dash cam"],
+  [/voice recorder|diktiergerät/i, "voice recorder"],
+  [/luggage|suitcase|koffer/i, "luggage set"],
+  [/dog clipper|pet clipper|cortacésped|pelar caballos|tierhaarschneider/i, "dog clippers"],
+  [/litter box|arenero|katzenklo/i, "cat litter box"],
+  [/electric grill|hot dog roller/i, "electric grill"],
+  [/slant|seasoning|salt set/i, "seasoning gift set"],
+  [/humidor|cigar/i, "cigar humidor"],
+  [/3d printer/i, "3d printer"],
+];
 
-/** 遇到品类词就截断：型号名通常到此为止。 */
+/** 兜底时用来找品类词的表。 */
 const STOP = new Set([
   "robot", "vacuum", "vacuums", "mop", "mopping", "cleaner", "machine",
   "heater", "sealer", "station", "kitchen", "appliance", "cleaners",
   "washer", "dryer", "purifier", "humidifier", "pool", "poolsauger",
   "poolroboter", "camera", "speaker", "charger", "desk", "cabinet",
+  "luggage", "printer", "tracker", "grill", "flosser",
 ]);
+
+/**
+ * 从商品标题提取一个「品类查询词」（不是型号词）。
+ * 例：roborock 2026 New Qrevo Edge 3 Pro Robot Vacuum and Mop
+ *     → robot vacuum
+ */
+export function extractProbeKeyword(name: string): string | null {
+  const n = name ?? "";
+  for (const [re, phrase] of PHRASE_RULES) {
+    if (re.test(n)) return phrase;
+  }
+  // 兜底：品牌 + 第一个品类词
+  const tokens = n
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  const idx = tokens.findIndex((t) => STOP.has(t));
+  if (idx > 0) return tokens[0] + " " + tokens[idx];
+  if (idx === 0) return tokens[0];
+  return null;
+}
 
 /**
  * 国家 → DataForSEO 的 location_code 与语言。
@@ -58,29 +105,6 @@ export function localeForCountry(
   return COUNTRY_LOCALE[key] ?? COUNTRY_LOCALE.US;
 }
 
-/**
- * 从商品标题提取一个可查的核心词。
- * 例：roborock 2026 New Qrevo Edge 3 Pro Robot Vacuum and Mop, 36000 Pa
- *     → roborock qrevo edge 3 pro
- */
-export function extractProbeKeyword(name: string): string | null {
-  const raw = (name ?? "")
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, " ")
-    .split(/\s+/)
-    .filter(Boolean);
-  const core: string[] = [];
-  for (const t of raw) {
-    if (/^\d{4}$/.test(t)) continue; // 年份
-    if (SKIP.has(t)) continue;
-    if (STOP.has(t)) break;
-    core.push(t);
-    if (core.length >= 6) break;
-  }
-  if (core.length < 2) return null;
-  return core.join(" ");
-}
-
 export interface ProbeInput {
   productId: string;
   name: string;
@@ -90,14 +114,16 @@ export interface ProbeInput {
 }
 
 export interface ProbeResult {
-  /** 每个关键词一条样本，直接喂给 auditCatalog。 */
+  /** 每个命中词一条样本，直接喂给 auditCatalog。 */
   samples: CpcSample[];
-  /** 类目 → 命中 CPC 的关键词数。 */
+  /** 类目 → 命中 CPC 的词数。 */
   perCategory: Record<string, number>;
   /** 查了但没返回 CPC 的词数。 */
   misses: number;
   /** 实际发起的国家批次数量（= API 调用次数）。 */
   countries: number;
+  /** 实际查询的品类词（去重后），用于诊断。 */
+  queried: string[];
 }
 
 export type FetchCpc = (
@@ -106,9 +132,9 @@ export type FetchCpc = (
 ) => Promise<Map<string, number>>;
 
 /**
- * 按「国家 + 类目」探测 CPC。
+ * 按「国家 + 类目」探测品类 CPC。
  *
- * @param topPerCategory 每个类目最多查几个商品（默认 12：给足样本余量）
+ * @param topPerCategory 每个类目最多取几个商品（只为去重，默认 12）
  * @param fetchCpc       批量查词器：传入词表与国家 locale，返回 词→CPC(美元)
  */
 export async function probeCategoryCpc(
@@ -118,7 +144,6 @@ export async function probeCategoryCpc(
 ): Promise<ProbeResult> {
   const topN = Math.max(1, opts.topPerCategory ?? 12);
 
-  // 类目 → 该类别下佣金最高的几个商品
   const byCat = new Map<string, ProbeInput[]>();
   for (const p of products) {
     if (p.payoutUsd == null || p.payoutUsd <= 0) continue;
@@ -128,7 +153,7 @@ export async function probeCategoryCpc(
     byCat.set(cat, arr);
   }
 
-  // 国家 → 该批要查的词（词 → 类目）
+  // 国家 → (品类词 → 类目)。品类词高度重复，去重后每国只需查十来个词。
   const byCountry = new Map<string, Map<string, string>>();
   for (const [cat, items] of byCat) {
     items.sort((a, b) => (b.payoutUsd ?? 0) - (a.payoutUsd ?? 0));
@@ -144,19 +169,20 @@ export async function probeCategoryCpc(
 
   const samples: CpcSample[] = [];
   const perCategory: Record<string, number> = {};
+  const queried: string[] = [];
   let misses = 0;
   let countries = 0;
 
   for (const [country, keywordToCat] of byCountry) {
     const keywords = [...keywordToCat.keys()];
     if (keywords.length === 0) continue;
+    queried.push(...keywords);
 
     let cpcByKeyword: Map<string, number>;
     try {
       cpcByKeyword = await fetchCpc(keywords, localeForCountry(country));
       countries += 1;
     } catch {
-      // 某个国家失败不影响其它国家
       misses += keywords.length;
       continue;
     }
@@ -176,5 +202,5 @@ export async function probeCategoryCpc(
     }
   }
 
-  return { samples, perCategory, misses, countries };
+  return { samples, perCategory, misses, countries, queried };
 }
