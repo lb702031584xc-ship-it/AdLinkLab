@@ -70,6 +70,7 @@ export default function CatalogPickPage() {
   const [busy, setBusy] = useState(false);
   const [data, setData] = useState<CatalogPickPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [auditBusy, setAuditBusy] = useState(false);
   const [audit, setAudit] = useState<AuditPayload | null>(null);
   const [auditError, setAuditError] = useState<string | null>(null);
@@ -91,12 +92,38 @@ export default function CatalogPickPage() {
   const createOffer = async (productId: string) => {
     setCreating(productId);
     setError(null);
+    setNotice(null);
     try {
       const r = await batchCreateOffersAction([productId]);
-      if (r.ok) {
-        setCreated((prev) => new Set(prev).add(productId));
-      } else {
+      if (!r.ok) {
         setError(r.error);
+        return;
+      }
+      // HTTP 200 不代表建出来了：接口会返回四个桶，必须逐个看
+      const d = (r.data ?? {}) as {
+        created?: unknown[];
+        skippedExisting?: unknown[];
+        failed?: Array<{ reason?: string }>;
+        skippedBlacklist?: Array<{ reason?: string }>;
+      };
+      const createdN = d.created?.length ?? 0;
+      const existN = d.skippedExisting?.length ?? 0;
+      const failN = d.failed?.length ?? 0;
+      const blackN = d.skippedBlacklist?.length ?? 0;
+      if (createdN > 0) {
+        setCreated((prev) => new Set(prev).add(productId));
+        setNotice(`已创建 ${createdN} 个 Offer`);
+      } else if (existN > 0) {
+        setCreated((prev) => new Set(prev).add(productId));
+        setNotice(
+          "这个商品之前已经建过 Offer，系统没有重复创建（去 Offer 列表按全部状态查看）"
+        );
+      } else if (failN > 0) {
+        setError(`建 Offer 失败：${d.failed?.[0]?.reason ?? "未知原因"}`);
+      } else if (blackN > 0) {
+        setError(`被黑名单拦截：${d.skippedBlacklist?.[0]?.reason ?? ""}`);
+      } else {
+        setError("接口返回成功但没有创建任何 Offer，请查看 api 日志");
       }
     } finally {
       setCreating(null);
@@ -177,6 +204,11 @@ export default function CatalogPickPage() {
       </div>
 
       {auditError && <p className="text-sm text-red-600">{auditError}</p>}
+      {notice && (
+        <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+          {notice}
+        </p>
+      )}
 
       {audit && (
         <section className="rounded-xl border border-ink/10 p-4">
