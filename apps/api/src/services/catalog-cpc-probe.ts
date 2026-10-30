@@ -1,20 +1,26 @@
 /**
- * 绫荤洰 CPC 鎺㈤拡锛?026-10-30锛夈€? *
- * 鍏ㄧ珯浣撴鍗″湪銆屾病鏈夌被鐩?CPC銆嶁€斺€斿巻鍙叉姇鏀炬牱鏈负绌猴紝鍩虹嚎閫€鍒?assumed 0锛? * 浜庢槸浠讳綍浣ｉ噾閮?鑳借鐩?0"锛屽叏閮ㄥ垽鍙姇銆? *
- * 杩欓噷鐢?DataForSEO 鐨勬壒閲?Keyword Overview 琛ヤ笂鍩虹嚎锛? *   鍙栦剑閲戦檷搴忓墠 N 涓晢鍝?鈫?浠庢爣棰樻彁鍙栨牳蹇冭瘝 鈫?涓€娆℃壒閲忔煡 CPC
- *   鈫?鎸夌被鐩彇涓綅鏁?鈫?浣滀负璇ョ被鐩殑 CPC 鍩虹嚎
+ * 类目 CPC 探针（2026-10-30）。
  *
- * 鍙煡涓€娆℃壒閲忔帴鍙ｏ紙50 涓瘝 鈮?1 娆¤皟鐢級锛屾垚鏈害 $0.001銆? */
+ * 全站体检卡在「没有类目 CPC」——历史投放样本为空，基线退到 assumed 0，
+ * 于是任何佣金都能覆盖 0，全部判可投。
+ *
+ * 这里用 DataForSEO 的批量 Keyword Overview 补上基线：
+ *   佣金降序取每类前 N 个 → 从标题提核心词 → 按商品所在国家分组查 CPC
+ *   → 每个关键词一条样本 → 由 resolveCpcBaseline 自己加权取中位数
+ *
+ * 为什么按国家分组：欧洲商品的型号词在美国库里查不到。只用 2840(US)
+ * 查 beatbot aquasense 会大面积 miss，样本凑不够，基线又退回 global。
+ */
 import { inferCategory } from "./catalog-audit.js";
 import type { CpcSample } from "./cpc-baseline.js";
 
-/** 鎻愯瘝鏃惰璺宠繃鐨勪慨楗般€?*/
+/** 提词时要跳过的纯修饰词（pro / max / plus 是型号词，不能删）。 */
 const SKIP = new Set([
   "new", "latest", "updated", "the", "a", "an", "and", "or", "for", "with",
   "of", "in", "on", "by", "to", "from", "set", "pack",
 ]);
 
-/** 閬囧埌鍝佺被璇嶅氨鎴柇锛氬瀷鍙峰悕閫氬父鍒版涓烘銆?*/
+/** 遇到品类词就截断：型号名通常到此为止。 */
 const STOP = new Set([
   "robot", "vacuum", "vacuums", "mop", "mopping", "cleaner", "machine",
   "heater", "sealer", "station", "kitchen", "appliance", "cleaners",
@@ -23,8 +29,39 @@ const STOP = new Set([
 ]);
 
 /**
- * 浠庡晢鍝佹爣棰樻彁鍙栦竴涓彲鏌ョ殑鏍稿績璇嶃€? * 渚嬶細roborock 2026 New Qrevo Edge 3 Pro Robot Vacuum and Mop, 36000 Pa
- *     鈫?roborock qrevo edge 3 pro
+ * 国家 → DataForSEO 的 location_code 与语言。
+ * 未收录的国家退回美国 + 英语。
+ */
+export const COUNTRY_LOCALE: Record<
+  string,
+  { locationCode: number; languageCode: string }
+> = {
+  US: { locationCode: 2840, languageCode: "en" },
+  CA: { locationCode: 2124, languageCode: "en" },
+  UK: { locationCode: 2826, languageCode: "en" },
+  GB: { locationCode: 2826, languageCode: "en" },
+  AU: { locationCode: 2036, languageCode: "en" },
+  DE: { locationCode: 2276, languageCode: "de" },
+  FR: { locationCode: 2250, languageCode: "fr" },
+  IT: { locationCode: 2380, languageCode: "it" },
+  ES: { locationCode: 2724, languageCode: "es" },
+  NL: { locationCode: 2528, languageCode: "nl" },
+  BE: { locationCode: 2056, languageCode: "nl" },
+  SE: { locationCode: 2752, languageCode: "sv" },
+  PL: { locationCode: 2616, languageCode: "pl" },
+};
+
+export function localeForCountry(
+  country: string | null | undefined
+): { locationCode: number; languageCode: string } {
+  const key = (country ?? "US").toUpperCase();
+  return COUNTRY_LOCALE[key] ?? COUNTRY_LOCALE.US;
+}
+
+/**
+ * 从商品标题提取一个可查的核心词。
+ * 例：roborock 2026 New Qrevo Edge 3 Pro Robot Vacuum and Mop, 36000 Pa
+ *     → roborock qrevo edge 3 pro
  */
 export function extractProbeKeyword(name: string): string | null {
   const raw = (name ?? "")
@@ -34,7 +71,7 @@ export function extractProbeKeyword(name: string): string | null {
     .filter(Boolean);
   const core: string[] = [];
   for (const t of raw) {
-    if (/^\d{4}$/.test(t)) continue; // 骞翠唤
+    if (/^\d{4}$/.test(t)) continue; // 年份
     if (SKIP.has(t)) continue;
     if (STOP.has(t)) break;
     core.push(t);
@@ -49,30 +86,39 @@ export interface ProbeInput {
   name: string;
   payoutUsd: number | null;
   priceUsd: number | null;
+  countryCode?: string | null;
 }
 
 export interface ProbeResult {
-  /** 鍙洿鎺ュ杺缁?auditCatalog 鐨勬牱鏈€?*/
+  /** 每个关键词一条样本，直接喂给 auditCatalog。 */
   samples: CpcSample[];
-  /** 绫荤洰 鈫?鍙備笌璁＄畻鐨勫叧閿瘝鏁般€?*/
+  /** 类目 → 命中 CPC 的关键词数。 */
   perCategory: Record<string, number>;
-  /** 鏌ヤ簡浣嗘病杩斿洖 CPC 鐨勮瘝鏁帮紙鐢ㄤ簬鍛婅瘔鐢ㄦ埛鏁版嵁缂哄彛锛夈€?*/
+  /** 查了但没返回 CPC 的词数。 */
   misses: number;
+  /** 实际发起的国家批次数量（= API 调用次数）。 */
+  countries: number;
 }
 
+export type FetchCpc = (
+  keywords: string[],
+  locale: { locationCode: number; languageCode: string }
+) => Promise<Map<string, number>>;
 
 /**
- * 鎸夌被鐩帰娴?CPC銆? *
- * @param topPerCategory 姣忎釜绫荤洰鏈€澶氭煡鍑犱釜鍟嗗搧锛堟帶鍒舵垚鏈紝榛樿 6锛? * @param fetchCpc       鎵归噺鏌ヨ瘝鍣細涓€娆′紶鍏ュ涓叧閿瘝锛岃繑鍥?璇嶁啋CPC锛堢編鍏冿級
+ * 按「国家 + 类目」探测 CPC。
+ *
+ * @param topPerCategory 每个类目最多查几个商品（默认 12：给足样本余量）
+ * @param fetchCpc       批量查词器：传入词表与国家 locale，返回 词→CPC(美元)
  */
 export async function probeCategoryCpc(
   products: ProbeInput[],
-  fetchCpc: (keywords: string[]) => Promise<Map<string, number>>,
+  fetchCpc: FetchCpc,
   opts: { topPerCategory?: number } = {}
 ): Promise<ProbeResult> {
-  const topN = Math.max(1, opts.topPerCategory ?? 6);
+  const topN = Math.max(1, opts.topPerCategory ?? 12);
 
-  // 绫荤洰 鈫?璇ョ被鍒笅浣ｉ噾鏈€楂樼殑鍑犱釜鍟嗗搧
+  // 类目 → 该类别下佣金最高的几个商品
   const byCat = new Map<string, ProbeInput[]>();
   for (const p of products) {
     if (p.payoutUsd == null || p.payoutUsd <= 0) continue;
@@ -82,52 +128,53 @@ export async function probeCategoryCpc(
     byCat.set(cat, arr);
   }
 
-  const keywordToCat = new Map<string, string>();
+  // 国家 → 该批要查的词（词 → 类目）
+  const byCountry = new Map<string, Map<string, string>>();
   for (const [cat, items] of byCat) {
     items.sort((a, b) => (b.payoutUsd ?? 0) - (a.payoutUsd ?? 0));
     for (const it of items.slice(0, topN)) {
       const kw = extractProbeKeyword(it.name);
       if (!kw) continue;
-      // 鍚屼竴涓瘝鍙綊灞炵涓€涓被鐩紝閬垮厤閲嶅璁¤垂
-      if (!keywordToCat.has(kw)) keywordToCat.set(kw, cat);
+      const country = (it.countryCode ?? "US").toUpperCase();
+      const bucket = byCountry.get(country) ?? new Map<string, string>();
+      if (!bucket.has(kw)) bucket.set(kw, cat);
+      byCountry.set(country, bucket);
     }
   }
 
-  const keywords = [...keywordToCat.keys()];
-  if (keywords.length === 0) {
-    return { samples: [], perCategory: {}, misses: 0 };
-  }
-
-  const cpcByKeyword = await fetchCpc(keywords);
-
-  const cpcByCat = new Map<string, number[]>();
-  let misses = 0;
-  for (const [kw, cat] of keywordToCat) {
-    const cpc = cpcByKeyword.get(kw);
-    if (cpc == null || !Number.isFinite(cpc) || cpc <= 0) {
-      misses += 1;
-      continue;
-    }
-    const arr = cpcByCat.get(cat) ?? [];
-    arr.push(cpc);
-    cpcByCat.set(cat, arr);
-  }
-
-  // 每个关键词一条样本，而不是每个类目一条中位数。
-  // resolveCpcBaseline 要求同类目 ≥3 条样本才认「精确基线」；
-  // 若每类只给一条，样本数永远不够，基线会退回 assumed 0。
   const samples: CpcSample[] = [];
   const perCategory: Record<string, number> = {};
-  for (const [cat, values] of cpcByCat) {
-    for (const v of values) {
+  let misses = 0;
+  let countries = 0;
+
+  for (const [country, keywordToCat] of byCountry) {
+    const keywords = [...keywordToCat.keys()];
+    if (keywords.length === 0) continue;
+
+    let cpcByKeyword: Map<string, number>;
+    try {
+      cpcByKeyword = await fetchCpc(keywords, localeForCountry(country));
+      countries += 1;
+    } catch {
+      // 某个国家失败不影响其它国家
+      misses += keywords.length;
+      continue;
+    }
+
+    for (const [kw, cat] of keywordToCat) {
+      const cpc = cpcByKeyword.get(kw);
+      if (cpc == null || !Number.isFinite(cpc) || cpc <= 0) {
+        misses += 1;
+        continue;
+      }
       samples.push({
         category: cat,
-        cpcUsd: Math.round(v * 10000) / 10000,
+        cpcUsd: Math.round(cpc * 10000) / 10000,
         clicks: 1,
       });
+      perCategory[cat] = (perCategory[cat] ?? 0) + 1;
     }
-    perCategory[cat] = values.length;
   }
 
-  return { samples, perCategory, misses };
+  return { samples, perCategory, misses, countries };
 }

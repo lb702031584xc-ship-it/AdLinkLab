@@ -154,14 +154,15 @@ export async function registerCatalogAuditRoutes(
               name: c.name,
               payoutUsd: c.payoutUsd,
               priceUsd: c.priceUsd,
+              countryCode: c.countryCode,
             })),
-            (keywords) =>
+            (keywords, locale) =>
               service.getKeywordOverviewCpc({
                 keywords,
-                locationCode: 2840,
-                languageCode: "en",
+                locationCode: locale.locationCode,
+                languageCode: locale.languageCode,
               }),
-            { topPerCategory: 6 }
+            { topPerCategory: 12 }
           );
           probeSamples = probe.samples;
           if (probeSamples.length === 0) {
