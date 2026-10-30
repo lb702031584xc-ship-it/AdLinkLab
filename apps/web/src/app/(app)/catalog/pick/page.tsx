@@ -217,6 +217,7 @@ export default function CatalogPickPage() {
                   <th className="text-right font-normal">ROI</th>
                   <th className="text-right font-normal">基线</th>
                   <th className="text-right font-normal">结论</th>
+                  <th className="text-right font-normal">操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -261,6 +262,25 @@ export default function CatalogPickPage() {
                         <span className="text-amber-700">保本</span>
                       ) : (
                         <span className="text-ink/40">无基线</span>
+                      )}
+                    </td>
+                    <td className="text-right">
+                      {p.verdict === "invest" && (
+                        <button
+                          type="button"
+                          onClick={() => void createOffer(p.productId)}
+                          disabled={
+                            creating === p.productId ||
+                            created.has(p.productId)
+                          }
+                          className="rounded-md bg-emerald-600 px-2 py-0.5 text-xs font-medium text-white disabled:opacity-50"
+                        >
+                          {created.has(p.productId)
+                            ? "已建"
+                            : creating === p.productId
+                              ? "创建中"
+                              : "建 Offer"}
+                        </button>
                       )}
                     </td>
                   </tr>
