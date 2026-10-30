@@ -187,6 +187,15 @@ export default function CatalogPickPage() {
               淘汰 {audit.counts.dropped}）
             </span>
           </h2>
+          {audit.probe && (
+            <p className="mt-1 text-xs text-ink/60">
+              DataForSEO 探针：{audit.probe.used ? "已生效" : "未取到数据"}
+              {audit.probe.categories > 0
+                ? ` · 覆盖 ${audit.probe.categories} 个类目`
+                : ""}
+              {audit.probe.note ? ` · ${audit.probe.note}` : ""}
+            </p>
+          )}
           {audit.picked.some((p) => !(p.cpcUsd > 0)) && (
             <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
               ⚠️ 有 {audit.picked.filter((p) => !(p.cpcUsd > 0)).length} 个商品没有类目 CPC 基线，它们的「能做」不成立——只是佣金够，并不知道点击要多少钱。只有 CPC 大于 0 的才算真正通过判定。

@@ -25,6 +25,12 @@ export interface AuditPayload {
   dropped: Array<{ productId: string; name: string; category: string; reason: string }>;
   counts: { total: number; picked: number; dropped: number; categories: number };
   notes: string[];
+  /** 类目 CPC 探针（DataForSEO）的结果。 */
+  probe?: {
+    used: boolean;
+    categories: number;
+    note: string | null;
+  };
 }
 
 export async function catalogAuditAction(input: {
