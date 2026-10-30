@@ -2868,6 +2868,19 @@ export async function registerCatalogRoutes(
           skippedBlacklist: skippedBlacklist.length,
         },
       });
+      // 建 Offer 的四个桶必须落到日志里：前端只看到 server action 的
+      // RSC 响应，拿不到这里的明细，没有日志就只能靠猜。
+      request.log.info(
+        {
+          created: created.length,
+          skippedExisting: skippedExisting.length,
+          failed: failed.length,
+          skippedBlacklist: skippedBlacklist.length,
+          firstFailure: failed[0]?.reason ?? null,
+          firstBlacklist: skippedBlacklist[0]?.reason ?? null,
+        },
+        "catalog offers batch result"
+      );
       return { created, skippedExisting, failed, skippedBlacklist };
     }
   );
