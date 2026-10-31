@@ -469,10 +469,33 @@ export class YeahPromosAdapter
     // 与 API 模式 mapApiItem 同口径：countryCode（显式字段优先，缺失时按
     // market_place 派生）+ landingPageType（按推广链接推导）。2026-10-20
     // 巡检发现 session 路径曾漏掉这两个字段，导致国家列恒为「—」。
+    // YP 的 API 有时把链接包在嵌套对象里：
+    //   link: { link_id, track_link, user_link_track, amazon_track_link }
+    // 直接把 link 当字符串取会拿到 undefined，导致 promoUrl 永远是 null、
+    // 建 Offer 时 destination_url 为空。这里把嵌套对象里的真实链接挖出来。
+    const nestedLink = ((): string | null => {
+      const raw = (item as Record<string, unknown>).link;
+      if (!raw || typeof raw !== "object") return null;
+      const o = raw as Record<string, unknown>;
+      for (const key of [
+        "track_link",
+        "amazon_track_link",
+        "user_link_track",
+        "aff_link",
+        "url",
+      ]) {
+        const v = o[key];
+        if (typeof v === "string" && v.trim()) return v.trim();
+      }
+      return null;
+    })();
+
     const url =
       sessionAsString(
         pickField(item, "promo_url", "promoUrl", "promotion_url", "track_link", "amazon_track_link", "url", "link")
-      ) ?? null;
+      ) ??
+      nestedLink ??
+      null;
     return {
       externalId,
       name,
